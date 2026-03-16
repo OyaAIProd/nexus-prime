@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://sir-ad.github.io/nexus-prime/
+    about: Read the full Nexus Prime documentation
+  - name: Catalog & API Reference
+    url: https://sir-ad.github.io/nexus-prime/catalog.html
+    about: Browse the tool catalog and runtime surfaces
