@@ -114,14 +114,18 @@ export class TokenSupremacyEngine {
         let totalTokens = 0;
         let fullReadTokens = 0;
 
+        // Adaptive thresholds based on file count
+        const skipThreshold = files.length > 20 ? 0.25 : files.length < 5 ? 0.10 : 0.15;
+        const outlineThreshold = files.length > 20 ? 0.45 : files.length < 5 ? 0.30 : 0.40;
+
         for (const file of files) {
-            const relevance = this.scoreRelevance(file.path, taskKeywords);
+            const relevance = this.scoreRelevance(file.path, taskKeywords, taskKeywords);
             const estFull = Math.ceil(file.sizeBytes / 4); // ~4 chars per token
             fullReadTokens += estFull;
 
             let plan: FileReadPlan;
 
-            if (relevance < 0.15) {
+            if (relevance < skipThreshold) {
                 // Irrelevant — skip entirely
                 plan = {
                     file,
@@ -137,12 +141,12 @@ export class TokenSupremacyEngine {
                     reason: 'small file, cheap to read',
                     estimatedTokens: estFull
                 };
-            } else if (relevance < 0.40 || estFull > 30_000) {
+            } else if (relevance < outlineThreshold || estFull > 30_000) {
                 // Low relevance or huge file — outline only
                 plan = {
                     file,
                     action: 'outline',
-                    reason: relevance < 0.40
+                    reason: relevance < outlineThreshold
                         ? `medium relevance (${relevance.toFixed(2)}), read outline`
                         : `large file (${Math.round(file.sizeBytes / 1024)}KB), read outline`,
                     estimatedTokens: 250
@@ -360,7 +364,7 @@ export class TokenSupremacyEngine {
             .filter(w => w.length > 2 && !stopWords.has(w));
     }
 
-    private scoreRelevance(filePath: string, keywords: string[]): number {
+    private scoreRelevance(filePath: string, keywords: string[], task?: string[]): number {
         if (keywords.length === 0) return 0.5;
 
         // ── Normalize path: strip cwd prefix so keywords match relative segments ──
@@ -372,6 +376,7 @@ export class TokenSupremacyEngine {
         const parts = normalized.split('/');
         const fileName = parts[parts.length - 1];
         const baseName = fileName.replace(/\.[^.]+$/, ''); // e.g. "memory" from "memory.ts"
+        const pathComponents = parts.map(p => p.replace(/\.[^.]+$/, '')); // e.g. ['engines', 'token', 'supremacy']
         const ext = fileName.split('.').pop() ?? '';
 
         // ── Extension-based baseline: .ts/.js files always get a floor for code tasks ──
@@ -391,6 +396,14 @@ export class TokenSupremacyEngine {
             } else if (normalized.includes(kw)) {
                 pathMatches++;
                 pathScore += 0.8;
+            }
+            // Path component matching (e.g., keyword "memory" boosts "src/engines/memory.ts")
+            for (const component of pathComponents) {
+                if (component === kw || component.includes(kw)) {
+                    pathScore += 0.5;
+                    pathMatches++;
+                    break;
+                }
             }
         }
 
@@ -416,8 +429,8 @@ export class TokenSupremacyEngine {
         } catch { /* ignore */ }
 
         // ── Learned relevance ──
-        const taskType = keywords.slice(0, 3).join('_');
-        const learnedScore = this.relevanceCache.get(taskType)?.get(filePath) ?? 0;
+        const taskKey = (task ?? keywords).slice(0, 3).join('_');
+        const learnedScore = this.relevanceCache.get(taskKey)?.get(filePath) ?? 0;
 
         // ── Semantic type bonuses ──
         let typeBonus = 0;

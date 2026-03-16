@@ -617,6 +617,7 @@
             inset: 0;
             overflow: auto;
             padding: 1rem;
+            z-index: 2;
         }
 
         .memory-explorer-grid {
@@ -894,6 +895,7 @@
             width: 100%;
             height: 100%;
             display: block;
+            z-index: 1;
         }
 
         .graph-empty {
@@ -904,6 +906,7 @@
             color: var(--muted);
             text-align: center;
             padding: 1rem;
+            z-index: 3;
         }
 
         .node-label {
@@ -3628,6 +3631,7 @@
             if (state.graphMode === 'memory' && state.memoryViewMode !== 'graph') {
                 svg.innerHTML = '';
                 svg.classList.add('hidden');
+                svg.style.pointerEvents = 'none';
                 explorer.classList.remove('hidden');
                 renderMemoryExplorer();
                 explorer.querySelectorAll('[data-memory-open]').forEach((button) => {
@@ -3656,6 +3660,7 @@
             explorer.innerHTML = '';
             explorer.classList.add('hidden');
             svg.classList.remove('hidden');
+            svg.style.pointerEvents = '';
 
             const width = 980;
             const height = 620;

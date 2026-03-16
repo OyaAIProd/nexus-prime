@@ -154,6 +154,12 @@ export interface MemoryCheckResult {
   canPromote: boolean;
 }
 
+export interface MemoryConfig {
+  decayRate?: number;
+  priorityRetention?: number;
+  flushEntropyThreshold?: number;
+}
+
 export interface MemoryAuditResult {
   scanned: number;
   quarantined: MemorySnapshot[];
@@ -221,6 +227,8 @@ export class MemoryEngine {
   private vaultSessionNotesDir: string;
   private lastReconciliationSummary: MemoryReconciliationSummary = createEmptyReconciliationSummary();
 
+  private config: Required<MemoryConfig>;
+
   // In-RAM working tiers (flushed to DB periodically)
   private prefrontal: MemoryItem[] = [];
   private maxPrefrontal = 7;
@@ -233,7 +241,13 @@ export class MemoryEngine {
   private memoryIdToVectorId: Map<string, number> = new Map();
   private nextVectorId = 1;
 
-  constructor(dbPath?: string) {
+  constructor(dbPath?: string, config?: MemoryConfig) {
+    this.config = {
+      decayRate: config?.decayRate ?? 0.05,
+      priorityRetention: config?.priorityRetention ?? 0.95,
+      flushEntropyThreshold: config?.flushEntropyThreshold ?? 0.9,
+    };
+    
     const dbDir = path.join(os.homedir(), '.nexus-prime');
     fs.mkdirSync(dbDir, { recursive: true });
 
@@ -1026,15 +1040,43 @@ export class MemoryEngine {
 
   /** Periodic cooling cycle: increases entropy and decays priority */
   coolDown(): void {
+    const { decayRate, priorityRetention } = this.config;
+    
     this.db.exec(`
       UPDATE memories
-      SET entropy = MIN(entropy + 0.05, 1.0),
-          priority = priority * 0.95
+      SET entropy = MIN(entropy + ${decayRate}, 1.0),
+          priority = priority * ${priorityRetention}
       WHERE tier != 'cortex'
+    `);
+
+    // Apply access-frequency retention: frequently accessed memories decay slower
+    this.db.exec(`
+      UPDATE memories
+      SET entropy = entropy - (${decayRate} / (1 + access_count * 0.1))
+      WHERE tier != 'cortex' AND access_count > 0
     `);
 
     // Force flush high entropy items (this will promote/demote based on priority)
     this.consolidate();
+    this.syncVault();
+  }
+
+  /** Maintenance cycle: runs coolDown() then expires memories where entropy > threshold AND accessCount < 2 AND age > 7 days */
+  maintenanceCycle(): void {
+    this.coolDown();
+    
+    const { flushEntropyThreshold } = this.config;
+    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    
+    this.db.exec(`
+      UPDATE memories
+      SET state = 'expired'
+      WHERE state = 'active'
+        AND entropy > ${flushEntropyThreshold}
+        AND access_count < 2
+        AND timestamp < ${sevenDaysAgo}
+    `);
+    
     this.syncVault();
   }
 

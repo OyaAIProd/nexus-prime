@@ -1,5 +1,6 @@
 import { MemoryEngine, MemoryItem } from '../engines/memory.js';
 import { MergeDecision } from '../phantom/index.js';
+import { SkillRuntime } from '../engines/skill-runtime.js';
 
 /**
  * AgentLearner — Post-execution analysis engine.
@@ -42,6 +43,51 @@ export class AgentLearner {
                 );
             }
         }
+    }
+
+    /**
+     * Promote repeating patterns from memories to runtime skills.
+     * Queries memories tagged #agent-learning with accessCount >= 3,
+     * extracts patterns, creates skills, and tags sources with #promoted-to-skill.
+     */
+    async promoteRepeatingPatterns(): Promise<{ promoted: number; skills: string[] }> {
+        const skillRuntime = new SkillRuntime();
+        const patterns = this.memory.queryByTags(['#agent-learning'], 100)
+            .filter(m => m.accessCount >= 3);
+        
+        const promoted: string[] = [];
+        
+        for (const pattern of patterns) {
+            const goalMatch = pattern.content.match(/goal="([^"]+)"/);
+            if (!goalMatch) continue;
+            
+            const goal = goalMatch[1];
+            const instructions = [
+                'This skill was auto-generated from repeated execution patterns.',
+                `Originally from: goal="${goal}"`,
+                `Execution count: ${pattern.accessCount}`,
+                'Apply this pattern when similar goals are encountered.',
+            ].join('\n');
+            
+            const skill = skillRuntime.createSkill({
+                name: `auto-pattern-${goal.slice(0, 20).replace(/\s+/g, '-')}`,
+                instructions,
+                toolBindings: [],
+                riskClass: 'read',
+                scope: 'session',
+                provenance: `learner:promoted:${pattern.id}`,
+            });
+            
+            promoted.push(skill.skillId);
+            
+            await this.memory.store(
+                `Pattern promoted to skill: ${skill.name}`,
+                0.9,
+                ['#promoted-to-skill', '#skill-generated']
+            );
+        }
+        
+        return { promoted: promoted.length, skills: promoted };
     }
 
     /**

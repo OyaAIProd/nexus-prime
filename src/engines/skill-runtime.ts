@@ -15,6 +15,35 @@ import {
     type SkillScope,
 } from './runtime-assets.js';
 
+function tokenize(text: string): Set<string> {
+    return new Set(
+        text.toLowerCase()
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .split(/\s+/)
+            .filter((word) => word.length > 2)
+    );
+}
+
+function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
+    if (setA.size === 0 || setB.size === 0) return 0;
+    const intersection = new Set([...setA].filter((x) => setB.has(x)));
+    const union = new Set([...setA, ...setB]);
+    return intersection.size / union.size;
+}
+
+function computeSkillRelevance(goal: string, artifact: { name: string; instructions?: string; domain?: string }): number {
+    const goalTokens = tokenize(goal);
+    const nameTokens = tokenize(artifact.name);
+    const instructionTokens = tokenize(artifact.instructions || '');
+    const domainTokens = artifact.domain ? tokenize(artifact.domain) : new Set<string>();
+    
+    const nameScore = jaccardSimilarity(goalTokens, nameTokens);
+    const instructionScore = jaccardSimilarity(goalTokens, instructionTokens);
+    const domainScore = jaccardSimilarity(goalTokens, domainTokens);
+    
+    return Math.max(nameScore, instructionScore * 0.7, domainScore * 0.5);
+}
+
 export type { SkillCheckpoint, SkillRiskClass, SkillScope, RuntimeBinding as SkillBinding, RuntimeBindingType as SkillBindingType };
 
 export interface SkillValidationResult {
@@ -141,12 +170,26 @@ export class SkillRuntime {
         this.ensureBootstrapped();
         const selectors = new Set(names.map((name) => name.toLowerCase()));
         const domains = detectDomains(goal, names);
+        const RELEVANCE_THRESHOLD = 0.3;
 
-        return dedupeSkills(this.listArtifacts().filter((artifact) =>
+        const exactMatches = this.listArtifacts().filter((artifact) =>
             selectors.has(artifact.name.toLowerCase()) ||
             selectors.has(artifact.skillId.toLowerCase()) ||
             (artifact.domain ? domains.includes(artifact.domain) : false)
-        ));
+        );
+
+        const fuzzyCandidates = this.listArtifacts()
+            .filter((artifact) => !exactMatches.includes(artifact))
+            .map((artifact) => ({
+                artifact,
+                relevance: computeSkillRelevance(goal, artifact),
+            }))
+            .filter((candidate) => candidate.relevance >= RELEVANCE_THRESHOLD)
+            .sort((a, b) => b.relevance - a.relevance)
+            .slice(0, 5)
+            .map((candidate) => candidate.artifact);
+
+        return dedupeSkills([...exactMatches, ...fuzzyCandidates]);
     }
 
     generateRuntimeSkills(goal: string, workerCount: number, signal: Partial<SkillDerivationSignal> = {}): SkillArtifact[] {

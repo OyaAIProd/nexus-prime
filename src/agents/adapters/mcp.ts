@@ -152,6 +152,7 @@ const MANUAL_OR_DIAGNOSTIC_TOOLS = new Set<string>([
     'nexus_pattern_search',
     'nexus_pattern_list',
     'nexus_knowledge_provenance',
+    'nexus_openclaw_memory_sync',
 ]);
 
 /** Session-level telemetry tracker */
@@ -459,6 +460,20 @@ export class MCPAdapter implements Adapter {
                     name: 'nexus_memory_maintain',
                     description: 'Expert surface: run memory maintenance to expire TTL memories, cool stale entries, and quarantine or scrap low-signal items.',
                     inputSchema: { type: 'object', properties: {}, required: [] },
+                },
+                {
+                    name: 'nexus_openclaw_memory_sync',
+                    description: 'Expert surface: sync memory to/from OpenClaw/Antigravity instances. Use "syncTo" to export memory bundle to target directory, "syncFrom" to import from source directory.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            action: { type: 'string', enum: ['syncTo', 'syncFrom', 'status'], description: 'The sync action to perform' },
+                            targetDir: { type: 'string', description: 'Target directory for syncTo (e.g. ~/.antigravity/nexus-prime/)' },
+                            sourceDir: { type: 'string', description: 'Source directory for syncFrom' },
+                            scope: { type: 'string', enum: ['session', 'project', 'user', 'promoted', 'shared'], description: 'Memory scope for syncTo' },
+                        },
+                        required: ['action'],
+                    },
                 },
                 {
                     name: 'nexus_memory_trace',
@@ -1631,6 +1646,54 @@ export class MCPAdapter implements Adapter {
                                 `Retained active: ${Number(result?.retained || 0)}`,
                             ]),
                             formatJsonDetails('Structured details', result ?? {}),
+                        ].join('\n\n'),
+                    }],
+                };
+            }
+
+            case 'nexus_openclaw_memory_sync': {
+                const action = String(request.params.arguments?.action ?? 'status');
+                const targetDir = String(request.params.arguments?.targetDir ?? '');
+                const sourceDir = String(request.params.arguments?.sourceDir ?? '');
+                const scope = String(request.params.arguments?.scope ?? 'session') as 'session' | 'project' | 'user' | 'promoted' | 'shared';
+                
+                const { MemoryBridge } = await import('../../engines/memory-bridge.js');
+                const { MemoryEngine } = await import('../../engines/memory.js');
+                
+                const memoryEngine = new MemoryEngine();
+                const bridge = new MemoryBridge(memoryEngine);
+                
+                let detail: string;
+
+                if (action === 'syncTo') {
+                    const result = bridge.syncTo(targetDir || bridge.getBridgeDir(), { scope });
+                    detail = formatBullets([
+                        `Success: ${result.success}`,
+                        `Items: ${result.itemCount}`,
+                        result.path ? `Path: ${result.path}` : '',
+                    ]);
+                } else if (action === 'syncFrom') {
+                    const result = bridge.syncFrom(sourceDir || bridge.getBridgeDir());
+                    detail = formatBullets([
+                        `Success: ${result.success}`,
+                        `Items: ${result.itemCount}`,
+                        result.errors?.length ? `Errors: ${result.errors.join(', ')}` : '',
+                    ]);
+                } else {
+                    const result = bridge.getSyncState();
+                    detail = formatBullets([
+                        `Last sync: ${result.lastSync ? new Date(result.lastSync).toISOString() : 'never'}`,
+                        `Direction: ${result.lastDirection || 'none'}`,
+                        `Items: ${result.lastItemCount}`,
+                    ]);
+                }
+
+                return {
+                    content: [{
+                        type: 'text',
+                        text: [
+                            `OpenClaw memory sync: ${action}`,
+                            detail,
                         ].join('\n\n'),
                     }],
                 };

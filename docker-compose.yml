@@ -1,0 +1,32 @@
+services:
+  nexus-prime:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ${HOME}/.nexus-prime:/root/.nexus-prime
+    environment:
+      NEXUS_EMBED_MODE: ollama
+      NEXUS_OLLAMA_ENDPOINT: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
+    profiles:
+      - default
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - with-ollama
+
+volumes:
+  ollama-data:

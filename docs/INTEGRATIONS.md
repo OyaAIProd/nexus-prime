@@ -38,7 +38,7 @@ Cursor uses an MCP config plus a project-local `.mdc` rule file.
 ### 🍊 Claude Code
 Claude Code uses an MCP config plus a generated project-local bootstrap note.
 - **Automated**: `nexus-prime setup claude`
-- **MCP Config**: `~/.claude-code/mcp.json`
+- **MCP Config**: `~/.claude/mcp.json`
 - **Project Instruction**: `.agent/client-bootstrap/claude-code.md`
 
 ### 🟢 Opencode

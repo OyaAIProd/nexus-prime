@@ -3,8 +3,10 @@
  *
  * Mode 1 (default): Pure TF-IDF, no API needed. Works offline, fast.
  * Mode 2: OpenAI-compatible API (set NEXUS_EMBED_MODE=api, NEXUS_EMBED_URL, NEXUS_EMBED_KEY)
+ * Mode 3: Ollama (set NEXUS_EMBED_MODE=ollama, NEXUS_OLLAMA_ENDPOINT, NEXUS_OLLAMA_MODEL)
+ * Mode 4: HuggingFace (set NEXUS_EMBED_MODE=huggingface, NEXUS_HF_API_KEY, NEXUS_HF_MODEL)
  *
- * Output: fixed 128-dim float32 vectors (TF-IDF) or 1536-dim (API)
+ * Output: fixed 128-dim float32 vectors (TF-IDF), 768-dim (Ollama), 384-dim (HF), or 1536-dim (API)
  */
 
 import * as path from 'path';
@@ -88,30 +90,67 @@ export class Embedder {
     private vocabulary: Map<string, number> = new Map(); // word → index (0..127)
     private idf: Map<string, number> = new Map();        // word → IDF weight
     private docCount: number = 0;
-    private apiMode: boolean;
+    
+    private embedMode: 'local' | 'api' | 'ollama' | 'huggingface';
     private apiUrl: string;
     private apiKey: string;
     private apiModel: string;
+    private ollamaEndpoint: string;
+    private ollamaModel: string;
+    private hfEndpoint: string;
+    private hfApiKey: string;
+    private hfModel: string;
 
     constructor() {
-        this.apiMode = process.env.NEXUS_EMBED_MODE === 'api';
+        this.embedMode = (process.env.NEXUS_EMBED_MODE as 'local' | 'api' | 'ollama' | 'huggingface') ?? 'local';
+        
+        // OpenAI API config
         this.apiUrl = process.env.NEXUS_EMBED_URL ?? 'https://api.openai.com/v1/embeddings';
         this.apiKey = process.env.NEXUS_EMBED_KEY ?? '';
         this.apiModel = process.env.NEXUS_EMBED_MODEL ?? 'text-embedding-3-small';
+        
+        // Ollama config
+        this.ollamaEndpoint = process.env.NEXUS_OLLAMA_ENDPOINT ?? 'http://localhost:11434';
+        this.ollamaModel = process.env.NEXUS_OLLAMA_MODEL ?? 'nomic-embed-text';
+        
+        // HuggingFace config
+        this.hfEndpoint = 'https://api-inference.huggingface.co/pipeline/feature-extraction';
+        this.hfApiKey = process.env.NEXUS_HF_API_KEY ?? '';
+        this.hfModel = process.env.NEXUS_HF_MODEL ?? 'sentence-transformers/all-MiniLM-L6-v2';
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
 
     /** Embed a string → float32 vector */
     async embed(text: string): Promise<number[]> {
-        if (this.apiMode && this.apiKey) {
+        // Fallback chain: Ollama → HuggingFace → OpenAI API → Local TF-IDF
+        if (this.embedMode === 'ollama' && this.ollamaEndpoint) {
+            try {
+                const vec = await this.ollamaEmbed(text);
+                return HyperbolicMath.project(vec);
+            } catch {
+                // Fall through to next option
+            }
+        }
+        
+        if (this.embedMode === 'huggingface' && this.hfApiKey) {
+            try {
+                const vec = await this.huggingfaceEmbed(text);
+                return HyperbolicMath.project(vec);
+            } catch {
+                // Fall through to next option
+            }
+        }
+        
+        if (this.embedMode === 'api' && this.apiKey) {
             try {
                 const vec = await this.apiEmbed(text);
                 return HyperbolicMath.project(vec);
             } catch {
-                // Fall back to local on API failure
+                // Fall through to local
             }
         }
+        
         return this.localEmbed(text);
     }
 
@@ -166,7 +205,12 @@ export class Embedder {
 
     /** Dimension of vectors produced by this embedder */
     get dimensions(): number {
-        return this.apiMode ? 1536 : VECTOR_DIM;
+        switch (this.embedMode) {
+            case 'ollama': return 768; // nomic-embed-text produces 768-dim
+            case 'huggingface': return 384; // MiniLM-L6-v2 produces 384-dim
+            case 'api': return 1536; // OpenAI default
+            default: return VECTOR_DIM; // 128 for TF-IDF
+        }
     }
 
     // ── Local TF-IDF embed ───────────────────────────────────────────────────
@@ -217,6 +261,50 @@ export class Embedder {
 
         const data = await response.json() as { data: [{ embedding: number[] }] };
         return data.data[0].embedding;
+    }
+
+    // ── Ollama embed ───────────────────────────────────────────────────────────
+
+    async ollamaEmbed(text: string): Promise<number[]> {
+        const response = await fetch(`${this.ollamaEndpoint}/api/embeddings`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: this.ollamaModel,
+                prompt: text.slice(0, 8000),
+            }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`Ollama embed error: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json() as { embedding: number[] };
+        return data.embedding;
+    }
+
+    // ── HuggingFace embed ─────────────────────────────────────────────────────
+
+    async huggingfaceEmbed(text: string): Promise<number[]> {
+        const response = await fetch(`${this.hfEndpoint}/${this.hfModel}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.hfApiKey}`,
+            },
+            body: JSON.stringify({
+                inputs: text.slice(0, 8000),
+            }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`HuggingFace embed error: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json() as number[];
+        return data;
     }
 
     // ── Cosine similarity ────────────────────────────────────────────────────

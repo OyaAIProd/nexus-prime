@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { InstructionGateway, type ClientBootstrapArtifact } from './instruction-gateway.js';
 import { resolveNexusStateDir } from './runtime-registry.js';
 
-export type SetupClientId = 'cursor' | 'claude' | 'opencode' | 'windsurf' | 'antigravity' | 'codex';
+export type SetupClientId = 'cursor' | 'claude' | 'opencode' | 'windsurf' | 'antigravity' | 'codex' | 'aider' | 'continue' | 'cline';
 export type SetupInstructionMode = 'replace' | 'codex-managed-agents';
 export type SetupInstructionScope = 'home' | 'workspace';
 export type SetupState = 'missing' | 'drifted' | 'installed';
@@ -51,7 +51,7 @@ export interface EnsureBootstrapOptions {
 
 const CODEX_MANAGED_START = '<!-- nexus-prime:codex-bootstrap:start -->';
 const CODEX_MANAGED_END = '<!-- nexus-prime:codex-bootstrap:end -->';
-const SUPPORTED_CLIENTS: SetupClientId[] = ['codex', 'cursor', 'claude', 'opencode', 'windsurf', 'antigravity'];
+const SUPPORTED_CLIENTS: SetupClientId[] = ['codex', 'cursor', 'claude', 'opencode', 'windsurf', 'antigravity', 'aider', 'continue', 'cline'];
 const WORKSPACE_SEED_FILES: Array<{ relativePath: string; content: string }> = [
     {
         relativePath: '.agent/hooks/before-mutate-guard.md',
@@ -269,6 +269,27 @@ function buildInstructionFiles(
             scope: 'home',
         }));
     }
+    if (clientId === 'aider') {
+        return bundle.artifacts.map((artifact: ClientBootstrapArtifact) => ({
+            path: join(workspaceRoot, '.aider', artifact.fileName),
+            content: artifact.content,
+            scope: 'workspace',
+        }));
+    }
+    if (clientId === 'continue') {
+        return bundle.artifacts.map((artifact: ClientBootstrapArtifact) => ({
+            path: join(workspaceRoot, '.continue', artifact.fileName),
+            content: artifact.content,
+            scope: 'workspace',
+        }));
+    }
+    if (clientId === 'cline') {
+        return bundle.artifacts.map((artifact: ClientBootstrapArtifact) => ({
+            path: join(workspaceRoot, '.cline', artifact.fileName),
+            content: artifact.content,
+            scope: 'workspace',
+        }));
+    }
     const fileName = clientId === 'claude' ? 'claude-code.md' : 'opencode.md';
     return bundle.artifacts.map((artifact: ClientBootstrapArtifact, index) => ({
         path: join(
@@ -303,7 +324,7 @@ export function getSetupDefinition(
         return {
             id: clientId,
             label: 'Claude Code',
-            configPath: join(homedir(), '.claude-code', 'mcp.json'),
+            configPath: join(homedir(), '.claude', 'mcp.json'),
             instructionFiles,
         };
     }
@@ -320,6 +341,30 @@ export function getSetupDefinition(
             id: clientId,
             label: 'Windsurf',
             configPath: join(homedir(), '.windsurf', 'mcp.json'),
+            instructionFiles,
+        };
+    }
+    if (clientId === 'aider') {
+        return {
+            id: clientId,
+            label: 'Aider',
+            configPath: join(homedir(), '.aider', 'mcp.json'),
+            instructionFiles,
+        };
+    }
+    if (clientId === 'continue') {
+        return {
+            id: clientId,
+            label: 'Continue.dev',
+            configPath: join(homedir(), '.continue', 'config.json'),
+            instructionFiles,
+        };
+    }
+    if (clientId === 'cline') {
+        return {
+            id: clientId,
+            label: 'Cline',
+            configPath: join(homedir(), '.vscode', 'cline-mcp.json'),
             instructionFiles,
         };
     }
@@ -522,8 +567,8 @@ export function collectBootstrapManifest(options: { packageRoot: string; workspa
 export function ensureBootstrap(options: EnsureBootstrapOptions): BootstrapManifestStatus {
     const packageRoot = resolve(options.packageRoot);
     const workspaceRoot = resolve(options.workspaceRoot ?? process.cwd());
-    const phase = options.phase ?? 'runtime';
-    const allowWorkspace = phase !== 'install' && workspaceEligible(workspaceRoot);
+    const _phase = options.phase ?? 'runtime';
+    const allowWorkspace = workspaceEligible(workspaceRoot);
     const scope: 'all' | 'home' = allowWorkspace ? 'all' : 'home';
 
     if (allowWorkspace) {
@@ -531,8 +576,27 @@ export function ensureBootstrap(options: EnsureBootstrapOptions): BootstrapManif
     }
 
     for (const clientId of SUPPORTED_CLIENTS) {
-        const definition = getSetupDefinition(clientId, { packageRoot, workspaceRoot });
-        installSetup(definition, { scope });
+        try {
+            const definition = getSetupDefinition(clientId, { packageRoot, workspaceRoot });
+            
+            const configPath = definition.configPath;
+            if (configPath) {
+                try {
+                    const stat = statSync(configPath);
+                    const mtimeMs = stat.mtimeMs;
+                    const now = Date.now();
+                    if (now - mtimeMs < 60000) {
+                        continue;
+                    }
+                } catch {
+                    // File doesn't exist or other error - proceed with write
+                }
+            }
+            
+            installSetup(definition, { scope });
+        } catch (error) {
+            console.warn(`Bootstrap failed for client ${clientId}: ${error}`);
+        }
     }
 
     const manifest = collectBootstrapManifest({ packageRoot, workspaceRoot });

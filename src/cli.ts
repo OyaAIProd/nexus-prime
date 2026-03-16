@@ -32,7 +32,7 @@ const __dirname = dirname(__filename);
 const PACKAGE_ROOT = join(__dirname, '..');
 const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
 
-type SetupClientId = 'cursor' | 'claude' | 'opencode' | 'windsurf' | 'antigravity' | 'codex';
+type SetupClientId = 'cursor' | 'claude' | 'opencode' | 'windsurf' | 'antigravity' | 'codex' | 'aider' | 'continue' | 'cline';
 
 type SetupInstructionMode = 'replace' | 'codex-managed-agents';
 
@@ -225,7 +225,7 @@ function getSetupDefinition(clientId: SetupClientId): SetupDefinition {
     return {
       id: clientId,
       label: 'Claude Code',
-      configPath: join(homedir(), '.claude-code', 'mcp.json'),
+      configPath: join(homedir(), '.claude', 'mcp.json'),
       instructionFiles,
     };
   }
@@ -245,10 +245,34 @@ function getSetupDefinition(clientId: SetupClientId): SetupDefinition {
       instructionFiles,
     };
   }
+  if (clientId === 'antigravity') {
+    return {
+      id: clientId,
+      label: 'Antigravity / OpenClaw',
+      configPath: join(homedir(), '.antigravity', 'mcp.json'),
+      instructionFiles,
+    };
+  }
+  if (clientId === 'aider') {
+    return {
+      id: clientId,
+      label: 'Aider',
+      configPath: join(homedir(), '.aider', 'mcp.json'),
+      instructionFiles,
+    };
+  }
+  if (clientId === 'continue') {
+    return {
+      id: clientId,
+      label: 'Continue.dev',
+      configPath: join(homedir(), '.continue', 'config.json'),
+      instructionFiles,
+    };
+  }
   return {
     id: clientId,
-    label: 'Antigravity / OpenClaw',
-    configPath: join(homedir(), '.antigravity', 'mcp.json'),
+    label: 'Cline',
+    configPath: join(homedir(), '.vscode', 'cline-mcp.json'),
     instructionFiles,
   };
 }
@@ -967,7 +991,7 @@ program
       .description('Install Nexus Prime for all supported clients in the current workspace')
       .option('--dry-run', 'Preview changes')
       .action((options) => {
-        const definitions = (['codex', 'cursor', 'claude', 'opencode', 'windsurf', 'antigravity'] as SetupClientId[])
+        const definitions = (['codex', 'cursor', 'claude', 'opencode', 'windsurf', 'antigravity', 'aider', 'continue', 'cline'] as SetupClientId[])
           .map((clientId) => getSetupDefinition(clientId));
         if (options.dryRun) {
           definitions.forEach((definition) => printSetupPreview(definition));
@@ -987,7 +1011,7 @@ program
       .description('Check integration status')
       .action(() => {
         console.log('📋 Integration Status:');
-        (['codex', 'cursor', 'claude', 'opencode', 'windsurf', 'antigravity'] as SetupClientId[]).forEach((clientId) => {
+        (['codex', 'cursor', 'claude', 'opencode', 'windsurf', 'antigravity', 'aider', 'continue', 'cline'] as SetupClientId[]).forEach((clientId) => {
           const definition = getSetupDefinition(clientId);
           const status = statusForDefinition(definition);
           const icon = status.state === 'installed' ? '✅' : status.state === 'drifted' ? '🟡' : '❌';

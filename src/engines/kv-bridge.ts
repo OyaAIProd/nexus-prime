@@ -263,6 +263,102 @@ export class KVBridge {
         return this.cacheManager;
     }
 
+    /**
+     * Run inference using the configured backend (Ollama, vLLM, or mock).
+     * Returns merge decision text from the LLM.
+     */
+    async runInference(prompt: string): Promise<string> {
+        const { inferenceBackend, endpoint, modelId } = this.config;
+        
+        switch (inferenceBackend) {
+            case 'ollama':
+                return this.ollamaComplete(prompt, endpoint, modelId);
+            case 'vllm':
+                return this.vllmComplete(prompt, endpoint, modelId);
+            case 'mock':
+            default:
+                return this.mockComplete(prompt);
+        }
+    }
+
+    /**
+     * Ollama completion API.
+     */
+    private async ollamaComplete(prompt: string, endpoint: string, model: string): Promise<string> {
+        const url = `${endpoint}/api/generate`;
+        
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model,
+                    prompt,
+                    stream: false,
+                    options: {
+                        temperature: 0.3,
+                        num_predict: 512,
+                    }
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`Ollama error: ${response.status}`);
+            }
+
+            const data = await response.json() as { response: string };
+            return data.response;
+        } catch (error) {
+            console.warn('Ollama inference failed, using mock:', error);
+            return this.mockComplete(prompt);
+        }
+    }
+
+    /**
+     * vLLM completion API (OpenAI-compatible).
+     */
+    private async vllmComplete(prompt: string, endpoint: string, model: string): Promise<string> {
+        const url = `${endpoint}/completions`;
+        
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model,
+                    prompt,
+                    temperature: 0.3,
+                    max_tokens: 512,
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error(`vLLM error: ${response.status}`);
+            }
+
+            const data = await response.json() as { choices: [{ text: string }] };
+            return data.choices[0]?.text ?? '';
+        } catch (error) {
+            console.warn('vLLM inference failed, using mock:', error);
+            return this.mockComplete(prompt);
+        }
+    }
+
+    /**
+     * Mock completion for testing.
+     */
+    private mockComplete(prompt: string): string {
+        const lower = prompt.toLowerCase();
+        if (lower.includes('merge')) {
+            return JSON.stringify({ shouldMerge: true, t: 0.7, gamma: 0.8 });
+        }
+        return JSON.stringify({ shouldMerge: false, t: 0.3, gamma: 0.5 });
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Private
     // ─────────────────────────────────────────────────────────────────────────

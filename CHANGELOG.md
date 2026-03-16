@@ -2,7 +2,34 @@
 
 All notable changes to Nexus Prime are documented here.
 
-Release Index: [v3.13.0](#v3130--2026-03-15) · [v3.12.1 release note](./releases/v3.12.1.md)
+Release Index: [v3.14.0](#v3140--2026-03-16) · [v3.13.0](#v3130--2026-03-15) · [v3.12.1 release note](./releases/v3.12.1.md)
+
+<details open>
+<summary><b>v3.14.0</b> · 2026-03-16 · Memory Explorer fix, Claude Code MCP integration, skill orchestration, embeddings, adapters, and Docker</summary>
+
+### Added
+- **OpenClaw memory bridge**: New MemoryBridge class for bidirectional memory sync between Nexus Prime and OpenClaw/Antigravity instances.
+- **Autonomous memory management**: MemoryConfig interface with configurable decayRate, priorityRetention, and flushEntropyThreshold. Added maintenanceCycle() for entropy-based expiration.
+- **Fuzzy skill matching**: resolveSkillSelectors() now uses Jaccard similarity to match skills based on keyword overlap with goal text.
+- **Adaptive token optimization**: Token thresholds now adapt based on file count (skip threshold 0.10-0.25, outline threshold 0.30-0.45).
+- **Agent auto-configuration**: Workspace-level configs now write during npm install phase. Added idempotency guard and per-client error handling.
+- **Pattern promotion**: AgentLearner now supports promoteRepeatingPatterns() to convert frequently-accessed memories into runtime skills.
+- **Ollama embeddings**: Added NEXUS_EMBED_MODE=ollama with nomic-embed-text model support, fallback chain: Ollama → OpenAI → Local TF-IDF.
+- **HuggingFace embeddings**: Added NEXUS_EMBED_MODE=huggingface with sentence-transformers/all-MiniLM-L6-v2 model support.
+- **KV-Bridge Ollama inference**: Implemented HTTP client for Ollama completion API in KVBridge.
+- **New agent adapters**: Added Aider, Continue.dev, and Cline adapters with auto-configuration support.
+- **Docker support**: Added Dockerfile and docker-compose.yml with optional Ollama companion service.
+
+### Fixed
+- **Dashboard Memory Explorer graph overlay**: Added z-index layering (explorer: 2, canvas: 1, empty: 3) and pointer-events handling to prevent graph from overlapping text.
+- **Claude Code MCP config path**: Fixed config path from ~/.claude-code/mcp.json to ~/.claude/mcp.json in both client-bootstrap.ts and cli.ts.
+- **Documentation**: Updated integrations.html and INTEGRATIONS.md to reflect correct Claude Code path.
+
+### Changed
+- **Token relevance scoring**: Enhanced scoreRelevance() with path component matching (task keyword "memory" now boosts src/engines/memory.ts).
+- **Embedder dimensions**: Now returns correct dimensions per mode (128 TF-IDF, 768 Ollama, 384 HuggingFace, 1536 OpenAI).
+
+</details>
 
 <details open>
 <summary><b>v3.13.0</b> · 2026-03-15 · Workspace surfaces, dashboard layout fixes, and community presence</summary>

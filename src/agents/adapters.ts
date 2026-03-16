@@ -117,6 +117,24 @@ export class WindsurfAdapter extends RenderedInstructionAdapter {
   }
 }
 
+export class AiderAdapter extends RenderedInstructionAdapter {
+  constructor() {
+    super('aider', 'aider');
+  }
+}
+
+export class ContinueAdapter extends RenderedInstructionAdapter {
+  constructor() {
+    super('continue', 'continue');
+  }
+}
+
+export class ClineAdapter extends RenderedInstructionAdapter {
+  constructor() {
+    super('cline', 'cline');
+  }
+}
+
 export class CustomAdapter extends RenderedInstructionAdapter {
   private sendHandler?: (message: NetworkMessage) => Promise<void>;
   private receiveHandler?: (message: NetworkMessage) => void;
@@ -166,7 +184,10 @@ export type AdapterType =
   | 'codex'
   | 'opencode'
   | 'cursor'
-  | 'windsurf';
+  | 'windsurf'
+  | 'aider'
+  | 'continue'
+  | 'cline';
 
 export function createAdapter(type: AdapterType, customName?: string): Adapter {
   switch (type) {
@@ -184,6 +205,12 @@ export function createAdapter(type: AdapterType, customName?: string): Adapter {
       return new CursorAdapter();
     case 'windsurf':
       return new WindsurfAdapter();
+    case 'aider':
+      return new AiderAdapter();
+    case 'continue':
+      return new ContinueAdapter();
+    case 'cline':
+      return new ClineAdapter();
     case 'mcp':
       return new MCPAdapter();
     case 'custom':
