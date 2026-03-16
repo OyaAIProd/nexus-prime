@@ -80,6 +80,34 @@ npx nexus-prime mcp
 
 Home-scoped bootstrap now runs automatically on install or first binary start, and the first Nexus run inside a repo writes the workspace-scoped client files it needs. `nexus-prime setup <client>` and `nexus-prime setup all` remain the explicit refresh/fix path when you want to force regeneration.
 
+### Docker
+
+```bash
+docker compose up                              # Nexus Prime only
+docker compose --profile with-ollama up        # Nexus Prime + local Ollama
+```
+
+### Embedding backends
+
+Nexus Prime supports multiple embedding backends with automatic fallback:
+
+| Backend | Config | Default model |
+|---------|--------|---------------|
+| **Local TF-IDF** | `NEXUS_EMBED_MODE=local` (default) | Built-in 128-dim |
+| **Ollama** | `NEXUS_EMBED_MODE=ollama` | `nomic-embed-text` |
+| **HuggingFace** | `NEXUS_EMBED_MODE=huggingface` | `sentence-transformers/all-MiniLM-L6-v2` |
+| **OpenAI** | `NEXUS_EMBED_MODE=api` | `text-embedding-3-small` |
+
+```bash
+# Ollama (requires ollama running locally)
+NEXUS_EMBED_MODE=ollama NEXUS_OLLAMA_ENDPOINT=http://localhost:11434 npx nexus-prime mcp
+
+# HuggingFace Inference API
+NEXUS_EMBED_MODE=huggingface NEXUS_HF_API_KEY=hf_... npx nexus-prime mcp
+```
+
+Fallback chain: Ollama → HuggingFace → OpenAI → Local TF-IDF. If the preferred backend is unavailable, Nexus falls through automatically.
+
 ## Default bootstrap-orchestrate path
 
 ```txt
@@ -188,15 +216,18 @@ flowchart TD
 ## 🚀 Client Setup and Runtime Contract
 
 ### Supported MCP Clients
-Nexus Prime currently provides automated setup for:
+Nexus Prime provides automated setup for **9 coding agents**:
 - 🔴 **Codex**
 - 🔵 **Cursor**
 - 🍊 **Claude Code**
 - 🟢 **Opencode**
 - 🌊 **Windsurf**
 - 🛡️ **Antigravity / OpenClaw**
+- 🔧 **Aider**
+- 🔗 **Continue.dev**
+- ⚙️ **Cline**
 
-Codex now has a first-class setup path too: `nexus-prime setup codex` creates or updates a managed Nexus Prime bootstrap block inside the repo-local `AGENTS.md`. Manual copying is no longer required; Nexus also auto-establishes home-scoped bootstrap on install/start and writes workspace-scoped client files on first repo run.
+All agent configurations are written automatically on `npm install`. The first Nexus run inside a repo writes workspace-scoped client files. `nexus-prime setup <client>` and `nexus-prime setup all` remain the explicit refresh/fix path.
 
 ### Automated Integration
 ```bash
@@ -205,6 +236,9 @@ nexus-prime setup cursor
 nexus-prime setup claude
 nexus-prime setup windsurf
 nexus-prime setup antigravity
+nexus-prime setup aider
+nexus-prime setup continue
+nexus-prime setup cline
 nexus-prime setup all
 nexus-prime setup status
 ```
@@ -587,6 +621,22 @@ Inventory Snapshot: 109 skills · 64 workflows · 5 hooks · 3 automations · 7 
 ## 📜 Release History
 
 <details open>
+<summary><b>v3.14.0</b> · 2026-03-16 · Ollama/HuggingFace embeddings, autonomous memory, agent ecosystem expansion</summary>
+
+- **Embedding backend chain**: Added Ollama and HuggingFace Inference API as embedding backends with automatic fallback (Ollama → HuggingFace → OpenAI → Local TF-IDF).
+- **Agent ecosystem expansion**: Added first-class setup for Aider, Continue.dev, and Cline alongside existing Codex, Cursor, Claude Code, Opencode, Windsurf, and OpenClaw adapters (9 agents total).
+- **OpenClaw memory bridge**: Bidirectional memory sync between Nexus Prime and OpenClaw instances via `nexus_openclaw_memory_sync`.
+- **Autonomous memory management**: Configurable decay rates, access-frequency retention (frequently recalled memories decay slower), and a maintenance cycle that expires stale low-value memories.
+- **Learning-to-skill promotion**: Recurring agent learnings are automatically promoted to reusable skills when access patterns indicate reliability.
+- **Fuzzy skill matching**: Skill resolution now uses Jaccard similarity scoring instead of exact name matching, so approximate goal text finds relevant skills.
+- **Adaptive token optimization**: Reading plan thresholds adjust dynamically based on file count and budget constraints.
+- **Docker one-click install**: `docker compose up` starts Nexus Prime; `--profile with-ollama` adds local Ollama for fully offline operation.
+- **Fixed**: Dashboard memory graph no longer overlaps text (z-index stacking). Claude Code MCP config path corrected to `~/.claude/mcp.json`. Agent auto-config now writes workspace configs during `npm install`.
+
+Full notes: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
 <summary><b>v3.13.0</b> · 2026-03-15 · Workspace surfaces, dashboard layout fixes, and community presence</summary>
 
 - Dashboard workspaces now drive their own graph visibility, library tabs, titles, and subtitles per surface mode (overview, knowledge, runs, catalog, governance).
