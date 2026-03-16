@@ -39,34 +39,37 @@
 
 ---
 
+## The problem with coding agents today
+
+Every coding agent eventually hits the same ceiling. Not model quality — infrastructure.
+
+**The re-reading loop.** Agents have no persistent memory. Every action requires re-reading all relevant context from scratch. One developer tracked 100M tokens across a Claude Code session: 99.4% were input. For every 1 token written, 166 were read. The agent was not building understanding — it was paying full orientation cost on every single turn.
+
+**The memory accumulation trap.** Agents form memory, but nobody decides what should stick. A note from six months ago with a strong semantic match can outrank yesterday's update on the same topic — unless you explicitly configure decay. Memory becomes a growing archive of noise, and the next session starts heavier, not smarter.
+
+**The portability gap.** Token expires. You switch from Claude Code to Codex. The repo transfers. What doesn't: which files actually mattered, what was already tried, what decisions were made at 2am that you built on top of.
+
+**RAG as prompt stuffing.** Collections get injected wholesale into context. Research consistently shows irrelevant context doesn't just waste tokens — it makes the model behave as if it were a worse model. More context, worse performance.
+
+**Skill selection stays manual.** Hundreds of skills exist. Nobody auto-selects. You tell the agent what to use, which defeats the purpose of orchestration.
+
+## Why existing solutions don't solve this
+
+| Problem | Common workaround | Why it fails | Nexus Prime |
+| :--- | :--- | :--- | :--- |
+| Re-reading loop | CLAUDE.md, AGENTS.md | Static files, manually updated, still re-read every turn | Session bootstrap with source-aware token budgeting — tracks what was selected and what was dropped |
+| Memory accumulation | Flat markdown files (OpenClaw) | No decay logic, no prominence scoring, no reconciliation | Memory fabric with fact extraction, conflict detection, quarantine, and configurable decay |
+| Memory portability | Mem0, MemoryPlugin | Built for conversation continuity, not coding workflow state — architecture decisions and file maps don't transfer | Session DNA for cross-agent context transfer |
+| RAG stuffing | Paste collections into context | Irrelevant context actively degrades model performance | RAG gate — collections attached, retrieved only when relevant, traced through packet and provenance |
+| Skill selection | Manual — you pick the skill | Doesn't scale, brittle, defeats orchestration purpose | `nexus_orchestrate` decomposes task and auto-selects skills, workflows, crews, specialists |
+| Token overflow | Start fresh with new agent | All learned context lost, repo transfers but workflow state doesn't | Ghost pass decides what files even need reading before reading them |
+
+## What Nexus Prime is
+
 **Nexus Prime** is a local-first MCP control plane for coding agents. It gives clients a default path that starts with bootstrap context, flows through orchestrated execution, and ends with persisted runtime truth instead of ad-hoc tool chaining.
 
 **Website:** [sir-ad.github.io/nexus-prime](https://sir-ad.github.io/nexus-prime/)<br>
 **Documentation:** [Catalog](https://sir-ad.github.io/nexus-prime/catalog.html) · [Comparison](https://sir-ad.github.io/nexus-prime/comparison.html) · [Knowledge Base](https://sir-ad.github.io/nexus-prime/knowledge-base.html) · [Integrations](https://sir-ad.github.io/nexus-prime/integrations.html) · [Architecture Diagrams](https://sir-ad.github.io/nexus-prime/architecture-diagrams.html)
-
-## What Nexus Prime is
-
-Nexus Prime sits between the client and the repo so the client does not have to improvise session recovery, context selection, worker shape, verification, or memory handoff.
-
-What that means in practice:
-
-- **Bootstrap-first execution** so non-trivial work starts with memory, stats, catalog health, source mix, and the recommended next step.
-- **Orchestrator-first runtime** so the public path is one raw prompt into `nexus_orchestrate`, not a manual chain of low-level tools.
-- **Worktree-backed execution** with explicit verifier lanes, worktree health, and runtime ledgers.
-- **Session-first RAG** where attached collections are gated, retrieved, budgeted, and traced instead of dumped into prompts wholesale.
-- **Persisted runtime truth** so the dashboard reflects runtime snapshots, not whichever process happens to host the UI.
-- **Lifetime token telemetry** so compression, by-source allocation, and drop decisions survive restart.
-
-## Why it is different
-
-| Concern | Direct agent-to-filesystem flow | Nexus Prime flow |
-| :--- | :--- | :--- |
-| Session start | Depends on repo docs and ad-hoc browsing | `nexus_session_bootstrap` recovers memory, catalog health, source mix, and the recommended next step |
-| Multi-step execution | Manual tool chaining | `nexus_orchestrate` decomposes, scores assets, budgets tokens, executes, verifies, and records truth |
-| Token discipline | Caller-managed | Source-aware token budgeting records what was selected, dropped, and forwarded |
-| RAG | Often bolted on as prompt stuffing | Runtime-attached collections are gated, retrieved, and traced into packet/provenance |
-| Runtime truth | Depends on the active host process | Shared runtime snapshots back the dashboard and API surfaces |
-| Follow-up learning | Optional and easy to skip | Session DNA, memory reconciliation, and execution ledgers are first-class outputs |
 
 ## ⚡ Quick Install
 
@@ -117,6 +120,48 @@ nexus_orchestrate(prompt="<raw user request>")
 
 Use `nexus_plan_execution` only when you explicitly want the ledger before mutation. Let Nexus choose crews, specialists, skills, workflows, hooks, automations, worker count, and token strategy unless you need hard constraints.
 
+## Core Capabilities
+
+### 1. The re-reading loop → Session Bootstrap
+**Problem:** Without persistent context, agents re-read everything from scratch on every turn. 99%+ of tokens spent on orientation, not problem-solving.
+**How:** `nexus_session_bootstrap` recovers memory, catalog health, source mix, and recommended next step before any work begins. `nexus_orchestrate` owns decomposition, asset selection, execution, and verification.
+**Proof:** Runtime ledgers, worker plans, and selection audits persisted into runtime truth.
+
+### 2. Files read without question → Ghost Pass + Token Budgeting
+**Problem:** Agents read 25 files to answer a question that needed 3. No pre-read analysis. No decision about whether a file should even be read.
+**How:** `nexus_ghost_pass` runs a pre-read analysis pass. Source-aware token budgeting then allocates budget across repo, memory, RAG, patterns, and runtime traces — recording what was selected and what was dropped.
+**Proof:** Lifetime token telemetry, by-source allocation, per-run drilldowns survive restart.
+
+### 3. Memory that grows but never learns → Memory Fabric
+**Problem:** Memory accumulates without decay. Old notes outrank recent updates. No mechanism for deciding what's ephemeral vs. durable.
+**How:** The memory control plane applies fact extraction, reconciliation, quarantine, and vault projection on top of SQLite + graph base. Memories are scored, contradictions detected, and stale facts fade.
+**Proof:** Dashboard exposes memory health, scope, trace, and shared-worker context.
+
+### 4. RAG as prompt stuffing → Session-First RAG Gate
+**Problem:** Collections get injected wholesale. Irrelevant context doesn't just waste tokens — it degrades model performance.
+**How:** Collections are attached to the runtime, retrieved only when relevant, and traced into planner, packet, and provenance. Nothing gets dumped into prompts wholesale.
+**Proof:** Knowledge view records attached, retrieved, selected, and dropped context.
+
+### 5. Multi-file work pollutes the checkout → Worktree-Backed Swarms
+**Problem:** Multi-file changes in a single checkout create merge conflicts, partial states, and untestable intermediate commits.
+**How:** Coder and verifier lanes execute in isolated worktrees with explicit worktree-health pass before creation.
+**Proof:** Runtime records worktree health, degraded fallback, verifier status, and merge/apply outcomes.
+
+### 6. Runtime state lives in the host process → Persisted Runtime Truth
+**Problem:** When the process dies, the truth dies. Operators can't inspect what happened after the fact.
+**How:** Packets, ledgers, token summaries, client bootstrap truth, worktree health, and run snapshots all come from persisted runtime state.
+**Proof:** Dashboard shows graph-first context, execution history, governance, and catalog truth from the same runtime ledger.
+
+### 7. Manual bootstrap per client → Client Bootstrap and MCP Profiles
+**Problem:** Users manually copy config files for every coding agent. One wrong path and the agent silently ignores the MCP server.
+**How:** Install/start establishes home-scoped surfaces, first repo run writes workspace-scoped surfaces, and `setup all` remains the explicit repair path.
+**Proof:** 9 agents configured automatically: Codex, Cursor, Claude Code, Opencode, Windsurf, Antigravity/OpenClaw, Aider, Continue.dev, Cline.
+
+### 8. Ship path disconnected from product story → Release and Governance Surfaces
+**Problem:** Feature registry, public docs, and release notes drift from actual runtime state.
+**How:** Feature registry generation, public-surface scans, release smoke, dependency audit, and runtime smoke all sit in the release gate.
+**Proof:** README, docs, dashboard catalog, and release notes all consume the same generated inventory.
+
 ## Proof Screens
 
 <div align="center">
@@ -125,53 +170,17 @@ Use `nexus_plan_execution` only when you explicitly want the ledger before mutat
   <i>Graph-centered cockpit view: the dashboard keeps memory context, runtime truth, and operator controls in one place instead of hiding them behind separate tools.</i>
 </div>
 
+<div align="center">
+  <img src="./docs/assets/screenshots/dashboard_knowledge_trace.png" alt="Nexus Prime dashboard showing session-first RAG collections, source mix, provenance, and by-source token allocation" width="1600" height="1280">
+  <br>
+  <i>Knowledge and token trace view: Nexus shows what attached collections contributed, what token budgeting kept, and what the runtime dropped.</i>
+</div>
+
 - [Catalog](https://sir-ad.github.io/nexus-prime/catalog.html): generated registry for MCP surfaces, client targets, dashboard capabilities, runtime subsystems, and release gates.
 - [Comparison](https://sir-ad.github.io/nexus-prime/comparison.html): tiered market map for direct developer orchestrators, broader multi-agent frameworks, and adjacent specialist stacks.
 - [Knowledge Base](https://sir-ad.github.io/nexus-prime/knowledge-base.html): runtime contract, packets, ledgers, memory, token telemetry, and guardrails.
 - [Integrations](https://sir-ad.github.io/nexus-prime/integrations.html): verified setup for Codex, Cursor, Claude Code, Opencode, Windsurf, and Antigravity/OpenClaw.
 - [Architecture Diagrams](https://sir-ad.github.io/nexus-prime/architecture-diagrams.html): shipped diagrams for the control plane, worktree lifecycle, memory fabric, RAG gate, token budget, runtime truth, and release pipeline.
-
-## 🧠 Core Capabilities
-
-### 1. Session Bootstrap and Orchestration
-- **Outcome:** external clients start from one disciplined path instead of a tool buffet.
-- **How:** `nexus_session_bootstrap` recovers context and `nexus_orchestrate` owns decomposition, asset selection, execution, and verification.
-- **Proof:** runtime ledgers, worker plans, and selection audits are persisted into runtime truth.
-
-### 2. Worktree-Backed Swarms and Verification
-- **Outcome:** multi-file work can fan out without polluting the main checkout.
-- **How:** coder and verifier lanes execute in isolated worktrees with an explicit worktree-health pass before creation.
-- **Proof:** the runtime records worktree health, degraded fallback, verifier status, and merge/apply outcomes.
-
-### 3. Memory Fabric and Reconciliation
-- **Outcome:** memories stay useful instead of becoming a raw transcript dump.
-- **How:** the memory control plane applies fact extraction, reconciliation, quarantine, portability, and vault projection on top of the SQLite + graph base.
-- **Proof:** the dashboard exposes memory health, scope, trace, and shared-worker context.
-
-### 4. Session-First RAG Gate
-- **Outcome:** attached corpora help when relevant without flooding prompts.
-- **How:** collections are attached to the runtime, retrieved only when relevant, and traced into planner, packet, and provenance.
-- **Proof:** the knowledge view records attached, retrieved, selected, and dropped context.
-
-### 5. Source-Aware Token Budgeting
-- **Outcome:** context selection becomes a budgeted routing problem instead of “read everything.”
-- **How:** Nexus budgets across repo, memory, RAG, patterns, and runtime traces, then persists what was selected and what was dropped.
-- **Proof:** lifetime token telemetry, by-source allocation, and per-run drilldowns survive restart.
-
-### 6. Runtime Truth and Dashboard
-- **Outcome:** operators can inspect what actually happened in the runtime without trusting live-only host state.
-- **How:** packets, ledgers, token summaries, client bootstrap truth, worktree health, and run snapshots all come from persisted runtime state.
-- **Proof:** the dashboard shows graph-first context, execution history, governance, and catalog truth from the same runtime ledger.
-
-### 7. Client Bootstrap and MCP Profiles
-- **Outcome:** users do not have to manually copy bootstrap files for every client.
-- **How:** install/start establishes home-scoped surfaces, first repo run writes workspace-scoped surfaces, and `setup all` remains the explicit repair path.
-- **Proof:** Codex, Cursor, Claude Code, Opencode, Windsurf, and Antigravity/OpenClaw all have generated bootstrap targets.
-
-### 8. Release and Governance Surfaces
-- **Outcome:** the product story and the ship path stay aligned.
-- **How:** feature registry generation, public-surface scans, release smoke, dependency audit, and runtime smoke all sit in the release gate.
-- **Proof:** README, docs, dashboard catalog, and release notes all consume the same generated inventory.
 
 <details>
 <summary><b>📐 Diagram: bootstrap → orchestrate → runtime → truth</b></summary>
@@ -207,13 +216,7 @@ flowchart TD
 
 </details>
 
-<div align="center">
-  <img src="./docs/assets/screenshots/dashboard_knowledge_trace.png" alt="Nexus Prime dashboard showing session-first RAG collections, source mix, provenance, and by-source token allocation" width="1600" height="1280">
-  <br>
-  <i>Knowledge and token trace view: Nexus shows what attached collections contributed, what token budgeting kept, and what the runtime dropped.</i>
-</div>
-
-## 🚀 Client Setup and Runtime Contract
+## Client Setup and Runtime Contract
 
 ### Supported MCP Clients
 Nexus Prime provides automated setup for **9 coding agents**:
@@ -276,11 +279,13 @@ Memory inventory ready.
 
 ## Competitive Landscape
 
-The comparison exists so agent builders can separate direct control planes from broader frameworks before they evaluate Nexus Prime on the wrong axis.
+Mem0 ($24M Series A, AWS Agent SDK exclusive) solves conversation memory — user preferences, chat continuity, multi-session recall. It was not built for coding workflow state: architecture decisions, file relevance maps, what was tried and failed.
 
-- Nexus Prime is closest to repo-adjacent control planes that own bootstrap, orchestration, worktree execution, and persisted runtime truth.
-- Broader frameworks like AutoGen, LangGraph, CrewAI, CAMEL, and MetaGPT are stronger when you want to embed orchestration inside your own application stack.
-- Specialized orchestrators still matter, but Nexus stays differentiated on bootstrap-first MCP entry, session-first RAG, source-aware token budgeting, and generated client bootstrap.
+OpenClaw's memory system stores flat markdown files with optional temporal decay. It is siloed per agent and does not transfer between coding tools.
+
+The entire category treats memory as a local storage problem rather than a knowledge architecture problem.
+
+Nexus Prime is not a memory layer. It is the control plane that sits between the client and the repo — owning bootstrap, orchestration, worktree execution, and persisted runtime truth. Memory is one subsystem within it, not the product.
 
 Read the full tiered market map: [Comparison](https://sir-ad.github.io/nexus-prime/comparison.html)
 
