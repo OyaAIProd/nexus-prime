@@ -21,7 +21,8 @@ Release Index: [v3.14.0](#v3140--2026-03-16) · [v3.13.0](#v3130--2026-03-15) ·
 - **Docker support**: Added Dockerfile and docker-compose.yml with optional Ollama companion service.
 
 ### Fixed
-- **Dashboard Memory Explorer graph overlay**: Added z-index layering (explorer: 2, canvas: 1, empty: 3) and pointer-events handling to prevent graph from overlapping text.
+- **Dashboard Memory Explorer graph containment**: Hardened `#graph-stage` with `contain: paint`, `isolation: isolate`, and explicit stacking context. Added SVG-level `overflow: hidden`. Clamped node positions to viewBox bounds (40px margin). Reduced outer ring radius from 280 to 240 to prevent edge bleed.
+- **Orchestrator adoption in coding agents**: Rewrote instruction gateway `CLIENT_BOOTSTRAP_SEQUENCE` with imperative MUST/NEVER language so agents proactively call `nexus_session_bootstrap` and `nexus_orchestrate` instead of falling back to manual file exploration.
 - **Claude Code MCP config path**: Fixed config path from ~/.claude-code/mcp.json to ~/.claude/mcp.json in both client-bootstrap.ts and cli.ts.
 - **Documentation**: Updated integrations.html and INTEGRATIONS.md to reflect correct Claude Code path.
 
