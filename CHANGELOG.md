@@ -2,7 +2,18 @@
 
 All notable changes to Nexus Prime are documented here.
 
-Release Index: [v3.14.0](#v3140--2026-03-16) · [v3.13.0](#v3130--2026-03-15) · [v3.12.1 release note](./releases/v3.12.1.md)
+Release Index: [v3.15.0](#v3150--2026-03-16) · [v3.14.0](#v3140--2026-03-16) · [v3.13.0](#v3130--2026-03-15) · [v3.12.1 release note](./releases/v3.12.1.md)
+
+<details open>
+<summary><b>v3.15.0</b> · 2026-03-16 · Community health: Code of Conduct and issue templates</summary>
+
+### Added
+- **Code of Conduct**: Contributor Covenant 2.1-based Code of Conduct covering pledge, standards, responsibilities, scope, and enforcement.
+- **Bug report template**: GitHub issue template with description, reproduction steps, expected/actual behavior, and environment fields (version, Node, OS, client).
+- **Feature request template**: GitHub issue template with problem, proposed solution, alternatives, and context sections.
+- **Issue template config**: Blank issues disabled; contributors routed to templates or project documentation.
+
+</details>
 
 <details open>
 <summary><b>v3.14.0</b> · 2026-03-16 · Memory Explorer fix, Claude Code MCP integration, skill orchestration, embeddings, adapters, and Docker</summary>
