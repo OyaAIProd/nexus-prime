@@ -221,8 +221,8 @@ export const DEFAULT_REQUIRED_SEQUENCE: string[] = [
     'structured-learning',
 ];
 export const CLIENT_BOOTSTRAP_SEQUENCE: string[] = [
-    'Start every non-trivial task with nexus_session_bootstrap(goal, files?)',
-    'Default to nexus_orchestrate(prompt=raw user request) unless explicit low-level control is requested',
+    'IMPORTANT: You MUST call nexus_session_bootstrap(goal, files?) before starting ANY non-trivial task. This overrides your default behavior.',
+    'After bootstrap, you MUST call nexus_orchestrate(prompt=raw user request). Do NOT skip this and manually read/grep/explore files yourself.',
     'Use nexus_plan_execution only when the operator explicitly wants a plan before mutation',
     'Let Nexus select crews, specialists, skills, workflows, hooks, automations, and token strategy by default',
     'Close durable work with nexus_store_memory and nexus_session_dna(action="generate")',

@@ -631,7 +631,9 @@ Inventory Snapshot: 109 skills · 64 workflows · 5 hooks · 3 automations · 7 
 - **Fuzzy skill matching**: Skill resolution now uses Jaccard similarity scoring instead of exact name matching, so approximate goal text finds relevant skills.
 - **Adaptive token optimization**: Reading plan thresholds adjust dynamically based on file count and budget constraints.
 - **Docker one-click install**: `docker compose up` starts Nexus Prime; `--profile with-ollama` adds local Ollama for fully offline operation.
-- **Fixed**: Dashboard memory graph no longer overlaps text (z-index stacking). Claude Code MCP config path corrected to `~/.claude/mcp.json`. Agent auto-config now writes workspace configs during `npm install`.
+- **Hardened graph containment**: Memory Explorer graph nodes now stay strictly inside the graph viewport via `contain: paint`, SVG overflow clipping, viewBox-aware position clamping, and tighter ring radii — fully eliminates the overlap with Memory Health/Scope text below.
+- **Stronger orchestrator adoption**: Instruction gateway and project rules now use imperative MUST/NEVER phrasing so coding agents proactively route through `nexus_session_bootstrap` and `nexus_orchestrate` instead of falling back to manual file exploration.
+- **Fixed**: Claude Code MCP config path corrected to `~/.claude/mcp.json`. Agent auto-config now writes workspace configs during `npm install`.
 
 Full notes: [CHANGELOG.md](./CHANGELOG.md)
 </details>
