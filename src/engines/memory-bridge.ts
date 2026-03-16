@@ -112,7 +112,7 @@ export class MemoryBridge {
             if (fs.existsSync(this.syncStatePath)) {
                 return JSON.parse(fs.readFileSync(this.syncStatePath, 'utf-8'));
             }
-        } catch { }
+        } catch { /* corrupt sync state, return defaults */ }
         
         return {
             lastSync: 0,
