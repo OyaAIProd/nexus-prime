@@ -2364,9 +2364,19 @@ export class SubAgentRuntime {
     }
 
     private defaultVerifyCommands(): string[] {
-        return fs.existsSync(path.join(this.repoRoot, 'package.json'))
-            ? ['npm run build']
-            : [];
+        const pkgPath = path.join(this.repoRoot, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+            try {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                const cmds = [];
+                if (pkg.scripts?.build) cmds.push('npm run build');
+                if (pkg.scripts?.test) cmds.push('npm run test');
+                return cmds.length > 0 ? cmds : ['npm run build', 'npm run test'];
+            } catch {
+                return ['npm run build', 'npm run test'];
+            }
+        }
+        return [];
     }
 
     private createWorkerManifests(
@@ -3668,7 +3678,16 @@ function scanFiles(repoRoot: string): FileRef[] {
             return;
         }
 
-        for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
+        let entries;
+        try {
+            entries = fs.readdirSync(target, { withFileTypes: true });
+        } catch (e: any) {
+            if (e.code === 'EACCES') {
+                throw new Error(`EACCES Permission Denied: Nexus Prime scanner requires elevated permissions to access '${target}'. Please run the daemon/installation with 'sudo' or grant Full Disk Access.`);
+            }
+            return;
+        }
+        for (const entry of entries) {
             if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.git')) continue;
             visit(path.join(target, entry.name));
         }

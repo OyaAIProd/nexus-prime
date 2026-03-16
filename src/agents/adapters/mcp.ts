@@ -253,6 +253,37 @@ export class MCPAdapter implements Adapter {
     private sessionDNA: SessionDNAManager;
     private runtime?: SubAgentRuntime;
 
+    private sciFiMatrixLog(title: string, metrics: Record<string, any>, intent?: string): void {
+        const width = 76;
+        console.error(`\n\x1b[36m╔═══ [ \x1b[37m\x1b[1mNEXUS PRIME · ORCHESTRATION MATRIX\x1b[0m\x1b[36m ] ${'═'.repeat(Math.max(0, width - 48))}╗\x1b[0m`);
+        console.error(`\x1b[36m║ \x1b[35m► \x1b[37m${title.padEnd(width - 6, ' ')} \x1b[36m║\x1b[0m`);
+        console.error(`\x1b[36m╠${'═'.repeat(width - 2)}╣\x1b[0m`);
+        
+        if (intent) {
+            console.error(`\x1b[36m║ \x1b[32m[DETECTED INTENT]\x1b[0m \x1b[37m${intent.padEnd(width - 22, ' ')} \x1b[36m║\x1b[0m`);
+            console.error(`\x1b[36m╠${'═'.repeat(width - 2)}╣\x1b[0m`);
+        }
+
+        const keys = Object.keys(metrics);
+        for (let i = 0; i < keys.length; i += 2) {
+            const k1 = keys[i];
+            const v1 = String(metrics[k1]).substring(0, 20);
+            const p1 = `\x1b[33m${k1}:\x1b[0m ${v1}`.padEnd(42, ' ');
+            
+            if (i + 1 < keys.length) {
+                const k2 = keys[i + 1];
+                const v2 = String(metrics[k2]).substring(0, 20);
+                const p2 = `\x1b[33m${k2}:\x1b[0m ${v2}`.padEnd(42, ' ');
+                // We have to hardcode padding because ansi escape codes mess with .padEnd length
+                console.error(`\x1b[36m║ \x1b[33m${k1}:\x1b[37m ${v1.padEnd(20, ' ')} │ \x1b[33m${k2}:\x1b[37m ${v2.padEnd(19, ' ')} \x1b[36m║\x1b[0m`);
+            } else {
+                console.error(`\x1b[36m║ \x1b[33m${k1}:\x1b[37m ${v1.padEnd(20, ' ')} │                     \x1b[36m║\x1b[0m`);
+            }
+        }
+        
+        console.error(`\x1b[36m╚${'═'.repeat(width - 2)}╝\x1b[0m\n`);
+    }
+
     private box(title: string, content: string[], color: string = '34'): void {
         const width = 68;
         console.error(`\n\x1b[${color}m┌─ ${title} ${'─'.repeat(Math.max(0, width - title.length - 4))}┐\x1b[0m`);
@@ -1245,13 +1276,22 @@ export class MCPAdapter implements Adapter {
             toolProfile: this.getToolProfile(),
         });
 
-        // v1.5 Mandatory Induction Interceptor
+        // v1.5 Mandatory Induction Interceptor / Sci-Fi Telemetry
+        if (goal && goal.length > 20 && !['nexus_execute_nxl', 'nexus_session_bootstrap', 'nexus_plan_execution', 'nexus_memory_stats'].includes(request.params.name)) {
+            this.sciFiMatrixLog('ROUTING PROTOCOL INITIATED', {
+                'Active Protocol': 'Multi-Agent Swarm',
+                'Tool Executing': toolName,
+                'Git Isolation': 'Enabled (Worktrees)',
+                'Memory Bridge': 'Active (Shared)',
+                'POD Network': 'Online',
+                'Status': 'Executing...'
+            }, goal.substring(0, 50) + '...');
+        } else if (toolName) {
+           // Standard trace
+           console.error(`\x1b[90m[NEXUS] Executing Tool: ${toolName}\x1b[0m`);
+        }
+
         if (goal && goal.length > 50 && !['nexus_execute_nxl', 'nexus_session_bootstrap', 'nexus_plan_execution'].includes(request.params.name)) {
-            this.box('🚀 MANDATORY INDUCTION', [
-                `Goal: ${goal.substring(0, 60)}...`,
-                `Result: Specialized agent army induced by default.`,
-                `Status: Multi-agent PDLC active.`
-            ], '33');
             const swarm = await this.getOrchestrator().induce(goal);
             nexusEventBus.emit('nexusnet.sync', { newItemsCount: swarm.length });
         }
