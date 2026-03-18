@@ -68,7 +68,7 @@ Every coding agent eventually hits the same ceiling. Not model quality — infra
 
 **Nexus Prime** is a local-first MCP control plane for coding agents. It gives clients a default path that starts with bootstrap context, flows through orchestrated execution, and ends with persisted runtime truth instead of ad-hoc tool chaining.
 
-**Website:** [sir-ad.github.io/nexus-prime](https://sir-ad.github.io/nexus-prime/)<br>
+**Website:** [nexus-prime.cfd](https://nexus-prime.cfd/)<br>
 **Documentation:** [Catalog](https://sir-ad.github.io/nexus-prime/catalog.html) · [Comparison](https://sir-ad.github.io/nexus-prime/comparison.html) · [Knowledge Base](https://sir-ad.github.io/nexus-prime/knowledge-base.html) · [Integrations](https://sir-ad.github.io/nexus-prime/integrations.html) · [Architecture Diagrams](https://sir-ad.github.io/nexus-prime/architecture-diagrams.html)
 
 ## ⚡ Quick Install
