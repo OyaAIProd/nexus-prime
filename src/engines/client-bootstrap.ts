@@ -1,4 +1,5 @@
 import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { execSync } from 'child_process';
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { InstructionGateway, type ClientBootstrapArtifact } from './instruction-gateway.js';
@@ -185,10 +186,26 @@ function buildStandardMcpServerConfig() {
     };
 }
 
+function isAtlasDetected(): boolean {
+    try {
+        const configPath = join(homedir(), '.goatlas', 'config.json');
+        if (existsSync(configPath)) return true;
+    } catch {}
+    try {
+        execSync('which goatlas', { stdio: 'ignore', timeout: 2000 });
+        return true;
+    } catch {}
+    return false;
+}
+
 function writeStandardMcpConfig(targetPath: string): void {
     const existing = readJson(targetPath);
     existing.mcpServers = existing.mcpServers ?? {};
     existing.mcpServers['nexus-prime'] = buildStandardMcpServerConfig();
+    // Auto-configure atlas code intelligence peer when detected
+    if (isAtlasDetected() && !existing.mcpServers['atlas']) {
+        existing.mcpServers['atlas'] = { command: 'goatlas', args: ['mcp'] };
+    }
     ensureParentDir(targetPath);
     writeFileSync(targetPath, JSON.stringify(existing, null, 2));
 }

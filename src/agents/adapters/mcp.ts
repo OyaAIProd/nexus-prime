@@ -190,39 +190,39 @@ class SessionTelemetry {
         switch (event) {
             case 'recall':
                 if ((context.count ?? 0) > 3) {
-                    nudges.push('You recalled many memories — consider nexus_optimize_tokens before reading the files mentioned.');
+                    nudges.push('Next: call nexus_optimize_tokens before reading the files mentioned.');
                 }
                 if ((context.count ?? 0) === 0) {
-                    nudges.push('No memories found. This is a fresh topic — explore carefully and store key findings.');
+                    nudges.push('No memories found — fresh topic. Next: explore carefully and call nexus_store_memory with key findings.');
                 }
                 break;
             case 'optimize':
                 if ((context.fullReads ?? 0) > 3) {
-                    nudges.push('Multiple files need full reading — consider nexus_ghost_pass before modifying them.');
+                    nudges.push('Next: call nexus_ghost_pass before modifying these files.');
                 }
                 break;
             case 'ghost_pass':
                 if ((context.risks ?? 0) > 0) {
-                    nudges.push('Risks detected — strongly consider nexus_spawn_workers for parallel exploration.');
+                    nudges.push('Risks detected. Next: call nexus_spawn_workers for parallel execution.');
                 }
                 break;
             case 'store':
                 if ((context.priority ?? 0) > 0.8) {
-                    nudges.push('High-priority insight stored. Consider nexus_audit_evolution to check for recurring patterns.');
+                    nudges.push('High-priority insight stored. Next: call nexus_store_memory to persist related findings.');
                 }
                 break;
             case 'mindkit_fail':
-                nudges.push('Guardrail FAILED. Do NOT proceed. Re-scope the task or use nexus_ghost_pass for a safer approach.');
+                nudges.push('Guardrail FAILED. Do NOT proceed. Re-scope the task or call nexus_ghost_pass for a safer approach.');
                 break;
             case 'high_call_count':
                 if (this.callCount > 20) {
-                    nudges.push('You have made 20+ tool calls. Consider storing a session summary via nexus_store_memory.');
+                    nudges.push('20+ tool calls reached. Next: call nexus_store_memory with a session summary.');
                 }
                 break;
         }
 
         if (nudges.length === 0) return '';
-        return `\n<planning engine="nexus-prime">\n${nudges.map(n => `  → ${n}`).join('\n')}\n</planning>`;
+        return `\n<nexus-next-step>\n${nudges.map(n => `  → ${n}`).join('\n')}\n</nexus-next-step>`;
     }
 
     format(memStats?: { totalLinks: number; prefrontal: number; hippocampus: number; cortex: number }): string {
@@ -392,19 +392,19 @@ export class MCPAdapter implements Adapter {
 
     private decorateToolDescription(name: string, description: string, profile: McpToolProfile): string {
         if (name === 'nexus_session_bootstrap') {
-            return 'Preferred session-start tool for external clients. Call this first to recover memory, inspect stats, see the recommended next step, and learn whether token optimization will be applied before execution.';
+            return 'REQUIRED: Call this BEFORE any other Nexus tool or file operation. Recovers memory, context, catalog health, and execution plan. Returns recommended next step.';
         }
         if (name === 'nexus_orchestrate') {
-            return 'Preferred default for non-trivial work. Give Nexus Prime the raw request and let it choose crews, specialists, skills, workflows, hooks, automations, and token strategy automatically.';
+            return 'REQUIRED after bootstrap: Pass the user\'s raw request. Nexus handles task decomposition, skill selection, worker allocation, and execution automatically. Do NOT manually explore files instead.';
         }
         if (name === 'nexus_plan_execution') {
-            return 'Optional plan-before-run surface. Use only when you explicitly want to inspect the execution ledger before calling nexus_orchestrate.';
+            return 'Optional: Inspect the execution ledger before calling nexus_orchestrate. Skip unless you need pre-run visibility into what Nexus will choose.';
         }
         if (name === 'nexus_optimize_tokens') {
-            return 'Manual/diagnostic reading-plan tool. Usually the orchestrator applies token optimization internally; call this directly only when you need to inspect or override the reading plan.';
+            return 'Call when reading 3+ files. Returns a reading plan that saves 50-90% tokens. Follow the plan output — do not bulk-read the repo.';
         }
         if (name === 'nexus_spawn_workers') {
-            return 'Manual/diagnostic swarm surface. Prefer nexus_orchestrate unless you explicitly want low-level control over worker count, strategies, or runtime actions.';
+            return 'Call when modifying 3+ interrelated files or when nexus_ghost_pass recommends parallel execution. Prefer nexus_orchestrate for automatic worker management.';
         }
         if (MANUAL_OR_DIAGNOSTIC_TOOLS.has(name) && profile === 'full') {
             return `Advanced/manual surface. ${description}`;
@@ -559,11 +559,12 @@ export class MCPAdapter implements Adapter {
                     inputSchema: {
                         type: 'object',
                         properties: {
-                            task: { type: 'string', description: 'Task description' },
+                            goal: { type: 'string', description: 'What you are trying to accomplish' },
+                            task: { type: 'string', description: 'Alias for goal (deprecated, use goal)' },
                             files: { type: 'array', items: { type: 'string' }, description: 'File paths to analyze. If omitted, auto-scans src/' },
                             budget: { type: 'number', description: 'Token budget override' }
                         },
-                        required: ['task'],
+                        required: [],
                     },
                 },
                 // ── Mindkit ──────────────────────────────────────────────────────
@@ -1301,10 +1302,17 @@ export class MCPAdapter implements Adapter {
                 toolName !== 'nexus_federation_status' &&
                 toolName !== 'nexus_status'
             ) {
-                const warning = '\n⚠️ [NEXUS PRIME] Reminder: You bypassed `nexus_session_bootstrap`. It is strongly recommended to call it at the start of a task to restore memory and context.\n\n';
-                if (result.content && result.content.length > 0 && typeof result.content[0] === 'object' && 'text' in result.content[0]) {
-                    (result.content[0] as any).text = warning + (result.content[0] as any).text;
-                }
+                return {
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'blocked',
+                            reason: 'nexus_session_bootstrap has not been called yet',
+                            action: 'Call nexus_session_bootstrap(goal="<your task>") first, then retry this tool',
+                            hint: 'Bootstrap recovers memory and context — skipping it means working blind'
+                        }, null, 2)
+                    }]
+                };
             }
 
             return result;
@@ -1813,7 +1821,7 @@ export class MCPAdapter implements Adapter {
             }
 
             case 'nexus_optimize_tokens': {
-                const task = String(request.params.arguments?.task ?? '');
+                const task = String(request.params.arguments?.goal ?? request.params.arguments?.task ?? '');
                 const rawFiles = Array.isArray(request.params.arguments?.files)
                     ? (request.params.arguments.files as unknown[]).map(String)
                     : null;

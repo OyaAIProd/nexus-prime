@@ -492,13 +492,23 @@ export class DashboardServer {
             const tag = url.searchParams.get('tag') ?? undefined;
             const linkedType = url.searchParams.get('linkedType') ?? undefined;
             const recencyMs = url.searchParams.get('recencyMs');
+            const showPhantom = url.searchParams.get('showPhantom') === 'true';
             const memory = this.getMemory();
-            this.respondJson(res, memory?.listSnapshots(limit, {
+            // Fetch extra to account for post-filtering
+            const raw = memory?.listSnapshots(Math.min(limit * 3, 200), {
                 tier: tier as 'prefrontal' | 'hippocampus' | 'cortex' | undefined,
                 tag,
                 linkedType: linkedType as 'session' | 'run' | 'skill' | 'workflow' | undefined,
                 recencyMs: recencyMs ? parseInt(recencyMs, 10) : undefined,
-            }) ?? []);
+            }) ?? [];
+            // Default filtering: exclude quarantine and phantom/swarm noise
+            const filtered = raw.filter((m: any) => {
+                const tags: string[] = Array.isArray(m.tags) ? m.tags : [];
+                if (tags.includes('#quarantine')) return false;
+                if (!showPhantom && (tags.includes('#phantom-learning') || tags.includes('#swarm'))) return false;
+                return true;
+            });
+            this.respondJson(res, filtered.slice(0, limit));
             return;
         }
 

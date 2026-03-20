@@ -667,6 +667,9 @@
             background: rgba(255, 255, 255, 0.03);
             color: var(--text);
             padding: 0.55rem;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+            min-width: 0;
         }
 
         .memory-explorer-card button:hover {
@@ -676,8 +679,8 @@
         .memory-explorer-meta {
             display: block;
             color: var(--muted);
-            font-size: 0.66rem;
-            margin-top: 0.2rem;
+            font-size: 0.7rem;
+            margin-top: 0.4rem;
             font-family: var(--mono);
         }
 
@@ -701,6 +704,8 @@
         .memory-step strong {
             display: block;
             margin-bottom: 0.24rem;
+            word-break: break-word;
+            overflow-wrap: anywhere;
         }
 
         .graph-toolbar {
@@ -1883,6 +1888,7 @@
                         <button data-memory-view-mode="lineage">Lineage</button>
                         <button data-memory-view-mode="timeline">Timeline</button>
                     </div>
+                    <button type="button" id="phantom-toggle" class="widget-action" style="font-size:0.65rem;opacity:0.7;" title="Show/hide phantom and swarm learnings">Phantom</button>
                     <button type="button" class="widget-action" data-focus-toggle="memory-graph" aria-pressed="false">Expand</button>
                 </div>
             </div>
@@ -2110,6 +2116,7 @@
             surfaceMode: 'overview',
             graphMode: 'memory',
             memoryViewMode: 'graph',
+            showPhantomLearnings: false,
             libraryMode: 'memories',
             workspaceViews: {
                 overview: 'memories',
@@ -2312,7 +2319,7 @@
                 },
             },
             memory: {
-                url: '/api/memory?limit=40',
+                get url() { return `/api/memory?limit=40${state.showPhantomLearnings ? '&showPhantom=true' : ''}`; },
                 assign(value) {
                     state.memories = Array.isArray(value) ? value : state.memories;
                 },
@@ -5884,6 +5891,19 @@
                 button.addEventListener('click', () => {
                     setMemoryExplorerMode(button.dataset.memoryViewMode);
                 });
+            });
+
+            $('phantom-toggle').addEventListener('click', async () => {
+                state.showPhantomLearnings = !state.showPhantomLearnings;
+                const btn = $('phantom-toggle');
+                btn.style.opacity = state.showPhantomLearnings ? '1' : '0.7';
+                btn.style.background = state.showPhantomLearnings ? 'rgba(255,255,255,0.12)' : '';
+                // Re-fetch memory with updated filter
+                try {
+                    const url = `/api/memory?limit=40${state.showPhantomLearnings ? '&showPhantom=true' : ''}`;
+                    const res = await fetch(url);
+                    if (res.ok) { state.memories = await res.json(); render(); }
+                } catch {}
             });
 
             $('library-tabs').addEventListener('click', (event) => {

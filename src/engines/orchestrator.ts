@@ -702,10 +702,15 @@ export class OrchestratorEngine {
       manualOverrides: [],
     });
     this.instructionGateway.persist(instructionPacket, this.repoRoot);
+    // Annotate code intelligence peer availability in ledger
+    const fedPeers = (this.runtime.getUsageSnapshot().federation as any)?.knownPeers;
+    const atlasPeer = Array.isArray(fedPeers) ? fedPeers.find((p: any) => p.id === 'atlas' && p.detected) : null;
+
     markExecutionLedgerStep(ledger, 'compile-instruction-packet', 'completed', {
       summary: `Compiled instruction packet ${instructionPacket.packetHash}.`,
       details: {
         estimatedTokens: instructionPacket.estimatedTokens,
+        ...(atlasPeer ? { codeIntelligence: { available: true, peer: 'atlas', capabilities: atlasPeer.capabilities || [] } } : {}),
       },
     });
     ledger.packetHash = instructionPacket.packetHash;
