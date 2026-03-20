@@ -2,9 +2,31 @@
 
 All notable changes to Nexus Prime are documented here.
 
-Release Index: [v3.16.0](#v3160--2026-03-20) · [v3.15.0](#v3150--2026-03-16) · [v3.14.0](#v3140--2026-03-16) · [v3.13.0](#v3130--2026-03-15) · [v3.12.1 release note](./releases/v3.12.1.md)
+Release Index: [v3.17.0](#v3170--2026-03-20) · [v3.16.0](#v3160--2026-03-20) · [v3.15.0](#v3150--2026-03-16) · [v3.14.0](#v3140--2026-03-16) · [v3.13.0](#v3130--2026-03-15) · [v3.12.1 release note](./releases/v3.12.1.md)
 
 <details open>
+<summary><b>v3.17.0</b> · 2026-03-20 · Agent adoption hardening, memory readability, atlas code intelligence peer</summary>
+
+### Added
+- **Hard bootstrap enforcement**: Non-bootstrap MCP tool calls now return a structured `blocked` response with explicit next-step action instead of a soft warning that agents ignored. Read-only tools (`nexus_memory_stats`, `nexus_list_*`, `nexus_federation_status`) remain exempt.
+- **Atlas code intelligence peer**: Auto-detects Atlas (code intelligence MCP server with AST parsing, 22 tools, semantic search, impact analysis) via config file or binary. Annotates orchestrator ledger with availability. Client bootstrap writes Atlas MCP config when detected.
+- **Memory phantom filter toggle**: Dashboard toolbar button to show/hide phantom and swarm learnings. Default API filtering excludes `#quarantine` and `#phantom-learning`/`#swarm` tagged memories unless explicitly requested.
+- **Full operating protocol reference**: Detailed protocol moved from CLAUDE.md to `docs/nexus-protocol.md` for human reference. CLAUDE.md reduced to 16 lines of imperative agent instructions.
+- **`goal` parameter alias**: `nexus_optimize_tokens` now accepts `goal` alongside `task` for consistency with `nexus_session_bootstrap` and `nexus_ghost_pass`.
+
+### Fixed
+- **Memory text overflow**: Added `word-break: break-word`, `overflow-wrap: anywhere`, and `min-width: 0` to memory explorer cards and timeline steps. Increased meta text spacing from `0.2rem` to `0.4rem` and font size from `0.66rem` to `0.7rem`.
+- **Tool descriptions weakened adoption**: Rewrote `decorateToolDescription()` — bootstrap and orchestrate tools now use `REQUIRED:` prefix instead of `Preferred`. Token optimization description changed from "Manual/diagnostic" to actionable trigger language.
+- **Planning nudges ignored by agents**: Changed "consider X" phrasing to imperative "Next: call X" and wrapper tag from `<planning>` to `<nexus-next-step>`.
+
+### Changed
+- **CLAUDE.md**: Rewritten from 134-line operating manual to 16-line imperative instruction set. Agents scan it in one pass instead of drowning in subsystem triggers, recipes, and anti-patterns.
+- **Memory API default filtering**: `/api/memory` endpoint now post-filters quarantine and phantom/swarm memories by default. New `showPhantom=true` query param to opt in.
+- **Peer connector expansion**: Added Atlas alongside OpenClaw, Hermes, PicoClaw, and OpenCode with differentiated capabilities (`code-intelligence`, `ast-parsing`, `semantic-search`, `impact-analysis`, `tool-relay`).
+
+</details>
+
+<details>
 <summary><b>v3.16.0</b> · 2026-03-20 · Compaction sentinel, tiered context, token analytics, peer federation, installation hardening</summary>
 
 ### Added

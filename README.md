@@ -626,6 +626,31 @@ Inventory Snapshot: 109 skills · 64 workflows · 5 hooks · 3 automations · 7 
 ## 📜 Release History
 
 <details open>
+<summary><b>v3.17.0</b> · 2026-03-20 · Agent adoption hardening, memory readability, atlas code intelligence peer</summary>
+
+- **Hard bootstrap enforcement**: Non-bootstrap MCP tool calls return a structured `blocked` response with next-step guidance instead of a soft warning agents ignored. Read-only tools remain exempt.
+- **Atlas code intelligence peer**: Auto-detects Atlas (AST parsing, semantic search, impact analysis) and writes MCP config for all clients when available.
+- **Memory readability**: Fixed text overflow on memory cards/timeline, default-filtered phantom and quarantine noise from dashboard, added phantom toggle.
+- **Imperative tool descriptions**: Rewrote MCP tool descriptions from "Preferred" to "REQUIRED" and planning nudges from "consider" to "Next: call".
+- **Streamlined CLAUDE.md**: 134-line protocol manual → 16-line imperative instruction set. Full protocol moved to `docs/nexus-protocol.md`.
+
+Full notes: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
+<summary><b>v3.16.0</b> · 2026-03-20 · Compaction sentinel, tiered context, token analytics, peer federation, installation hardening</summary>
+
+- **Compaction Sentinel + Tiered Context**: Pre-compaction memory flush and L0/L1/L2 progressive file loading.
+- **Token Analytics**: Lifetime optimization reporting with per-session breakdowns, persisted in SQLite.
+- **Self-Learning Skills + Repo Tree**: Automatic skill derivation and cached repo tree visualization.
+- **Peer Connectors**: Auto-detect and sync with OpenClaw, Hermes, PicoClaw peers.
+- **Installation Hardening**: XDG-aware config, path validation, install logging, `nexus-prime setup diagnose`, 12 client targets.
+- **Multi-Intent Classification**: Orchestrator scores all intents, surfaces secondary when within 80% of primary.
+
+Full notes: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
 <summary><b>v3.14.0</b> · 2026-03-16 · Ollama/HuggingFace embeddings, autonomous memory, agent ecosystem expansion</summary>
 
 - **Embedding backend chain**: Added Ollama and HuggingFace Inference API as embedding backends with automatic fallback (Ollama → HuggingFace → OpenAI → Local TF-IDF).
