@@ -7,6 +7,7 @@
 export { TokenSupremacyEngine as TokenOptimizer, createTokenSupremacyEngine as createTokenOptimizer } from './token-supremacy.js';
 export { SLERPCompressor, createSLERPCompressor } from './token-optimizer.js';
 export { ContextEngine, createContextEngine } from './context.js';
+export { ContextCompressor, type CompressionOptions, type CompressionStats } from './context-compressor.js';
 
 export { MemoryEngine, createMemoryEngine } from './memory.js';
 export type { MemoryItem } from './memory.js';
@@ -112,6 +113,8 @@ export type {
   DSLCompilerBackend,
   RuntimeBackendRegistry
 } from './runtime-backends.js';
+
+export { PersistentWorkLedger, type LedgerEntry } from './work-ledger.js';
 
 export { SkillRuntime, createSkillRuntime } from './skill-runtime.js';
 export type {

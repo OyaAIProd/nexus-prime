@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { z } from 'zod';
 import { SkillCardRegistry, type SkillCard } from './skill-card.js';
 import {
     BUILTIN_SKILL_PACKS,
@@ -14,6 +15,7 @@ import {
     type SkillRiskClass,
     type SkillScope,
 } from './runtime-assets.js';
+import { createEmbedder, type Embedder } from './embedder.js';
 
 function tokenize(text: string): Set<string> {
     return new Set(
@@ -42,6 +44,17 @@ function computeSkillRelevance(goal: string, artifact: { name: string; instructi
     const domainScore = jaccardSimilarity(goalTokens, domainTokens);
     
     return Math.max(nameScore, instructionScore * 0.7, domainScore * 0.5);
+}
+
+async function computeSemanticRelevance(goal: string, goalVector: number[], artifact: SkillArtifact, embedder: Embedder): Promise<number> {
+    const artifactText = `${artifact.name} ${artifact.domain || ''} ${artifact.instructions || ''}`;
+    if (!artifact.embedding) {
+        artifact.embedding = await embedder.embed(artifactText);
+    }
+    const semanticScore = embedder.cosineSimilarity(goalVector, artifact.embedding);
+    const lexicalScore = computeSkillRelevance(goal, artifact);
+    
+    return Math.max(semanticScore, lexicalScore);
 }
 
 export type { SkillCheckpoint, SkillRiskClass, SkillScope, RuntimeBinding as SkillBinding, RuntimeBindingType as SkillBindingType };
@@ -79,6 +92,7 @@ export interface SkillArtifact {
         verificationPasses: number;
     };
     deploymentPoints: SkillDeploymentRecord[];
+    embedding?: number[];
 }
 
 export interface SkillRuntimeMetrics {
@@ -101,12 +115,20 @@ export class SkillRuntime {
     private workspaceRoot: string;
     private artifacts = new Map<string, SkillArtifact>();
     private bootstrapped = false;
+    private embedder?: Embedder;
 
     constructor(private registry?: SkillCardRegistry, rootDir?: string, workspaceRoot?: string) {
         this.rootDir = rootDir ?? path.join(os.tmpdir(), 'nexus-prime-runtime-skills');
         this.workspaceRoot = workspaceRoot ?? process.cwd();
         fs.mkdirSync(this.rootDir, { recursive: true });
         this.ensureBootstrapped();
+    }
+
+    private getEmbedder(): Embedder {
+        if (!this.embedder) {
+            this.embedder = createEmbedder();
+        }
+        return this.embedder;
     }
 
     getArtifact(skillId: string): SkillArtifact | undefined {
@@ -120,6 +142,40 @@ export class SkillRuntime {
         return this.listArtifacts().find((artifact) =>
             artifact.name.toLowerCase() === normalized || artifact.skillId.toLowerCase() === normalized
         );
+    }
+
+    importPeerSkill(sourcePeerId: string, payload: unknown): SkillArtifact {
+        this.ensureBootstrapped();
+        
+        const PeerSkillSchema = z.object({
+            name: z.string().min(1).max(100),
+            domain: z.string().optional(),
+            instructions: z.string().min(10).max(10000),
+            riskClass: z.enum(['read', 'mutate', 'orchestrate']).default('read')
+        });
+
+        const parsed = PeerSkillSchema.parse(payload);
+        
+        const artifact: SkillArtifact = {
+            skillId: `skill_peer_${randomUUID().slice(0, 8)}`,
+            version: 1,
+            name: parsed.name,
+            domain: parsed.domain,
+            instructions: parsed.instructions,
+            toolBindings: [], // Strictly text-bounded
+            riskClass: parsed.riskClass as SkillRiskClass,
+            scope: 'session',
+            provenance: `peer:${sourcePeerId}`,
+            validationStatus: 'pending',
+            rolloutStatus: 'staged',
+            effectiveness: {
+                successes: 0, failures: 0, tokenDelta: 0, retriesAvoided: 0, verificationPasses: 0,
+            },
+            deploymentPoints: [],
+        };
+
+        this.stage(artifact);
+        return artifact;
     }
 
     listArtifacts(): SkillArtifact[] {
@@ -166,7 +222,7 @@ export class SkillRuntime {
         return artifact;
     }
 
-    resolveSkillSelectors(names: string[], goal: string): SkillArtifact[] {
+    async resolveSkillSelectors(names: string[], goal: string): Promise<SkillArtifact[]> {
         this.ensureBootstrapped();
         const selectors = new Set(names.map((name) => name.toLowerCase()));
         const domains = detectDomains(goal, names);
@@ -178,12 +234,16 @@ export class SkillRuntime {
             (artifact.domain ? domains.includes(artifact.domain) : false)
         );
 
-        const fuzzyCandidates = this.listArtifacts()
-            .filter((artifact) => !exactMatches.includes(artifact))
-            .map((artifact) => ({
-                artifact,
-                relevance: computeSkillRelevance(goal, artifact),
-            }))
+        const candidates = this.listArtifacts().filter((artifact) => !exactMatches.includes(artifact));
+        const embedder = this.getEmbedder();
+        const goalVector = await embedder.embed(goal);
+
+        const scoredCandidates = await Promise.all(candidates.map(async (artifact) => ({
+            artifact,
+            relevance: await computeSemanticRelevance(goal, goalVector, artifact, embedder),
+        })));
+
+        const fuzzyCandidates = scoredCandidates
             .filter((candidate) => candidate.relevance >= RELEVANCE_THRESHOLD)
             .sort((a, b) => b.relevance - a.relevance)
             .slice(0, 5)
@@ -447,11 +507,13 @@ export class SkillRuntime {
     }
 
     private renderMarkdown(artifact: SkillArtifact): string {
+        const isQuarantined = artifact.provenance.startsWith('peer:');
         const lines = [
             '---',
             `name: ${artifact.name}`,
             `description: Runtime-generated skill (${artifact.riskClass})`,
             `tags: [runtime, ${artifact.scope}, ${artifact.riskClass}${artifact.domain ? `, ${artifact.domain}` : ''}]`,
+            ...(isQuarantined ? ['quarantine-tag: true'] : []),
             '---',
             '',
             `# ${artifact.name}`,

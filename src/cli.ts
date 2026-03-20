@@ -18,7 +18,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { PODNetwork } from './engines/pod-network.js';
 import { InstructionGateway, type ClientBootstrapArtifact } from './engines/instruction-gateway.js';
-import { ensureBootstrap, collectBootstrapManifest } from './engines/client-bootstrap.js';
+import { ensureBootstrap, collectBootstrapManifest, validateTargetPath } from './engines/client-bootstrap.js';
 
 
 const tokenEngine = new TokenSupremacyEngine();
@@ -32,7 +32,7 @@ const __dirname = dirname(__filename);
 const PACKAGE_ROOT = join(__dirname, '..');
 const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
 
-type SetupClientId = 'cursor' | 'claude' | 'opencode' | 'windsurf' | 'antigravity' | 'codex' | 'aider' | 'continue' | 'cline';
+type SetupClientId = 'cursor' | 'claude' | 'claude-code' | 'claude-desktop' | 'opencode' | 'windsurf' | 'antigravity' | 'openclaw' | 'codex' | 'aider' | 'continue' | 'cline';
 
 type SetupInstructionMode = 'replace' | 'codex-managed-agents';
 
@@ -93,13 +93,16 @@ function writeStandardMcpConfig(targetPath: string): void {
 function writeOpencodeConfig(targetPath: string): void {
   const existing = readJson(targetPath);
   const server = {
-    id: 'nexus-prime',
-    ...buildStandardMcpServerConfig()
+    type: 'local',
+    command: 'npx',
+    args: ['-y', 'nexus-prime', 'mcp'],
+    environment: {
+      NEXUS_MCP_TOOL_PROFILE: 'autonomous'
+    }
   };
   existing.mcp = existing.mcp ?? {};
-  existing.mcp.servers = Array.isArray(existing.mcp.servers) ? existing.mcp.servers : [];
-  existing.mcp.servers = existing.mcp.servers.filter((entry: any) => entry?.id !== 'nexus-prime');
-  existing.mcp.servers.push(server);
+  existing.mcp['nexus-prime'] = server;
+  delete existing.mcp.servers;
   ensureParentDir(targetPath);
   writeFileSync(targetPath, JSON.stringify(existing, null, 2));
 }
@@ -221,11 +224,19 @@ function getSetupDefinition(clientId: SetupClientId): SetupDefinition {
       instructionFiles,
     };
   }
-  if (clientId === 'claude') {
+  if (clientId === 'claude' || clientId === 'claude-code') {
     return {
       id: clientId,
       label: 'Claude Code',
-      configPath: join(homedir(), '.claude', 'mcp.json'),
+      configPath: join(process.cwd(), '.mcp.json'),
+      instructionFiles,
+    };
+  }
+  if (clientId === 'claude-desktop') {
+    return {
+      id: clientId,
+      label: 'Claude Desktop',
+      configPath: join(homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
       instructionFiles,
     };
   }
@@ -233,7 +244,7 @@ function getSetupDefinition(clientId: SetupClientId): SetupDefinition {
     return {
       id: clientId,
       label: 'Opencode',
-      configPath: join(homedir(), '.opencode', 'config.json'),
+      configPath: join(homedir(), '.config', 'opencode', 'opencode.json'),
       instructionFiles,
     };
   }
@@ -266,6 +277,14 @@ function getSetupDefinition(clientId: SetupClientId): SetupDefinition {
       id: clientId,
       label: 'Continue.dev',
       configPath: join(homedir(), '.continue', 'config.json'),
+      instructionFiles,
+    };
+  }
+  if (clientId === 'openclaw') {
+    return {
+      id: clientId,
+      label: 'OpenClaw',
+      configPath: join(homedir(), '.openclaw', 'openclaw.json'),
       instructionFiles,
     };
   }
@@ -323,13 +342,13 @@ function hasExpectedConfig(definition: SetupDefinition): boolean {
   try {
     const parsed = JSON.parse(readFileSync(definition.configPath, 'utf8'));
     if (definition.id === 'opencode') {
-      const servers = parsed?.mcp?.servers;
-      return Array.isArray(servers) && servers.some((entry: any) =>
-        entry?.id === 'nexus-prime'
-        && entry?.command === 'npx'
-        && Array.isArray(entry?.args)
-        && entry.args.includes('nexus-prime')
-        && entry?.env?.NEXUS_MCP_TOOL_PROFILE === 'autonomous');
+      const server = parsed?.mcp?.['nexus-prime'];
+      return Boolean(server
+        && server.type === 'local'
+        && server.command === 'npx'
+        && Array.isArray(server.args)
+        && server.args.includes('nexus-prime')
+        && server?.environment?.NEXUS_MCP_TOOL_PROFILE === 'autonomous');
     }
     const server = parsed?.mcpServers?.['nexus-prime'];
     return Boolean(server
@@ -922,17 +941,34 @@ program
       })
   )
   .addCommand(
-    new Command('claude')
+    new Command('claude-code')
+      .alias('claude')
       .description('Integrate with Claude Code')
       .option('--dry-run', 'Preview changes')
       .action((options) => {
-        const definition = getSetupDefinition('claude');
+        const definition = getSetupDefinition('claude-code');
         if (options.dryRun) {
           printSetupPreview(definition);
           return;
         }
         installSetup(definition);
         console.log(`✅ Nexus Prime installed for Claude Code`);
+        console.log(`   MCP: ${definition.configPath}`);
+        definition.instructionFiles.forEach((file) => console.log(`   Instruction: ${file.path}`));
+      })
+  )
+  .addCommand(
+    new Command('claude-desktop')
+      .description('Integrate with Claude Desktop')
+      .option('--dry-run', 'Preview changes')
+      .action((options) => {
+        const definition = getSetupDefinition('claude-desktop');
+        if (options.dryRun) {
+          printSetupPreview(definition);
+          return;
+        }
+        installSetup(definition);
+        console.log(`✅ Nexus Prime installed for Claude Desktop`);
         console.log(`   MCP: ${definition.configPath}`);
         definition.instructionFiles.forEach((file) => console.log(`   Instruction: ${file.path}`));
       })
@@ -971,8 +1007,7 @@ program
   )
   .addCommand(
     new Command('antigravity')
-      .alias('openclaw')
-      .description('Integrate with Antigravity / OpenClaw')
+      .description('Integrate with Antigravity')
       .option('--dry-run', 'Preview changes')
       .action((options) => {
         const definition = getSetupDefinition('antigravity');
@@ -981,9 +1016,25 @@ program
           return;
         }
         installSetup(definition);
-        console.log(`✅ Nexus Prime installed for Antigravity / OpenClaw`);
+        console.log(`✅ Nexus Prime installed for Antigravity`);
         console.log(`   MCP: ${definition.configPath}`);
         definition.instructionFiles.forEach((file) => console.log(`   Skill: ${file.path}`));
+      })
+  )
+  .addCommand(
+    new Command('openclaw')
+      .description('Integrate with OpenClaw')
+      .option('--dry-run', 'Preview changes')
+      .action((options) => {
+        const definition = getSetupDefinition('openclaw');
+        if (options.dryRun) {
+          printSetupPreview(definition);
+          return;
+        }
+        installSetup(definition);
+        console.log(`✅ Nexus Prime installed for OpenClaw`);
+        console.log(`   MCP: ${definition.configPath}`);
+        definition.instructionFiles.forEach((file) => console.log(`   Instruction: ${file.path}`));
       })
   )
   .addCommand(
@@ -991,7 +1042,7 @@ program
       .description('Install Nexus Prime for all supported clients in the current workspace')
       .option('--dry-run', 'Preview changes')
       .action((options) => {
-        const definitions = (['codex', 'cursor', 'claude', 'opencode', 'windsurf', 'antigravity', 'aider', 'continue', 'cline'] as SetupClientId[])
+        const definitions = (['codex', 'cursor', 'claude-code', 'claude-desktop', 'opencode', 'windsurf', 'antigravity', 'openclaw', 'aider', 'continue', 'cline'] as SetupClientId[])
           .map((clientId) => getSetupDefinition(clientId));
         if (options.dryRun) {
           definitions.forEach((definition) => printSetupPreview(definition));
@@ -1011,12 +1062,49 @@ program
       .description('Check integration status')
       .action(() => {
         console.log('📋 Integration Status:');
-        (['codex', 'cursor', 'claude', 'opencode', 'windsurf', 'antigravity', 'aider', 'continue', 'cline'] as SetupClientId[]).forEach((clientId) => {
+        (['codex', 'cursor', 'claude-code', 'claude-desktop', 'opencode', 'windsurf', 'antigravity', 'openclaw', 'aider', 'continue', 'cline'] as SetupClientId[]).forEach((clientId) => {
           const definition = getSetupDefinition(clientId);
           const status = statusForDefinition(definition);
           const icon = status.state === 'installed' ? '✅' : status.state === 'drifted' ? '🟡' : '❌';
           console.log(`  - ${definition.label}: ${icon} ${status.summary}`);
         });
+      })
+  )
+  .addCommand(
+    new Command('diagnose')
+      .description('Run a full diagnostic check across all clients without writing anything')
+      .action(() => {
+        console.log('🔍 Nexus Prime Setup Diagnostics\n');
+        const manifest = collectBootstrapManifest({ packageRoot: PACKAGE_ROOT, workspaceRoot: process.cwd() });
+
+        const pad = (s: string, n: number) => s.padEnd(n);
+        console.log(`${pad('Client', 16)} ${pad('State', 12)} ${pad('Home', 8)} ${pad('Workspace', 12)} ${pad('Config Path', 10)}`);
+        console.log('─'.repeat(80));
+
+        for (const client of manifest.clients) {
+          const stateIcon = client.state === 'installed' ? '✅' : client.state === 'drifted' ? '🟡' : '❌';
+          const homeIcon = client.homeReady ? '✅' : '❌';
+          const wsIcon = client.workspaceReady ? '✅' : '❌';
+          console.log(`${pad(client.label, 16)} ${stateIcon} ${pad(client.state, 9)} ${homeIcon} ${pad('', 5)} ${wsIcon} ${pad('', 9)} ${client.configPath || '(none)'}`);
+        }
+
+        console.log('\n📂 Path Validation:');
+        for (const client of manifest.clients) {
+          if (client.configPath) {
+            const check = validateTargetPath(client.configPath);
+            const icon = check.valid ? '✅' : '❌';
+            console.log(`  ${icon} ${client.label} config: ${client.configPath}${check.valid ? '' : ` — ${check.reason}`}`);
+          }
+          for (const instrPath of client.instructionFiles) {
+            const check = validateTargetPath(instrPath);
+            const icon = check.valid ? '✅' : '❌';
+            console.log(`  ${icon} ${client.label} instruction: ${instrPath}${check.valid ? '' : ` — ${check.reason}`}`);
+          }
+        }
+
+        console.log(`\n📊 Summary: ${manifest.clients.filter(c => c.state === 'installed').length}/${manifest.clients.length} clients fully installed`);
+        console.log(`   Workspace: ${manifest.workspaceRoot}`);
+        console.log(`   Generated: ${new Date(manifest.generatedAt).toISOString()}`);
       })
   );
 

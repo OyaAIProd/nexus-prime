@@ -112,6 +112,16 @@ const BUILTIN_HOOKS: HookSeed[] = [
         workflowSelectors: ['security-approval-loop'],
         domain: 'security',
     },
+    {
+        name: 'before-compaction-flush',
+        description: 'Flush memory prefrontal to SQLite before context compaction.',
+        trigger: 'before-compaction',
+        riskClass: 'read',
+        conditions: ['context budget nearing limit'],
+        guardrails: ['Always preserve prefrontal memories before compaction.'],
+        workflowSelectors: [],
+        domain: 'orchestration',
+    },
 ];
 
 export class HookRuntime {
@@ -334,6 +344,7 @@ function normalizeTrigger(value: unknown): HookTrigger {
         'promotion.approved',
         'memory.stored',
         'shield.blocked',
+        'before-compaction',
     ];
     return valid.includes(candidate) ? candidate : 'run.created';
 }

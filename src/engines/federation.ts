@@ -6,6 +6,7 @@ import { nexusEventBus } from './event-bus.js';
 import { MemoryEngine } from './memory.js';
 import { nexusNetRelay, type NexusNetRelayStatus } from './nexusnet-relay.js';
 import { resolveNexusStateDir } from './runtime-registry.js';
+import { detectAllPeers } from './peer-connectors.js';
 
 export interface TraceEntry {
     taskId: string;
@@ -65,6 +66,19 @@ export class FederationEngine {
     constructor(memory?: MemoryEngine) {
         this.memory = memory || new MemoryEngine();
         this.state = this.loadState();
+        this.discover().catch(() => {});
+    }
+
+    async discover(): Promise<void> {
+        const peers = await detectAllPeers();
+        for (const peer of peers) {
+            this.heartbeat(peer.id, {
+                displayName: `${peer.id.charAt(0).toUpperCase() + peer.id.slice(1)} (Auto-detected)`,
+                source: 'local',
+                capabilities: peer.capabilities,
+                trust: 'high'
+            });
+        }
     }
 
     heartbeat(peerId: string, input: {

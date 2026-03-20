@@ -2,7 +2,41 @@
 
 All notable changes to Nexus Prime are documented here.
 
-Release Index: [v3.15.0](#v3150--2026-03-16) · [v3.14.0](#v3140--2026-03-16) · [v3.13.0](#v3130--2026-03-15) · [v3.12.1 release note](./releases/v3.12.1.md)
+Release Index: [v3.16.0](#v3160--2026-03-20) · [v3.15.0](#v3150--2026-03-16) · [v3.14.0](#v3140--2026-03-16) · [v3.13.0](#v3130--2026-03-15) · [v3.12.1 release note](./releases/v3.12.1.md)
+
+<details open>
+<summary><b>v3.16.0</b> · 2026-03-20 · Compaction sentinel, tiered context, token analytics, peer federation, installation hardening</summary>
+
+### Added
+- **Compaction Sentinel**: Pre-compaction memory flush that saves working memory to durable storage before context window compaction, preventing data loss during long sessions.
+- **Tiered Context Loading**: Three-tier context system (L0 summary ~5 tokens/file, L1 outline ~50, L2 full) that progressively loads file content based on relevance scoring instead of reading everything at full depth.
+- **Token Analytics Engine**: Lifetime token optimization reporting with per-session breakdowns, compression ratios, and USD savings — backed by SQLite ledger for persistence across restarts.
+- **Self-Learning Skill Loop**: Automatic skill derivation from execution outcomes — records what worked, promotes repeating patterns into reusable skills without manual curation.
+- **Repository Tree Visualization**: Cached repo tree generator for dashboard and orchestrator context, providing structural awareness without repeated filesystem walks.
+- **Peer Connectors**: Auto-detection and sync with OpenClaw, Hermes, and PicoClaw peers for cross-agent memory and skill sharing.
+- **Persistent Work Ledger**: Git-backed execution state checkpointing for crash recovery — every significant state change is committed, enabling robust recovery from unexpected failures.
+- **Background Memory Maintenance**: Timer-based background worker for memory housekeeping (entropy-based expiration, deduplication) running on a 5-minute cycle.
+- **Context Compressor**: Attention-weighted background context compaction that retains high-signal lines (code structures, keywords) while stripping boilerplate and low-information content.
+- **Multi-Intent Classification**: Orchestrator now scores all intent categories and surfaces a secondary intent when confidence is within 80% of the primary, enabling richer execution plans.
+- **First-Use Project Scan**: Bootstrap automatically generates a `#repo-profile` memory on first run with detected languages, frameworks, and file counts for immediate contextual awareness.
+- **Installation Diagnostics**: `nexus-prime setup diagnose` command for dry-run validation of all client paths without writing anything.
+- **XDG-Aware Config Resolution**: Client bootstrap now respects `$XDG_CONFIG_HOME` for config directory resolution on Linux.
+- **Install Path Validation**: Pre-write validation of target paths with parent directory existence and writability checks, skipping gracefully on permission errors.
+- **Install Event Logging**: All bootstrap events persisted to `~/.nexus-prime/install.log` for post-install troubleshooting.
+
+### Fixed
+- **Command injection in work ledger**: Sanitized shell metacharacters (quotes, dollar signs, backticks) in git commit messages to prevent injection through crafted state messages.
+- **String escape in orchestrator**: Fixed `].join('\\n')` producing literal backslash-n instead of newlines in orchestration plan generation.
+- **Token analytics import**: Fixed `better-sqlite3` import to use default import with correct `Database.Database` type reference.
+- **Context compressor typo**: Fixed "keyword dentistry" → "keyword density" in JSDoc documentation.
+- **Dashboard graph overlay**: Graph empty-state note no longer blocks pointer events on underlying interactive elements.
+
+### Changed
+- **Skill matching**: Upgraded from Jaccard similarity to semantic cosine similarity using the configured embedder for more accurate skill auto-selection.
+- **Bootstrap enforcement**: Soft enforcement model — warns when bootstrap is skipped rather than blocking, reducing friction for agents that don't follow the prescribed sequence.
+- **Client target count**: Expanded from 9 to 12 supported clients with dedicated Claude Code CLI, Claude Desktop, and OpenClaw installation paths.
+
+</details>
 
 <details open>
 <summary><b>v3.15.0</b> · 2026-03-16 · Community health: Code of Conduct and issue templates</summary>

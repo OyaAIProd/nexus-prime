@@ -11,6 +11,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { ContextAssembler, type AssemblyResult, type BudgetConfig } from './context-assembler.js';
+import { TieredContextEngine, type ContextTier, type TieredContextResult } from './tiered-context.js';
 import { ContinuousAttentionStream } from './index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -28,6 +29,7 @@ export type ReadAction = 'skip' | 'outline' | 'partial' | 'full';
 export interface FileReadPlan {
     file: FileRef;
     action: ReadAction;
+    tier: ContextTier;
     startLine?: number;
     endLine?: number;
     reason: string;
@@ -130,6 +132,7 @@ export class TokenSupremacyEngine {
                 plan = {
                     file,
                     action: 'skip',
+                    tier: 'L0',
                     reason: `low relevance (${relevance.toFixed(2)}) to task`,
                     estimatedTokens: 0
                 };
@@ -138,6 +141,7 @@ export class TokenSupremacyEngine {
                 plan = {
                     file,
                     action: 'full',
+                    tier: 'L2',
                     reason: 'small file, cheap to read',
                     estimatedTokens: estFull
                 };
@@ -146,6 +150,7 @@ export class TokenSupremacyEngine {
                 plan = {
                     file,
                     action: 'outline',
+                    tier: 'L1',
                     reason: relevance < outlineThreshold
                         ? `medium relevance (${relevance.toFixed(2)}), read outline`
                         : `large file (${Math.round(file.sizeBytes / 1024)}KB), read outline`,
@@ -157,6 +162,7 @@ export class TokenSupremacyEngine {
                 plan = {
                     file,
                     action: 'partial',
+                    tier: 'L2',
                     startLine: start,
                     endLine: end,
                     reason: `relevant but large — reading lines ${start}-${end}`,
@@ -167,6 +173,7 @@ export class TokenSupremacyEngine {
                 plan = {
                     file,
                     action: 'full',
+                    tier: 'L2',
                     reason: `high relevance (${relevance.toFixed(2)})`,
                     estimatedTokens: estFull
                 };
@@ -561,6 +568,7 @@ export class TokenSupremacyEngine {
                 plans.push({
                     file,
                     action: 'skip',
+                    tier: 'L0',
                     reason: 'below quality threshold',
                     estimatedTokens: 0,
                 });
@@ -574,6 +582,7 @@ export class TokenSupremacyEngine {
                     plans.push({
                         file,
                         action: 'full',
+                        tier: 'L2',
                         reason: `${(coverage * 100).toFixed(0)}% coverage — read fully (q=${chunks.reduce((s, c) => s + c.quality, 0).toFixed(2)})`,
                         estimatedTokens: estFull,
                     });
@@ -585,6 +594,7 @@ export class TokenSupremacyEngine {
                     plans.push({
                         file,
                         action: 'partial',
+                        tier: this.contextAssembler.tierForQuality(best.quality),
                         startLine: best.startLine,
                         endLine: best.endLine,
                         reason: `${chunks.length} chunk(s) selected (q=${chunks.reduce((s, c) => s + c.quality, 0).toFixed(2)})`,

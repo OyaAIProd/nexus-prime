@@ -899,6 +899,8 @@
             height: 100%;
             display: block;
             overflow: hidden;
+            position: absolute;
+            inset: 0;
             z-index: 1;
         }
 
@@ -958,6 +960,9 @@
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            pointer-events: none;
+            position: relative;
+            z-index: 0;
         }
 
         .graph-footer {
@@ -1143,10 +1148,102 @@
             cursor: pointer;
             color: var(--muted);
             font-size: 0.62rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
         }
 
+        /* MCP Hologram UI */
+        .mcp-hologram {
+            position: relative;
+            background: rgba(6, 8, 13, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--cyan);
+            border-radius: 6px;
+            padding: 0.6rem;
+            overflow: hidden;
+            font-family: var(--mono);
+            color: var(--cyan);
+            box-shadow: inset 0 0 10px rgba(0, 255, 255, 0.05);
+            transition: all 0.2s ease;
+            cursor: pointer;
+            margin-bottom: 0.5rem;
+        }
+
+        .mcp-hologram.info {
+            border-color: var(--cyan);
+            color: var(--cyan);
+        }
+
+        .mcp-hologram.good {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .mcp-hologram.bad {
+            border-color: var(--red);
+            color: var(--red);
+        }
+
+        .mcp-hologram:hover, .mcp-hologram.active {
+            box-shadow: inset 0 0 15px rgba(0, 255, 255, 0.15);
+            background: rgba(16, 22, 34, 0.95);
+        }
+
+        .mcp-scanner-line {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: currentColor;
+            box-shadow: 0 0 5px currentColor;
+            opacity: 0.5;
+            animation: scan 2s linear infinite;
+            z-index: 10;
+        }
+
+        .mcp-hologram.good .mcp-scanner-line, .mcp-hologram.bad .mcp-scanner-line {
+            display: none;
+        }
+
+        @keyframes scan {
+            0% { top: 0; opacity: 0; }
+            10% { opacity: 0.8; }
+            90% { opacity: 0.8; }
+            100% { top: 100%; opacity: 0; }
+        }
+
+        .mcp-glitch-text {
+            animation: glitch 3s infinite;
+        }
+
+        @keyframes glitch {
+            0% { opacity: 1; }
+            95% { opacity: 1; }
+            96% { opacity: 0.8; transform: translate(1px, -1px); }
+            97% { opacity: 1; transform: translate(-1px, 1px); }
+            98% { opacity: 0.9; }
+            99% { opacity: 1; transform: translate(0); }
+            100% { opacity: 1; }
+        }
+
+        .mcp-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.3rem;
+            font-size: 0.65rem;
+        }
+
+        .mcp-body {
+            font-size: 0.6rem;
+            line-height: 1.4;
+            opacity: 0.85;
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+        }
         pre {
             overflow: auto;
             padding: 0.62rem;
@@ -1751,6 +1848,21 @@
                     </div>
                 </div>
             </section>
+            </section>
+
+            <section class="panel" data-widget-id="repo-map-panel" data-widget-title="Repo Map" data-widget-subtitle="Compact hierarchical view of the repository structure.">
+                <div class="panel-header">
+                    <h2>Repo Map</h2>
+                    <div class="panel-actions">
+                        <button type="button" class="widget-action" data-focus-toggle="repo-map-panel" aria-pressed="false">Expand</button>
+                    </div>
+                </div>
+                <div class="panel-body compact">
+                    <div id="repo-map-container" class="stack">
+                        <div class="empty">Loading repo map.</div>
+                    </div>
+                </div>
+            </section>
         </aside>
 
         <section class="panel graph-panel">
@@ -1834,6 +1946,7 @@
                                 <button data-event-filter="shield">Shield</button>
                                 <button data-event-filter="federation">Net</button>
                                 <button data-event-filter="clients">Clients</button>
+                                <button data-event-filter="mcp">MCP</button>
                             </div>
                         </div>
                     </div>
@@ -1988,6 +2101,7 @@
             worktreeHealth: null,
             memoryDetail: null,
             memoryNetwork: { nodes: [], links: [], focusId: null },
+            repoTree: null,
             pod: { messages: [], activeWorkers: [], tagClusters: [], confidenceBands: { high: 0, medium: 0, low: 0 } },
             clients: [],
             federation: { localNode: null, knownPeers: [], activePeerLinks: 0, relayLearnings: [], tracesPublished: 0 },
@@ -2038,6 +2152,7 @@
                 memoryAudit: createResourceState(),
                 memoryQuarantine: createResourceState(),
                 memoryShared: createResourceState(),
+                repoTree: createResourceState(),
                 worktreeHealth: createResourceState(),
                 pod: createResourceState(),
                 clients: createResourceState(),
@@ -2232,6 +2347,12 @@
                 dynamic: true,
                 assign(value) {
                     state.worktreeHealth = value || null;
+                },
+            },
+            repoTree: {
+                url: '/api/repo-tree',
+                assign(value) {
+                    state.repoTree = value || null;
                 },
             },
             pod: {
@@ -2619,6 +2740,7 @@
         }
 
         function normalizeLegacyCategory(type) {
+            if (String(type).startsWith('mcp.')) return 'mcp';
             if (String(type).startsWith('memory.')) return 'memory';
             if (String(type).startsWith('pod.')) return 'pod';
             if (String(type).startsWith('phantom.')) return 'runtime';
@@ -2630,6 +2752,8 @@
         }
 
         function normalizeLegacySeverity(type, payload) {
+            if (type === 'mcp.call.start') return 'info';
+            if (type === 'mcp.call.complete') return payload?.error ? 'bad' : 'good';
             if (type === 'guardrail.check') return payload?.passed ? 'good' : 'bad';
             if (['phantom.merge', 'phantom.merge.complete', 'workflow.run'].includes(type)) {
                 return payload?.status === 'failed' ? 'bad' : 'good';
@@ -2642,6 +2766,8 @@
 
         function legacyTitle(type) {
             return {
+                'mcp.call.start': 'MCP Execute',
+                'mcp.call.complete': 'MCP Result',
                 'system.boot': 'Runtime boot',
                 'memory.store': 'Memory stored',
                 'memory.recall': 'Memory recall',
@@ -2680,6 +2806,7 @@
         }
 
         function legacySource(type, payload) {
+            if (String(type).startsWith('mcp.')) return String(payload?.toolName || 'mcp-tool');
             if (String(type).startsWith('client.')) return String(payload?.displayName || payload?.clientId || 'client');
             if (type === 'pod.signal') return String(payload?.workerId || 'pod');
             if (String(type).startsWith('phantom.')) return String(payload?.workerId || payload?.winner || 'runtime');
@@ -2702,6 +2829,10 @@
                     return `${payload?.approach || 'worker'} started for ${payload?.goal || 'task'}`;
                 case 'phantom.worker.complete':
                     return `Confidence ${payload?.confidence ?? 0}`;
+                case 'mcp.call.start':
+                    return `Initializing...`;
+                case 'mcp.call.complete':
+                    return payload?.error ? `Fault: ${payload.error}` : `${payload?.durationMs}ms [${payload?.resultByteSize} B]`;
                 case 'phantom.merge':
                     return `${payload?.action || 'merge'} · ${payload?.winner || 'unknown winner'}`;
                 case 'dashboard.action':
@@ -3311,6 +3442,41 @@
                     void openEntity(card.getAttribute('data-kind'), card.getAttribute('data-id'));
                 });
             });
+
+            renderRepoMap();
+        }
+
+        function renderRepoMap() {
+            const container = $('repo-map-container');
+            if (resourceFailed('repoTree')) {
+                container.innerHTML = emptyState('Repo tree endpoint unavailable.');
+                return;
+            }
+            if (!state.repoTree) {
+                container.innerHTML = emptyState('No repo tree generated yet.');
+                return;
+            }
+
+            function renderNode(node, depth = 0) {
+                const isDir = node.type === 'directory';
+                const padding = Math.max(0, depth * 0.8) + 'rem';
+                let html = `<div class="repo-node" style="padding-left: ${padding}; display: flex; align-items: center; gap: 0.4rem; font-size: 0.72rem; padding-top: 0.2rem; padding-bottom: 0.2rem;">`;
+                if (isDir) {
+                    html += `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--blue)"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`;
+                } else {
+                    html += `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--muted)"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`;
+                }
+                html += `<span>${escapeHtml(node.name)}</span></div>`;
+                
+                if (node.children && node.children.length > 0) {
+                    node.children.forEach(child => {
+                        html += renderNode(child, depth + 1);
+                    });
+                }
+                return html;
+            }
+
+            container.innerHTML = `<div style="max-height: 24rem; overflow: auto; padding-right: 0.4rem;">${renderNode(state.repoTree)}</div>`;
         }
 
         async function readRagFileInputs(fileList, tags, collectionName) {
@@ -3595,6 +3761,7 @@
                 explorer.innerHTML = '';
                 $('graph-stats').innerHTML = '';
                 $('graph-note').textContent = config.subtitle;
+                empty.classList.add('hidden');
                 return;
             }
 
@@ -4732,6 +4899,40 @@
             });
         }
 
+        function renderMcpHologram(event) {
+            const isComplete = event.type === 'mcp.call.complete';
+            const isError = isComplete && event.payload?.error;
+            const stateClass = isError ? 'bad' : isComplete ? 'good' : 'info';
+            const statusLabel = isError ? 'FAULT' : isComplete ? 'SUCCESS' : 'INITIALIZING';
+            const isSelected = state.selected?.kind === 'event' && state.selected.id === event.id;
+            
+            let argsPreview = '';
+            if (!isComplete && event.payload?.args && Object.keys(event.payload.args).length > 0) {
+                argsPreview = `<div class="mcp-glitch-text" style="margin-top:0.4rem;">${escapeHtml(shortLabel(JSON.stringify(event.payload.args), 100))}</div>`;
+            }
+
+            return `
+                <article class="mcp-hologram ${stateClass} ${isSelected ? 'active' : ''}" data-event-id="${escapeHtml(event.id)}">
+                    <div class="mcp-scanner-line"></div>
+                    <div class="mcp-header">
+                        <span>[${escapeHtml(event.payload?.serverName || 'MCP')}] :: ${escapeHtml(event.payload?.toolName || 'UNKNOWN_TOOL')}</span>
+                        <span class="mcp-status-badge">${statusLabel}</span>
+                    </div>
+                    <div class="mcp-body">
+                        <div>
+                            <div><strong>${escapeHtml(event.title)}</strong></div>
+                            ${argsPreview}
+                            <div style="margin-top:0.2rem; opacity:0.7;">${escapeHtml(event.summary)}</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div>${formatDate(event.time)}</div>
+                            ${isComplete ? `<div>${event.payload?.durationMs || 0}ms</div><div>${event.payload?.resultByteSize || 0} B</div>` : `<div class="mcp-glitch-text">TX/RX...</div>`}
+                        </div>
+                    </div>
+                </article>
+            `;
+        }
+
         function renderEvents() {
             $('events-summary').textContent = resourceFailed('events') ? 'events unavailable' : `${state.events.length} signals`;
             document.querySelectorAll('#event-filters button').forEach((button) => {
@@ -4743,7 +4944,7 @@
                 .slice(0, 24);
 
             $('event-list').innerHTML = visible.length
-                ? visible.map((event) => `
+                ? visible.map((event) => event.category === 'mcp' ? renderMcpHologram(event) : `
                     <article class="event-card ${escapeHtml(event.severity)} ${state.selected?.kind === 'event' && state.selected.id === event.id ? 'active' : ''}" data-event-id="${escapeHtml(event.id)}">
                         <div class="event-head">
                             <div>
@@ -4769,6 +4970,7 @@
                         : state.eventFilter === 'runtime' ? 'No runtime events yet. Spawn phantom workers to see execution traces.'
                         : state.eventFilter === 'pod' ? 'No POD signals yet. POD events appear during multi-worker coordination.'
                         : state.eventFilter === 'clients' ? 'No client events yet (heartbeats are throttled).'
+                        : state.eventFilter === 'mcp' ? 'No MCP tool events yet. Live MCP executions will stream here holographically.'
                         : 'No events for this filter.'
                     );
 
@@ -4909,6 +5111,9 @@
                             ${chip(`patterns:${(data.fabric?.patternHits || []).length || 0}`)}
                         </div>
                         <div class="meta">${escapeHtml(data.fabric?.summary || 'No knowledge-fabric snapshot for this runtime yet.')}</div>
+                    </section>
+                    <section class="drawer-section" style="margin-top: 1rem;">
+                        <button class="primary-button" onclick="downloadTokenExport()" style="width: 100%;">Download JSON Export</button>
                     </section>
                 `;
             }
@@ -5713,6 +5918,17 @@
             if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
 
             _stream = new EventSource('/stream');
+            _stream.addEventListener('bootstrap', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data.version && data.version !== '3') {
+                        state.banner = { message: 'Dashboard outdated. Please reload.', type: 'warn' };
+                        render();
+                    }
+                } catch {
+                    // ignore
+                }
+            });
             _stream.onopen = () => {
                 state.streamConnected = true;
                 _reconnectDelay = 1000;
@@ -5756,6 +5972,31 @@
             };
         }
 
+        function downloadTokenExport() {
+            if (state.selected?.kind !== 'token-summary') return;
+            const payload = JSON.stringify(state.selected.data, null, 2);
+            const blob = new Blob([payload], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `nexus_tokens_${Date.now()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function initOnboarding() {
+            if (!localStorage.getItem('nexus_onboarded')) {
+                const overlay = document.getElementById('onboarding-overlay');
+                if (overlay) {
+                    overlay.style.display = 'flex';
+                    document.getElementById('close-onboarding').addEventListener('click', () => {
+                        localStorage.setItem('nexus_onboarded', 'true');
+                        overlay.style.display = 'none';
+                    });
+                }
+            }
+        }
+
         async function bootstrap() {
             attachStaticHandlers();
             await refreshAll();
@@ -5770,6 +6011,22 @@
         }
 
         bootstrap();
+        setTimeout(initOnboarding, 500); // Wait a moment for rendering
     </script>
+
+    <div id="onboarding-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
+        <div style="background: rgba(16, 18, 27, 0.95); padding: 2.5rem; border-radius: 24px; border: 1px solid var(--accent); max-width: 480px; text-align: center; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+            <div style="margin-bottom: 1.5rem; display: flex; justify-content: center;">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                    <polyline points="2 17 12 22 22 17"></polyline>
+                    <polyline points="2 12 12 17 22 12"></polyline>
+                </svg>
+            </div>
+            <h2 style="color: var(--text); margin: 0 0 1rem 0; font-size: 1.5rem;">Welcome to Nexus Prime</h2>
+            <p style="color: var(--muted); margin: 0 0 2rem 0; line-height: 1.6;">Your workspace is fully connected. Nexus Prime is analyzing your repo and building a semantic understanding of your code to deliver an instant 'Aha moment'.</p>
+            <button id="close-onboarding" class="widget-action" style="font-size: 0.9rem; padding: 0.6rem 1.5rem; cursor: pointer; border-color: var(--accent); color: var(--text); background: rgba(84, 255, 135, 0.1);">Enter Dashboard</button>
+        </div>
+    </div>
 </body>
 </html>

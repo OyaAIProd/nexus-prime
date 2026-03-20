@@ -3,6 +3,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { nexusEventBus } from './event-bus.js';
+import { ByzantineConsensus, type ConsensusResult } from './byzantine-consensus.js';
+
+export interface PodGroup {
+    id: string;
+    leadWorkerId: string;
+    workerIds: string[];
+    progress: number;
+}
 
 export interface PodMessage {
     id: string;
@@ -38,6 +46,8 @@ export interface PodDashboardSnapshot {
 export class PODNetwork {
     private messages: PodMessage[] = [];
     private subscribers: Map<string, Set<(msg: PodMessage) => void>> = new Map();
+    private podGroups: Map<string, PodGroup> = new Map();
+    public consensus: ByzantineConsensus = new ByzantineConsensus();
     private podPath: string;
     private pollHandle: ReturnType<typeof setInterval> | null = null;
     public static instance: PODNetwork;
@@ -216,9 +226,43 @@ export class PODNetwork {
 
     clear(): void {
         this.messages = [];
+        this.podGroups.clear();
         if (fs.existsSync(this.podPath)) {
             fs.unlinkSync(this.podPath);
         }
+    }
+
+    /** Create a new POD group containing 5-8 workers with a lead */
+    createPodGroup(leadWorkerId: string, workerIds: string[]): string {
+        const id = randomUUID();
+        this.podGroups.set(id, { id, leadWorkerId, workerIds, progress: 0 });
+        
+        // Register agents in consensus for conflict resolution
+        this.consensus.registerAgent(leadWorkerId);
+        for (const w of workerIds) {
+            this.consensus.registerAgent(w);
+        }
+        return id;
+    }
+
+    getPodGroup(podId: string): PodGroup | undefined {
+        return this.podGroups.get(podId);
+    }
+
+    updatePodProgress(podId: string, progress: number): void {
+        const pod = this.podGroups.get(podId);
+        if (pod) {
+            pod.progress = Math.max(0, Math.min(100, progress));
+        }
+    }
+
+    getPodProgress(podId: string): number {
+        return this.podGroups.get(podId)?.progress ?? 0;
+    }
+
+    /** Resolve inter-pod conflict using byzantine consensus */
+    resolveConflict(proposerId: string, layerIndex: number, delta: number[]): ConsensusResult {
+        return this.consensus.autoConsensus(proposerId, layerIndex, delta);
     }
 
     /** Stop the poll timer and release resources */

@@ -44,10 +44,12 @@ export interface SessionDNA {
     skillsActivated: string[];
     skillsLearned: string[];
 
-    // Handover
     openQuestions: string[];
     nextSteps: string[];
     handoverScore: number;      // 0.0-1.0
+
+    // Token Analytics
+    tokensOptimized?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,10 +71,10 @@ export class SessionDNAManager {
     private nextSteps: string[] = [];
     private entitiesMap: Map<string, number> = new Map(); // entity → mention count
 
-    // Counters (may be overridden by telemetry at flush time)
     private memoriesStored = 0;
     private memoriesRecalled = 0;
     private totalToolCalls = 0;
+    private tokensOptimized = 0;
 
     constructor(sessionId: string, sessionsDir?: string) {
         this.sessionId = sessionId;
@@ -146,15 +148,16 @@ export class SessionDNAManager {
 
     // ── Bulk update from telemetry ─────────────────────────────────────────
 
-    /** Sync counters from SessionTelemetry at flush time */
     syncFromTelemetry(telemetry: {
         callCount: number;
         memoriesStored: number;
         memoriesRecalled: number;
+        tokensOptimized?: number;
     }): void {
         this.totalToolCalls = Math.max(this.totalToolCalls, telemetry.callCount);
         this.memoriesStored = Math.max(this.memoriesStored, telemetry.memoriesStored);
         this.memoriesRecalled = Math.max(this.memoriesRecalled, telemetry.memoriesRecalled);
+        this.tokensOptimized = Math.max(this.tokensOptimized, telemetry.tokensOptimized ?? 0);
     }
 
     // ── Generation ─────────────────────────────────────────────────────────
@@ -195,6 +198,7 @@ export class SessionDNAManager {
             openQuestions: this.openQuestions,
             nextSteps: this.nextSteps,
             handoverScore,
+            tokensOptimized: this.tokensOptimized,
         };
     }
 
@@ -275,6 +279,9 @@ export class SessionDNAManager {
         }
 
         lines.push(`🧠 Memory: ${dna.memoriesStored} stored, ${dna.memoriesRecalled} recalled`);
+        if (dna.tokensOptimized && dna.tokensOptimized > 0) {
+            lines.push(`🪙 Tokens Optimally Saved: ${dna.tokensOptimized.toLocaleString()}`);
+        }
 
         if (dna.decisions.length > 0) {
             lines.push('');

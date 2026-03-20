@@ -10,6 +10,11 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { MemoryEngine } from './memory.js';
 import { nexusEventBus } from './event-bus.js';
+import { CompactionSentinel } from './compaction-sentinel.js';
+import { MemoryBackgroundWorker } from './memory-background.js';
+import { RepoTreeGenerator, type RepoTreeNode } from './repo-tree.js';
+import { createSkillRuntime, type SkillRuntime } from './skill-runtime.js';
+import { SkillLearnerEngine } from './skill-learner.js';
 import { nxl, type AgentArchetype } from './nxl-interpreter.js';
 import { TokenSupremacyEngine, type FileRef } from './token-supremacy.js';
 import { resolveNexusStateDir } from './runtime-registry.js';
@@ -64,6 +69,8 @@ export interface Task {
 
 export interface AutonomyIntent {
   taskType: 'bugfix' | 'feature' | 'release' | 'review' | 'research' | 'refactor' | 'ops' | 'pm' | 'test' | 'frontend' | 'backend' | 'ai' | 'marketing' | 'sales' | 'data';
+  secondaryType?: string;
+  intentScores?: Record<string, number>;
   riskClass: 'low' | 'medium' | 'high';
   complexity: number;
 }
@@ -145,6 +152,7 @@ export interface SessionBootstrapResult {
     selectedFiles: string[];
     modelTiers: string[];
   };
+  repoTree?: RepoTreeNode;
 }
 
 interface CatalogItem {
@@ -190,12 +198,20 @@ export class OrchestratorEngine {
   private knowledgeFabric: KnowledgeFabricEngine;
   private sessionsDir: string;
   private sessionState: SessionAutonomyState;
+  private flushInterval?: NodeJS.Timeout;
+  private compactionSentinel?: CompactionSentinel;
+  private memoryBackgroundWorker?: MemoryBackgroundWorker;
+  private repoTreeGenerator: RepoTreeGenerator;
+  private skillRuntime: SkillRuntime;
+  private skillLearner: SkillLearnerEngine;
 
   constructor(options: OrchestratorOptions = {}) {
     this.memory = options.memory || new MemoryEngine();
+    this.skillRuntime = createSkillRuntime(undefined, undefined, options.repoRoot ?? process.cwd());
     this.runtime = options.runtime || createSubAgentRuntime({
       repoRoot: options.repoRoot ?? process.cwd(),
       memory: this.memory,
+      skillRuntime: this.skillRuntime,
     });
     this.clientRegistry = options.clientRegistry;
     this.sessionDNA = options.sessionDNA;
@@ -210,6 +226,10 @@ export class OrchestratorEngine {
     this.sessionsDir = path.join(resolveNexusStateDir(), 'autonomy-sessions');
     fs.mkdirSync(this.sessionsDir, { recursive: true });
     this.sessionState = this.loadSessionState();
+    
+    this.memoryBackgroundWorker = new MemoryBackgroundWorker(this.memory);
+    this.repoTreeGenerator = new RepoTreeGenerator(this.repoRoot);
+    this.skillLearner = new SkillLearnerEngine(this.skillRuntime);
   }
 
   /**
@@ -342,6 +362,44 @@ export class OrchestratorEngine {
       plannerCalled: true,
       tokenOptimizationApplied: tokenOptimizationRequired,
     });
+    this.ensurePeriodicFlushAndSentinel();
+
+    // First-use project scan: auto-generate a repo-profile memory on first bootstrap
+    try {
+      const existingProfile = await this.memory.recall('#repo-profile', 2);
+      const hasProfile = existingProfile.some(m => m.includes('#repo-profile') || m.includes('Repo profile:'));
+      if (!hasProfile) {
+        const repoTree = new RepoTreeGenerator(this.repoRoot).generate();
+        const extCounts: Record<string, number> = {};
+        const countExtensions = (node: RepoTreeNode) => {
+          if (node.type === 'file') {
+            const ext = node.name.split('.').pop() || 'other';
+            extCounts[ext] = (extCounts[ext] || 0) + 1;
+          }
+          for (const child of node.children || []) countExtensions(child);
+        };
+        countExtensions(repoTree);
+        const topLangs = Object.entries(extCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([ext, count]) => `${ext}(${count})`).join(', ');
+
+        // Detect frameworks from config files
+        const frameworks: string[] = [];
+        const checkFile = (name: string) => {
+          try { return fs.existsSync(path.join(this.repoRoot, name)); } catch { return false; }
+        };
+        if (checkFile('package.json')) frameworks.push('Node.js');
+        if (checkFile('tsconfig.json')) frameworks.push('TypeScript');
+        if (checkFile('requirements.txt') || checkFile('pyproject.toml')) frameworks.push('Python');
+        if (checkFile('go.mod')) frameworks.push('Go');
+        if (checkFile('Cargo.toml')) frameworks.push('Rust');
+        if (checkFile('next.config.js') || checkFile('next.config.mjs')) frameworks.push('Next.js');
+        if (checkFile('.github/workflows')) frameworks.push('GitHub Actions');
+
+        const profileContent = `Repo profile: ${path.basename(this.repoRoot)} | Languages: ${topLangs} | Frameworks: ${frameworks.join(', ') || 'unknown'} | Files: ${Object.values(extCounts).reduce((a, b) => a + b, 0)}`;
+        this.memory.store(profileContent, 0.9, ['#repo-profile', '#system', '#first-use']);
+      }
+    } catch {
+      // Non-critical — don't block bootstrap if profiling fails
+    }
 
     return {
       client: primaryClient,
@@ -384,7 +442,27 @@ export class OrchestratorEngine {
         selectedFiles: knowledgeFabric.repo.selectedFiles,
         modelTiers: knowledgeFabric.modelTierTrace.map((trace) => `${trace.stage}:${trace.tier}`),
       },
+      repoTree: new RepoTreeGenerator(this.repoRoot).generate(),
     };
+  }
+
+  private ensurePeriodicFlushAndSentinel(): void {
+    if (!this.flushInterval) {
+      this.flushInterval = setInterval(() => {
+        nexusEventBus.emit('memory.flush-requested', { force: false, reason: 'orchestrator-periodic-flush', itemsFlushed: 0 });
+        this.memory.preCompactionFlush('orchestrator-periodic-flush');
+      }, 30000);
+      this.flushInterval.unref();
+
+      nexusEventBus.on('memory.pre-compaction', (payload) => {
+        this.memory.preCompactionFlush(payload.reason);
+      });
+    }
+
+    if (!this.compactionSentinel) {
+      this.compactionSentinel = new CompactionSentinel();
+      this.compactionSentinel.start();
+    }
   }
 
   public async orchestrate(task: string, options: Partial<ExecutionTask> = {}): Promise<ExecutionRun> {
@@ -697,6 +775,10 @@ export class OrchestratorEngine {
         verifiedWorkers: run.workerResults.filter((worker) => worker.verified).length,
       },
     });
+    
+    // Self-Learning Skill Loop: Analyze the run outcome and promote/derive skills
+    this.skillLearner.analyzeRun(ledger, instructionPacket);
+
     await this.runtime.storeMemoryAndDispatch(
       `Orchestrated run ${run.runId}: ${task} -> ${run.state} (${run.result})`,
       run.state === 'merged' ? 0.88 : 0.72,
@@ -1035,30 +1117,82 @@ export class OrchestratorEngine {
   }
 
   private classifyIntent(task: string): AutonomyIntent {
-    const lower = task.toLowerCase();
-    const taskType = lower.includes('release') || lower.includes('publish') || lower.includes('tag') ? 'release'
-      : lower.includes('review') || lower.includes('audit') ? 'review'
-      : lower.includes('research') || lower.includes('explore') || lower.includes('discover') || lower.includes('spike') || lower.includes('feasibility') || lower.includes('investigate') ? 'research'
-      : lower.includes('refactor') ? 'refactor'
-      : lower.includes('fix') || lower.includes('bug') || lower.includes('broken') ? 'bugfix'
-      : lower.includes('deploy') || lower.includes('monitor') || lower.includes('ops') || lower.includes('infra') || lower.includes('devops') || lower.includes('docker') || lower.includes('kubernetes') || lower.includes('ci/cd') ? 'ops'
-      : lower.includes('pm') || lower.includes('roadmap') || lower.includes('requirements') || lower.includes('scope') || lower.includes('prd') || lower.includes('user story') ? 'pm'
-      : lower.includes('qa') || lower.includes('test') || lower.includes('coverage') || lower.includes('jest') || lower.includes('cypress') || lower.includes('e2e') ? 'test'
-      : lower.includes('frontend') || lower.includes('ui') || lower.includes('react') || lower.includes('css') || lower.includes('styling') || lower.includes('components') || lower.includes('layout') || lower.includes('design') ? 'frontend'
-      : lower.includes('backend') || lower.includes('api') || lower.includes('server') || lower.includes('database') || lower.includes('sql') || lower.includes('endpoints') ? 'backend'
-      : lower.includes('ai') || lower.includes('ml') || lower.includes('llm') || lower.includes('rag') || lower.includes('embedding') || lower.includes('model') || lower.includes('prompt') ? 'ai'
-      : lower.includes('marketing') || lower.includes('seo') || lower.includes('copywriting') || lower.includes('campaign') || lower.includes('blog') || lower.includes('content') ? 'marketing'
-      : lower.includes('sales') || lower.includes('pitch') || lower.includes('lead') || lower.includes('prospecting') || lower.includes('outreach') ? 'sales'
-      : lower.includes('analysis') || lower.includes('data') || lower.includes('metrics') || lower.includes('dashboard') || lower.includes('query') ? 'data'
-      : 'feature';
+    const intents: Record<string, string[]> = {
+      release: ['release', 'publish', 'tag', 'version', 'deploy', 'bump'],
+      review: ['review', 'audit', 'check', 'linter', 'vet', 'inspect'],
+      research: ['research', 'explore', 'discover', 'spike', 'feasibility', 'investigate', 'analyze', 'evaluate'],
+      refactor: ['refactor', 'rewrite', 'restructure', 'clean', 'tech debt', 'extract', 'reorganize'],
+      bugfix: ['fix', 'bug', 'broken', 'issue', 'error', 'crash', 'exception', 'patch', 'resolve'],
+      ops: ['deploy', 'monitor', 'ops', 'infra', 'devops', 'docker', 'kubernetes', 'ci/cd', 'pipeline', 'workflow'],
+      pm: ['pm', 'roadmap', 'requirements', 'scope', 'prd', 'user story', 'plan', 'spec', 'ticket', 'epic'],
+      test: ['test', 'coverage', 'jest', 'cypress', 'e2e', 'unit', 'integration', 'spec', 'qa', 'validate'],
+      frontend: ['frontend', 'ui', 'react', 'css', 'styling', 'components', 'layout', 'design', 'view', 'html', 'page'],
+      backend: ['backend', 'api', 'server', 'database', 'sql', 'endpoints', 'model', 'controller', 'service', 'db'],
+      ai: ['ai', 'ml', 'llm', 'rag', 'embedding', 'model', 'prompt', 'inference', 'agent', 'bot'],
+      marketing: ['marketing', 'seo', 'copywriting', 'campaign', 'blog', 'content', 'growth', 'social', 'email'],
+      sales: ['sales', 'pitch', 'lead', 'prospecting', 'outreach', 'crm', 'deal', 'quote'],
+      data: ['analysis', 'data', 'metrics', 'dashboard', 'query', 'analytics', 'report', 'etl', 'bi'],
+    };
+
+    const taskTokens = new Set(
+        task.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2)
+    );
+
+    const intentScores: Record<string, number> = {};
+
+    for (const [type, keywords] of Object.entries(intents)) {
+        let score = 0;
+        for (const kw of keywords) {
+            if (taskTokens.has(kw)) {
+                score += 1.0;
+            } else if (task.toLowerCase().includes(kw)) {
+                score += 0.5;
+            }
+        }
+        // TF-IDF style fallback: Normalize by log(keywords.length + 1)
+        intentScores[type] = score > 0 ? score / Math.log(keywords.length + 1) : 0;
+    }
+
+    // Sort by score descending to find primary and potential secondary intent
+    const sorted = Object.entries(intentScores).sort((a, b) => b[1] - a[1]);
+    const bestIntent = sorted[0]?.[1] > 0 ? sorted[0][0] : 'feature';
+    const bestScore = sorted[0]?.[1] ?? 0;
+    // Secondary intent: if 2nd place score >= 80% of 1st place, it's a meaningful secondary signal
+    const secondaryType = sorted[1]?.[1] > 0 && bestScore > 0 && sorted[1][1] >= bestScore * 0.8
+        ? sorted[1][0]
+        : undefined;
+
+    const taskType = bestIntent as AutonomyIntent['taskType'];
       
-    const riskClass = lower.includes('delete') || lower.includes('migrate') || lower.includes('release') || lower.includes('security')
-      ? 'high'
-      : lower.includes('refactor') || lower.includes('planner') || lower.includes('orchestr')
-        ? 'medium'
-        : 'low';
+    const riskKeywords = {
+        high: ['delete', 'migrate', 'release', 'security', 'auth', 'drop', 'production', 'secret', 'destroy'],
+        medium: ['refactor', 'planner', 'orchestr', 'update', 'modify', 'change', 'replace'],
+    };
+    
+    let bestRisk: AutonomyIntent['riskClass'] = 'low';
+    let highestRiskScore = 0;
+    
+    for (const [risk, keywords] of Object.entries(riskKeywords)) {
+        let score = 0;
+        for (const kw of keywords) {
+            if (taskTokens.has(kw)) score += 1.0;
+            else if (task.toLowerCase().includes(kw)) score += 0.5;
+        }
+        if (score > highestRiskScore) {
+            highestRiskScore = score;
+            bestRisk = risk as AutonomyIntent['riskClass'];
+        }
+    }
+    
+    // Safety override: if high risk keywords present, force high risk
+    if (highestRiskScore > 0 && bestRisk !== 'high') {
+        const hasHighRisk = riskKeywords.high.some(kw => taskTokens.has(kw) || task.toLowerCase().includes(kw));
+        if (hasHighRisk) bestRisk = 'high';
+    }
+
+    const riskClass = bestRisk;
     const complexity = Math.max(1, Math.min(6, this.decomposeTask(task).length + (task.length > 120 ? 1 : 0) + (riskClass === 'high' ? 1 : 0)));
-    return { taskType, riskClass, complexity };
+    return { taskType, secondaryType, intentScores, riskClass, complexity };
   }
 
   private discoverCandidateFiles(task: string): string[] {
@@ -1794,9 +1928,9 @@ export class OrchestratorEngine {
         `- **Mathematical Routing**: Applied strict TF-IDF/Vector heuristics weighted for the \`${intent.taskType}\` domain.`,
         '',
         '## 2. Swarm Topology (Parallel Sub-Agents)',
-        `- **Total Agents Allocated**: ${workerPlan.workers.length}`,
-        `- **Execution Mode**: ${workerPlan.mode}`,
-        ...workerPlan.workers.map((w: any, idx: number) => `  - **Agent ${idx + 1}**: Uses isolated Git Worktree. Type: \`${w.type}\``),
+        `- **Total Agents Allocated**: ${workerPlan?.workers?.length || 0}`,
+        `- **Execution Mode**: ${workerPlan?.mode || 'default'}`,
+        ...(workerPlan?.workers || []).map((w: any, idx: number) => `  - **Agent ${idx + 1}**: Uses isolated Git Worktree. Type: \`${w.type}\``),
         '',
         '## 3. POD Network & Resources',
         `- **Selected Crew**: ${instructionPacket.selectedCrew?.name ?? 'Default Engineering Crew'}`,
@@ -1805,7 +1939,7 @@ export class OrchestratorEngine {
         '',
         '## 4. Verification Check',
         "- Swarm consensus is **enforced**. The MergeOracle requires the Verifier sub-agent to strictly approve the Coder's git worktree diff before applying patches to origin.",
-      ].join('\\n');
+      ].join('\n');
       
       fs.writeFileSync(planPath, content, 'utf-8');
       

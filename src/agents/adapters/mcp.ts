@@ -43,6 +43,7 @@ import {
     OrchestratorEngine
 } from '../../engines/index.js';
 import { FederationEngine, type TraceEntry } from '../../engines/federation.js';
+import { TokenAnalyticsEngine } from '../../engines/token-analytics.js';
 
 const tokenEngine = new TokenSupremacyEngine();
 const guardrailEngine = new GuardrailEngine();
@@ -93,6 +94,7 @@ const AUTONOMOUS_TOOL_ORDER = [
     'nexus_mindkit_check',
     'nexus_ghost_pass',
     'nexus_spawn_workers',
+    'nexus_token_report',
     'nexus_session_dna',
     'nexus_list_skills',
     'nexus_list_workflows',
@@ -162,6 +164,7 @@ class SessionTelemetry {
     private tokensOptimized = 0;
     private memoriesStored = 0;
     private memoriesRecalled = 0;
+    public bootstrapped = false;
 
     recordCall() { this.callCount++; }
     recordTokens(saved: number) { this.tokensOptimized += saved; }
@@ -654,6 +657,18 @@ export class MCPAdapter implements Adapter {
                     },
                 },
                 // ── Session DNA ──────────────────────────────────────────────────
+                {
+                    name: 'nexus_token_report',
+                    description: 'Get persistent token usage analytics, including lifetime tokens optimized, saved, forwarded, and cost savings across sessions.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            scope: { type: 'string', enum: ['lifetime', 'recent'], description: 'Whether to get lifetime aggregate or recent sessions summary (default: lifetime)' },
+                            limit: { type: 'number', description: 'Number of recent sessions to view if scope is recent (default: 10)' }
+                        },
+                        required: [],
+                    },
+                },
                 {
                     name: 'nexus_session_dna',
                     description: 'Generate or load a Session DNA snapshot. Captures files accessed/modified, decisions made, skills used, and recommended next steps for perfect session handover. Use "generate" to create a snapshot of the current session, "load" to retrieve the most recent previous session\'s DNA.',
@@ -1212,15 +1227,7 @@ export class MCPAdapter implements Adapter {
             ];
     }
 
-    private shouldAppendTelemetryFooter(toolName: string): boolean {
-        return !new Set([
-            'nexus_session_bootstrap',
-            'nexus_orchestrate',
-            'nexus_memory_stats',
-            'nexus_store_memory',
-            'nexus_ghost_pass',
-        ]).has(toolName);
-    }
+
 
     private setupToolHandlers() {
         this.server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -1245,14 +1252,58 @@ export class MCPAdapter implements Adapter {
 
             this.telemetry.recordCall();
             this.sessionDNA.recordToolCall();
-            const result = await this.handleToolCall(request);
+            
+            const toolName = String(request.params?.name ?? '');
+            if (toolName === 'nexus_session_bootstrap') {
+                this.telemetry.bootstrapped = true;
+            }
 
-            if (this.shouldAppendTelemetryFooter(String(request.params?.name ?? '')) && result.content && Array.isArray(result.content) && result.content.length > 0) {
-                const memStats = this.nexusRef.memory.getStats();
-                const footer = this.telemetry.format(memStats);
-                const last = result.content[result.content.length - 1];
-                if (last && typeof last === 'object' && 'text' in last) {
-                    (last as any).text += footer;
+            const callId = `mcp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+            const startTimeMs = Date.now();
+            
+            nexusEventBus.emit('mcp.call.start', {
+                callId,
+                serverName: 'nexus-prime',
+                toolName,
+                args: request.params?.arguments ?? {}
+            });
+
+            let result;
+            try {
+                result = await this.handleToolCall(request);
+                
+                const resultPayload = JSON.stringify(result);
+                nexusEventBus.emit('mcp.call.complete', {
+                    callId,
+                    serverName: 'nexus-prime',
+                    toolName,
+                    durationMs: Date.now() - startTimeMs,
+                    resultByteSize: Buffer.byteLength(resultPayload, 'utf8'),
+                    result
+                });
+            } catch (error: any) {
+                nexusEventBus.emit('mcp.call.complete', {
+                    callId,
+                    serverName: 'nexus-prime',
+                    toolName,
+                    durationMs: Date.now() - startTimeMs,
+                    resultByteSize: 0,
+                    error: error.message || String(error)
+                });
+                throw error;
+            }
+
+            if (
+                !this.telemetry.bootstrapped &&
+                toolName !== 'nexus_session_bootstrap' &&
+                toolName !== 'nexus_memory_stats' &&
+                !toolName.startsWith('nexus_list_') &&
+                toolName !== 'nexus_federation_status' &&
+                toolName !== 'nexus_status'
+            ) {
+                const warning = '\n⚠️ [NEXUS PRIME] Reminder: You bypassed `nexus_session_bootstrap`. It is strongly recommended to call it at the start of a task to restore memory and context.\n\n';
+                if (result.content && result.content.length > 0 && typeof result.content[0] === 'object' && 'text' in result.content[0]) {
+                    (result.content[0] as any).text = warning + (result.content[0] as any).text;
                 }
             }
 
@@ -1336,6 +1387,7 @@ export class MCPAdapter implements Adapter {
                                 `Execution mode: ${bootstrap.recommendedExecutionMode || 'autonomous'}`,
                                 `Token optimization: ${bootstrap.tokenOptimization?.required ? 'required before broad reading' : 'not required yet'}`,
                                 `Catalog health: ${bootstrap.catalogHealth?.overall || 'unknown'} · selected ${bootstrap.artifactSelectionAudit?.selected?.length || 0}`,
+                                `Shortlist: ${bootstrap.shortlist?.skills?.slice(0, 3).join(', ') || 'none'} (skills), ${bootstrap.shortlist?.specialists?.slice(0, 3).join(', ') || 'none'} (specialists)`,
                                 `Knowledge fabric: ${bootstrap.sourceMixRecommendation?.dominantSource || bootstrap.knowledgeFabric?.dominantSource || 'awaiting source mix'}`,
                                 `RAG: ${bootstrap.ragCandidateStatus?.attachedCollections || 0} attached · ${bootstrap.ragCandidateStatus?.retrievedChunks || 0} retrieved`,
                                 `Task graph: ${bootstrap.taskGraphPreview?.phases?.length || 0} phases · ${bootstrap.taskGraphPreview?.independentBranches || 0} branches`,
@@ -1537,15 +1589,7 @@ export class MCPAdapter implements Adapter {
                     content: [{
                         type: 'text',
                         text: [
-                            'Memory stored.',
-                            formatBullets([
-                                `ID: ${id}`,
-                                `Priority: ${priority.toFixed(2)}`,
-                                `Tags: ${tags.join(', ') || 'none'}`,
-                                `Content: ${content.slice(0, 140).replace(/\n+/g, ' ')}`,
-                                autoGistNote ? autoGistNote.replace(/^\s+/, '') : 'Relay publish: skipped',
-                            ]),
-                            notification,
+                            'Memory stored. ID: ' + id,
                             nudge,
                         ].filter(Boolean).join('\n\n'),
                     }],
@@ -1573,7 +1617,7 @@ export class MCPAdapter implements Adapter {
                         type: 'text',
                         text: (memories.length > 0
                             ? `🧠 ${memories.length} memories recalled for "${query}":\n\n${memories.map((m, i) => `${i + 1}. ${m}`).join('\n\n')}`
-                            : `No memories found for "${query}". Fresh session or new topic.`) + notification + nudge,
+                            : `No memories found for "${query}". Fresh session or new topic.`) + '\n\n' + nudge,
                     }],
                 };
             }
@@ -2146,6 +2190,34 @@ export class MCPAdapter implements Adapter {
                 };
             }
 
+            case 'nexus_token_report': {
+                const scope = String(request.params.arguments?.scope ?? 'lifetime');
+                const limit = Number(request.params.arguments?.limit ?? 10);
+                const engine = new TokenAnalyticsEngine(this.nexusRef.memory);
+                
+                if (scope === 'recent') {
+                    const history = engine.getSessionHistory(limit);
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: history.length > 0 
+                                ? `📊 Recent Sessions Token Analytics:\n\n${history.map(s => 
+                                    `Session ID: ${s.sessionId}\n- Events: ${s.events}\n- Tokens Optimally Saved: ${s.tokensSaved.toLocaleString()} (x${s.compressionRatio.toFixed(2)} compression)\n- USD Saved: $${s.usdValueSaved.toFixed(4)}`
+                                  ).join('\n\n')}`
+                                : 'No recent sessions found in token ledger.'
+                        }]
+                    };
+                } else {
+                    const report = engine.getLifetimeReport();
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: `📊 Lifetime Token Analytics:\n\n- Total Sessions: ${report.totalSessions}\n- Total MCP Events: ${report.totalEvents}\n- Tokens Optimally Saved: ${report.totalTokensSaved.toLocaleString()} (overall x${report.overallCompressionRatio.toFixed(2)} compression)\n- USD Saved: $${report.totalUsdSaved.toFixed(4)}`
+                        }]
+                    };
+                }
+            }
+
             case 'nexus_session_dna': {
                 const action = String(request.params.arguments?.action ?? 'load');
                 const sessionId = request.params.arguments?.sessionId
@@ -2158,6 +2230,7 @@ export class MCPAdapter implements Adapter {
                         callCount: (this.telemetry as any).callCount ?? 0,
                         memoriesStored: (this.telemetry as any).memoriesStored ?? 0,
                         memoriesRecalled: (this.telemetry as any).memoriesRecalled ?? 0,
+                        tokensOptimized: (this.telemetry as any).tokensOptimized ?? 0,
                     });
                     const dna = this.sessionDNA.flush();
                     const formatted = SessionDNAManager.format(dna);
@@ -3156,6 +3229,7 @@ export class MCPAdapter implements Adapter {
                 callCount: (this.telemetry as any).callCount ?? 0,
                 memoriesStored: (this.telemetry as any).memoriesStored ?? 0,
                 memoriesRecalled: (this.telemetry as any).memoriesRecalled ?? 0,
+                tokensOptimized: (this.telemetry as any).tokensOptimized ?? 0,
             });
             this.sessionDNA.flush();
             console.error('[MCP Adapter] Session DNA flushed');

@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
 import { InstructionGateway, type ClientBootstrapArtifact } from './instruction-gateway.js';
 import { resolveNexusStateDir } from './runtime-registry.js';
+import { MemoryEngine } from './memory.js';
 
-export type SetupClientId = 'cursor' | 'claude' | 'opencode' | 'windsurf' | 'antigravity' | 'codex' | 'aider' | 'continue' | 'cline';
+export type SetupClientId = 'cursor' | 'claude' | 'claude-code' | 'claude-desktop' | 'opencode' | 'windsurf' | 'antigravity' | 'openclaw' | 'codex' | 'aider' | 'continue' | 'cline';
 export type SetupInstructionMode = 'replace' | 'codex-managed-agents';
 export type SetupInstructionScope = 'home' | 'workspace';
 export type SetupState = 'missing' | 'drifted' | 'installed';
@@ -47,11 +48,12 @@ export interface EnsureBootstrapOptions {
     workspaceRoot?: string;
     phase?: 'install' | 'runtime';
     silent?: boolean;
+    dryRun?: boolean;
 }
 
 const CODEX_MANAGED_START = '<!-- nexus-prime:codex-bootstrap:start -->';
 const CODEX_MANAGED_END = '<!-- nexus-prime:codex-bootstrap:end -->';
-const SUPPORTED_CLIENTS: SetupClientId[] = ['codex', 'cursor', 'claude', 'opencode', 'windsurf', 'antigravity', 'aider', 'continue', 'cline'];
+const SUPPORTED_CLIENTS: SetupClientId[] = ['codex', 'cursor', 'claude', 'claude-code', 'claude-desktop', 'opencode', 'windsurf', 'antigravity', 'openclaw', 'aider', 'continue', 'cline'];
 const WORKSPACE_SEED_FILES: Array<{ relativePath: string; content: string }> = [
     {
         relativePath: '.agent/hooks/before-mutate-guard.md',
@@ -128,6 +130,42 @@ function ensureParentDir(targetPath: string): void {
     mkdirSync(dirname(targetPath), { recursive: true });
 }
 
+export function validateTargetPath(targetPath: string): { valid: boolean; reason?: string } {
+    const parent = dirname(targetPath);
+    try {
+        if (!existsSync(parent)) {
+            // Parent will be created by ensureParentDir — check grandparent is writable
+            const grandparent = dirname(parent);
+            if (existsSync(grandparent)) {
+                accessSync(grandparent, constants.W_OK);
+            }
+            return { valid: true };
+        }
+        // Check parent is actually a directory and writable
+        const stat = lstatSync(parent);
+        if (!stat.isDirectory()) {
+            return { valid: false, reason: `Parent path is not a directory: ${parent}` };
+        }
+        accessSync(parent, constants.W_OK);
+        return { valid: true };
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { valid: false, reason: `Cannot write to ${parent}: ${message}` };
+    }
+}
+
+function resolveClaudeCodeConfigDir(): string {
+    // XDG-aware resolution: check XDG_CONFIG_HOME, then ~/.config/claude/, then ~/.claude/
+    const xdgConfig = process.env.XDG_CONFIG_HOME;
+    if (xdgConfig) {
+        const xdgClaudePath = join(xdgConfig, 'claude');
+        if (existsSync(xdgClaudePath)) return xdgClaudePath;
+    }
+    const configClaudePath = join(homedir(), '.config', 'claude');
+    if (existsSync(configClaudePath)) return configClaudePath;
+    return join(homedir(), '.claude');
+}
+
 function readJson(targetPath: string): any {
     if (!existsSync(targetPath)) return {};
     try {
@@ -158,13 +196,16 @@ function writeStandardMcpConfig(targetPath: string): void {
 function writeOpencodeConfig(targetPath: string): void {
     const existing = readJson(targetPath);
     const server = {
-        id: 'nexus-prime',
-        ...buildStandardMcpServerConfig(),
+        type: 'local',
+        command: 'npx',
+        args: ['-y', 'nexus-prime', 'mcp'],
+        environment: {
+            NEXUS_MCP_TOOL_PROFILE: 'autonomous',
+        },
     };
     existing.mcp = existing.mcp ?? {};
-    existing.mcp.servers = Array.isArray(existing.mcp.servers) ? existing.mcp.servers : [];
-    existing.mcp.servers = existing.mcp.servers.filter((entry: any) => entry?.id !== 'nexus-prime');
-    existing.mcp.servers.push(server);
+    existing.mcp['nexus-prime'] = server;
+    delete existing.mcp.servers;
     ensureParentDir(targetPath);
     writeFileSync(targetPath, JSON.stringify(existing, null, 2));
 }
@@ -236,7 +277,8 @@ function buildInstructionFiles(
     workspaceRoot: string,
 ): SetupInstructionFile[] {
     const gateway = new InstructionGateway(packageRoot);
-    const bundle = gateway.renderClientBootstrapBundle(clientId === 'claude' ? 'claude-code' : clientId, {
+    const resolvedClientId = clientId === 'claude' || clientId === 'claude-desktop' ? 'claude-code' : clientId;
+    const bundle = gateway.renderClientBootstrapBundle(resolvedClientId, {
         toolProfile: 'autonomous',
     });
 
@@ -262,7 +304,7 @@ function buildInstructionFiles(
             scope: 'workspace',
         }));
     }
-    if (clientId === 'antigravity') {
+    if (clientId === 'antigravity' || clientId === 'openclaw') {
         return bundle.artifacts.map((artifact: ClientBootstrapArtifact) => ({
             path: join(homedir(), '.antigravity', 'skills', 'nexus-prime', artifact.fileName),
             content: artifact.content,
@@ -290,7 +332,7 @@ function buildInstructionFiles(
             scope: 'workspace',
         }));
     }
-    const fileName = clientId === 'claude' ? 'claude-code.md' : 'opencode.md';
+    const fileName = clientId === 'claude' || clientId === 'claude-code' || clientId === 'claude-desktop' ? 'claude-code.md' : 'opencode.md';
     return bundle.artifacts.map((artifact: ClientBootstrapArtifact, index) => ({
         path: join(
             workspaceRoot,
@@ -313,18 +355,32 @@ export function getSetupDefinition(
         return { id: clientId, label: 'Codex', instructionFiles };
     }
     if (clientId === 'cursor') {
+        const workspacePath = resolve(options.workspaceRoot ?? process.cwd());
         return {
             id: clientId,
             label: 'Cursor',
-            configPath: join(homedir(), '.cursor', 'mcp.json'),
+            configPath: join(workspacePath, '.cursor', 'mcp.json'),
             instructionFiles,
         };
     }
-    if (clientId === 'claude') {
+    if (clientId === 'claude' || clientId === 'claude-code') {
         return {
             id: clientId,
             label: 'Claude Code',
-            configPath: join(homedir(), '.claude', 'mcp.json'),
+            configPath: join(workspaceRoot, '.mcp.json'),
+            instructionFiles,
+        };
+    }
+    if (clientId === 'claude-desktop') {
+        const claudeDesktopPath = process.platform === 'darwin'
+            ? join(homedir(), 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json')
+            : process.platform === 'win32'
+                ? join(process.env.APPDATA || '', 'Claude', 'claude_desktop_config.json')
+                : join(resolveClaudeCodeConfigDir(), 'claude_desktop_config.json');
+        return {
+            id: clientId,
+            label: 'Claude Desktop',
+            configPath: claudeDesktopPath,
             instructionFiles,
         };
     }
@@ -332,7 +388,7 @@ export function getSetupDefinition(
         return {
             id: clientId,
             label: 'Opencode',
-            configPath: join(homedir(), '.opencode', 'config.json'),
+            configPath: join(homedir(), '.config', 'opencode', 'opencode.json'),
             instructionFiles,
         };
     }
@@ -368,9 +424,17 @@ export function getSetupDefinition(
             instructionFiles,
         };
     }
+    if (clientId === 'openclaw') {
+        return {
+            id: clientId,
+            label: 'OpenClaw',
+            configPath: join(homedir(), '.openclaw', 'openclaw.json'),
+            instructionFiles,
+        };
+    }
     return {
         id: clientId,
-        label: 'Antigravity / OpenClaw',
+        label: 'Antigravity',
         configPath: join(homedir(), '.antigravity', 'mcp.json'),
         instructionFiles,
     };
@@ -382,7 +446,10 @@ export function installSetup(
 ): void {
     const scope = options.scope ?? 'all';
     if (definition.configPath && scope !== 'workspace') {
-        if (definition.id === 'opencode') {
+        const configCheck = validateTargetPath(definition.configPath);
+        if (!configCheck.valid) {
+            console.warn(`[nexus-prime] Skipping config for ${definition.label}: ${configCheck.reason}`);
+        } else if (definition.id === 'opencode') {
             writeOpencodeConfig(definition.configPath);
         } else {
             writeStandardMcpConfig(definition.configPath);
@@ -391,6 +458,11 @@ export function installSetup(
     for (const file of definition.instructionFiles) {
         if (scope === 'home' && file.scope !== 'home') continue;
         if (scope === 'workspace' && file.scope !== 'workspace') continue;
+        const pathCheck = validateTargetPath(file.path);
+        if (!pathCheck.valid) {
+            console.warn(`[nexus-prime] Skipping instruction file ${file.path}: ${pathCheck.reason}`);
+            continue;
+        }
         ensureParentDir(file.path);
         if (file.mode === 'codex-managed-agents') {
             const existing = existsSync(file.path) ? readFileSync(file.path, 'utf8') : null;
@@ -406,13 +478,15 @@ export function hasExpectedConfig(definition: SetupDefinition): boolean {
     try {
         const parsed = JSON.parse(readFileSync(definition.configPath, 'utf8'));
         if (definition.id === 'opencode') {
-            const servers = parsed?.mcp?.servers;
-            return Array.isArray(servers) && servers.some((entry: any) =>
-                entry?.id === 'nexus-prime'
-                && entry?.command === 'npx'
-                && Array.isArray(entry?.args)
-                && entry.args.includes('nexus-prime')
-                && entry?.env?.NEXUS_MCP_TOOL_PROFILE === 'autonomous');
+            const server = parsed?.mcp?.['nexus-prime'];
+            return Boolean(
+                server
+                && server.type === 'local'
+                && server.command === 'npx'
+                && Array.isArray(server.args)
+                && server.args.includes('nexus-prime')
+                && server?.environment?.NEXUS_MCP_TOOL_PROFILE === 'autonomous'
+            );
         }
         const server = parsed?.mcpServers?.['nexus-prime'];
         return Boolean(
@@ -566,13 +640,33 @@ export function collectBootstrapManifest(options: { packageRoot: string; workspa
 
 export function ensureBootstrap(options: EnsureBootstrapOptions): BootstrapManifestStatus {
     const packageRoot = resolve(options.packageRoot);
+    if (!existsSync(packageRoot)) {
+        throw new Error(`Invalid packageRoot: path does not exist (${packageRoot})`);
+    }
+
     const workspaceRoot = resolve(options.workspaceRoot ?? process.cwd());
     const _phase = options.phase ?? 'runtime';
     const allowWorkspace = workspaceEligible(workspaceRoot);
     const scope: 'all' | 'home' = allowWorkspace ? 'all' : 'home';
 
+    if (options.dryRun) {
+        return collectBootstrapManifest({ packageRoot, workspaceRoot });
+    }
+
     if (allowWorkspace) {
         ensureWorkspaceAgentScaffold(workspaceRoot);
+        
+        // Phase 3F: Instant Aha Moment welcome memory
+        try {
+            const memory = new MemoryEngine();
+            memory.store(
+                "Welcome to Nexus Prime! Nexus Prime is fully installed and tracking context for your workspace. Use '/nexus' to ask me to analyze the codebase, run agents, and automate tasks.",
+                1.0,
+                ['welcome', 'onboard', 'system-bootstrap']
+            );
+        } catch (err) {
+            console.warn('Failed to initialize welcome memory:', err);
+        }
     }
 
     for (const clientId of SUPPORTED_CLIENTS) {

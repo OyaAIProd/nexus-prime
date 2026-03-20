@@ -140,6 +140,13 @@ export class ContextAssembler {
         );
     }
 
+    /** Map quality score to token tier: L0, L1, or L2 */
+    tierForQuality(quality: number): 'L0' | 'L1' | 'L2' {
+        if (quality < 0.25) return 'L0'; // skip / minimal
+        if (quality < 0.60) return 'L1'; // outline
+        return 'L2'; // full
+    }
+
     /** Relevance: keyword overlap between chunk content and task */
     private scoreRelevance(chunk: ContextChunk, task: string): number {
         const taskTokens = this.tokenize(task);

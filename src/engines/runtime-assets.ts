@@ -14,7 +14,8 @@ export type HookTrigger =
     | 'run.verified'
     | 'promotion.approved'
     | 'memory.stored'
-    | 'shield.blocked';
+    | 'shield.blocked'
+    | 'before-compaction';
 export type AutomationTriggerMode = 'event' | 'schedule' | 'connector';
 export type ConnectorKind = 'github' | 'http';
 

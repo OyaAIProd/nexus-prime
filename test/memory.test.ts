@@ -159,6 +159,27 @@ async function runTests() {
     const importResult = mem.importBundle({ path: backup.path });
     assert(typeof importResult.duplicates === 'number', 'Memory import reports duplicate handling');
 
+    // ── Pre-Compaction Flush ──────────────────────────────────────────────────
+    console.log('\n💾 Pre-Compaction Flush');
+    const pcDbPath = path.join(os.tmpdir(), `nexus-test-precompaction-${Date.now()}.db`);
+    const pcMem = new MemoryEngine(pcDbPath);
+    for (let i = 0; i < 5; i++) {
+        pcMem.store(`Prefrontal item ${i} for flush test`, 0.8, ['#flush']);
+    }
+    const pcStatsBefore = pcMem.getStats();
+    assert(pcStatsBefore.prefrontal === 5, 'Stored 5 prefrontal items');
+    
+    // Call preCompactionFlush
+    pcMem.preCompactionFlush('test-compaction');
+    pcMem.close();
+
+    // Reload from disk
+    const pcMem2 = new MemoryEngine(pcDbPath);
+    const pcStatsAfter = pcMem2.getStats();
+    assert(pcStatsAfter.prefrontal >= 5, `Reloaded memory has prefrontal items, got ${pcStatsAfter.prefrontal}`);
+    pcMem2.close();
+    try { fs.unlinkSync(pcDbPath); } catch { /* ignore */ }
+
     // ── Persistence ───────────────────────────────────────────────────────────
     console.log('\n💿 Persistence (close + reload)');
     mem.close();

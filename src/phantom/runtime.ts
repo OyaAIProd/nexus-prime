@@ -245,6 +245,7 @@ export interface WorkerManifest {
     workflows: WorkflowArtifact[];
     context: WorkerContextPacket;
     targetWorkerId?: string;
+    podId?: string;
 }
 
 export interface SpecialistContextPacket {
@@ -964,7 +965,7 @@ export class SubAgentRuntime {
             ...task.hookSelectors,
             ...task.automationSelectors,
         ]);
-        const resolvedSkills = this.skillRuntime.resolveSkillSelectors(task.skillNames, task.goal);
+        const resolvedSkills = await this.skillRuntime.resolveSkillSelectors(task.skillNames, task.goal);
         const generatedSkills = this.skillRuntime.generateRuntimeSkills(task.goal, task.workers, {
             goal: task.goal,
             workerCount: task.workers,
@@ -1021,10 +1022,10 @@ export class SubAgentRuntime {
             ...generatedSkills,
             ...derivedSkills,
             ...task.inlineSkills,
-            ...this.skillRuntime.resolveSkillSelectors(
+            ...(await this.skillRuntime.resolveSkillSelectors(
                 dedupeStrings([...preReadHooks.skillSelectors, ...beforeReadHooks.skillSelectors]),
                 task.goal,
-            ),
+            )),
         ]);
         const skillBindings = this.gatherSkillBindings(activeSkills, task.skillPolicy.allowMutateSkills);
 
@@ -1135,7 +1136,7 @@ export class SubAgentRuntime {
             recorder.writeJson('run.json', run);
             return run;
         }
-        const beforeMutateResolved = this.applyPhaseHookEffects(
+        const beforeMutateResolved = await this.applyPhaseHookEffects(
             runId,
             task,
             'before-mutate',
@@ -1156,6 +1157,18 @@ export class SubAgentRuntime {
         run.state = 'running';
         const coderManifests = manifests.filter((manifest) => manifest.role === 'coder');
         const coderResults = await Promise.all(coderManifests.map((manifest) => this.runCoderWorker(runId, recorder, manifest)));
+        
+        // Phase 3E: Inter-pod sync point using Byzantine consensus
+        const activePods = new Set(coderManifests.map(m => m.podId).filter(Boolean));
+        if (activePods.size > 1) {
+            coderResults.forEach((res) => {
+                if (res.outcome !== 'failed') {
+                    // Submit candidate magnitude to inter-pod consensus
+                    podNetwork.resolveConflict(res.workerId, 1, [res.tokensUsed, res.diff.length]);
+                }
+            });
+        }
+
         run.workerResults = coderResults;
         await this.shareWorkerLearnings(runId, task.goal, coderResults);
         manifests.forEach((manifest) => {
@@ -1186,7 +1199,7 @@ export class SubAgentRuntime {
             });
         });
         run.hookEvents.push(...beforeVerifyHooks.events);
-        const beforeVerifyResolved = this.applyPhaseHookEffects(
+        const beforeVerifyResolved = await this.applyPhaseHookEffects(
             runId,
             task,
             'before-verify',
@@ -2463,6 +2476,18 @@ export class SubAgentRuntime {
             },
         ];
 
+        // Group workers into pods (target 5-8 workers per pod, max 8)
+        const pods = new Map<string, string>(); // workerId -> podId
+        const POD_SIZE = 8;
+        for (let i = 0; i < workerIds.length; i += POD_SIZE) {
+            const members = workerIds.slice(i, i + POD_SIZE);
+            const lead = members[0];
+            const podId = podNetwork.createPodGroup(lead, members);
+            for (const workerId of members) {
+                pods.set(workerId, podId);
+            }
+        }
+
         workerIds.forEach((workerId, idx) => {
             const coderSpecialist = mutateSpecialists[idx % Math.max(mutateSpecialists.length, 1)]
                 ?? selectedSpecialists[idx % Math.max(selectedSpecialists.length, 1)];
@@ -2491,6 +2516,7 @@ export class SubAgentRuntime {
                 inlineSkills: activeSkills,
                 workflows: activeWorkflows,
                 context: {} as WorkerContextPacket,
+                podId: pods.get(workerId),
             });
             manifests.push({
                 workerId: `verifier-${idx + 1}`,
@@ -3464,7 +3490,7 @@ export class SubAgentRuntime {
         });
     }
 
-    private applyPhaseHookEffects(
+    private async applyPhaseHookEffects(
         runId: string,
         task: ExecutionTask,
         trigger: HookTrigger,
@@ -3472,7 +3498,7 @@ export class SubAgentRuntime {
         run: ExecutionRun,
         manifests: WorkerManifest[],
         workflowApplication: { verifyCommands: string[]; actions: SkillBinding[]; events: Array<Record<string, unknown>> }
-    ): { verifyCommands: string[]; actions: SkillBinding[] } {
+    ): Promise<{ verifyCommands: string[]; actions: SkillBinding[] }> {
         if (result.skillSelectors.length === 0 && result.workflowSelectors.length === 0 && result.toolBindings.length === 0 && result.notes.length === 0) {
             return {
                 verifyCommands: workflowApplication.verifyCommands,
@@ -3480,7 +3506,7 @@ export class SubAgentRuntime {
             };
         }
 
-        const addedSkills = dedupeSkillArtifacts(this.skillRuntime.resolveSkillSelectors(result.skillSelectors, task.goal))
+        const addedSkills = dedupeSkillArtifacts(await this.skillRuntime.resolveSkillSelectors(result.skillSelectors, task.goal))
             .filter((skill) => !run.activeSkills.some((active) => active.skillId === skill.skillId));
         const addedWorkflows = dedupeWorkflowArtifacts(this.workflowRuntime.resolveWorkflowSelectors(result.workflowSelectors, task.goal))
             .filter((workflow) => !run.activeWorkflows.some((active) => active.workflowId === workflow.workflowId));

@@ -210,12 +210,26 @@ export interface MemoryExportBundle {
   items: MemoryExportItem[];
 }
 
+export interface TokenTelemetryEntry {
+  id: string;
+  sessionId: string;
+  timestamp: number;
+  task: string;
+  model: string;
+  tokensOptimized: number;
+  tokensSaved: number;
+  tokensForwarded: number;
+  compressionRatio: number;
+  fileCount: number;
+  usdValueSaved: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MemoryEngine
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class MemoryEngine {
-  private db: Database.Database;
+  public db: Database.Database;
   private graphMirror?: GraphMemoryEngine;
   private sessionId: string;
   private vaultDir: string;
@@ -364,12 +378,47 @@ export class MemoryEngine {
       CREATE INDEX IF NOT EXISTS idx_memories_priority  ON memories(priority DESC);
       CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp DESC);
       CREATE INDEX IF NOT EXISTS idx_links_from         ON memory_links(from_id);
+
+      CREATE TABLE IF NOT EXISTS token_ledger(
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        task TEXT NOT NULL,
+        model TEXT NOT NULL,
+        tokens_optimized INTEGER NOT NULL,
+        tokens_saved INTEGER NOT NULL,
+        tokens_forwarded INTEGER NOT NULL,
+        compression_ratio REAL NOT NULL,
+        file_count INTEGER NOT NULL,
+        usd_value_saved REAL NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_token_ledger_session ON token_ledger(session_id);
+      CREATE INDEX IF NOT EXISTS idx_token_ledger_timestamp ON token_ledger(timestamp DESC);
     `);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   // Persistence
   // ─────────────────────────────────────────────────────────────────────────
+
+  /** Record token telemetry to local sqlite ledger */
+  insertTokenTelemetry(entry: Omit<TokenTelemetryEntry, 'id' | 'timestamp'>): void {
+    try {
+      this.db.prepare(`
+        INSERT INTO token_ledger (
+          id, session_id, timestamp, task, model,
+          tokens_optimized, tokens_saved, tokens_forwarded,
+          compression_ratio, file_count, usd_value_saved
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        randomUUID(), entry.sessionId, Date.now(), entry.task, entry.model,
+        entry.tokensOptimized, entry.tokensSaved, entry.tokensForwarded,
+        entry.compressionRatio, entry.fileCount, entry.usdValueSaved
+      );
+    } catch (e) {
+      console.error('Failed to insert token telemetry:', e);
+    }
+  }
 
   /** Restore hippocampus + cortex from DB on startup */
   load(): void {
@@ -478,6 +527,14 @@ export class MemoryEngine {
       txn(this.prefrontal);
     } catch (err) {
       console.error('[MemoryEngine] flush() error:', err);
+    }
+  }
+
+  /** Alias for flush() that delegates to SQLite transaction immediately, tracking stats */
+  preCompactionFlush(reason: string): void {
+    const itemsFlushed = this.prefrontal.length;
+    if (itemsFlushed > 0) {
+      this.flush();
     }
   }
 
@@ -952,14 +1009,21 @@ export class MemoryEngine {
   private autoLink(newItem: MemoryItem): void {
     const recentRows = this.db.prepare(`
       SELECT id, content, tags FROM memories
-      WHERE id != ? ORDER BY timestamp DESC LIMIT 50
+      WHERE id != ? AND state = 'active' ORDER BY timestamp DESC LIMIT 100
       `).all(newItem.id) as any[];
 
     const newWords = newItem.content.toLowerCase().split(/\s+/);
+    const newVector = this.embedder.localEmbed(newItem.content);
 
     for (const row of recentRows) {
       const existingWords = (row.content as string).toLowerCase().split(/\s+/);
-      const similarity = this.wordOverlap(newWords, existingWords);
+      const lexicalOverlap = this.wordOverlap(newWords, existingWords);
+      
+      const rowVector = this.embedder.localEmbed(row.content as string);
+      const hDist = HyperbolicMath.dist(newVector, rowVector);
+      const semanticSimilarity = 1 / (1 + hDist);
+
+      const similarity = Math.max(lexicalOverlap, semanticSimilarity);
 
       if (similarity > 0.25) {
         this.db.prepare(`
@@ -978,6 +1042,12 @@ export class MemoryEngine {
     VALUES(?, ?, ?, 'tagged')
       `).run(newItem.id, row.id, 0.6 + sharedTags.length * 0.1);
       }
+    }
+  }
+
+  autoLinkBatch(items: MemoryItem[]): void {
+    for (const item of items) {
+      this.autoLink(item);
     }
   }
 
@@ -1064,6 +1134,7 @@ export class MemoryEngine {
   /** Maintenance cycle: runs coolDown() then expires memories where entropy > threshold AND accessCount < 2 AND age > 7 days */
   maintenanceCycle(): void {
     this.coolDown();
+    this.backgroundLinkMaintenance();
     
     const { flushEntropyThreshold } = this.config;
     const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
@@ -1078,6 +1149,17 @@ export class MemoryEngine {
     `);
     
     this.syncVault();
+  }
+
+  backgroundLinkMaintenance(): void {
+    // Prune weak links
+    this.db.exec(`
+      DELETE FROM memory_links WHERE weight < 0.1
+    `);
+    // Decay links slightly to forget unused connections
+    this.db.exec(`
+      UPDATE memory_links SET weight = weight * 0.95
+    `);
   }
 
   // ─────────────────────────────────────────────────────────────────────────

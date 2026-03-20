@@ -43,6 +43,12 @@ export type NexusEventType =
     | 'dashboard.action'
     | 'nexusnet.publish'
     | 'nexusnet.sync'
+    | 'mcp.call.start'
+    | 'mcp.call.stream'
+    | 'mcp.call.complete'
+    // Phase 1A: Memory Compaction Flush
+    | 'memory.pre-compaction'
+    | 'memory.flush-requested'
     // Phase 9A: Quantum-Inspired Entanglement
     | 'entanglement.create'
     | 'entanglement.collapse'
@@ -103,6 +109,12 @@ export interface NexusEventPayloads {
     'dashboard.action': { action: string; status: string; target?: string };
     'nexusnet.publish': { type: string; byteSize: number };
     'nexusnet.sync': { newItemsCount: number };
+    'mcp.call.start': { callId: string; serverName: string; toolName: string; args: any };
+    'mcp.call.stream': { callId: string; chunk: string };
+    'mcp.call.complete': { callId: string; serverName: string; toolName: string; durationMs: number; resultByteSize: number; result?: any; error?: string };
+    // Phase 1A
+    'memory.pre-compaction': { tokensRemaining: number; reason: string; sessionAgeMinutes: number };
+    'memory.flush-requested': { force: boolean; reason: string; itemsFlushed: number };
     // Phase 9A
     'entanglement.create': { stateId: string; agents: number; dimension: number; type: string };
     'entanglement.collapse': { stateId: string; agentId: string; strategy: number; probability: number; remainingAgents: number };

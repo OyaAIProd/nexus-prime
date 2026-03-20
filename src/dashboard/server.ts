@@ -1,6 +1,7 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { nexusEventBus, type NexusEvent, type NexusEventType } from '../engines/event-bus.js';
@@ -20,6 +21,7 @@ const HOST = process.env.NEXUS_DASHBOARD_HOST || '127.0.0.1';
 const DEFAULT_PORT = parseInt(process.env.NEXUS_DASHBOARD_PORT || '3377', 10);
 const MAX_PORT_SCAN = 24;
 const DASHBOARD_API_VERSION = '3';
+const DASHBOARD_SCHEMA_VERSION = 1;
 const REQUIRED_CAPABILITIES = {
     runs: true,
     memory: true,
@@ -203,7 +205,31 @@ export class DashboardServer {
         return this.dashboardUrl;
     }
 
+    private migrateDashboardState(): void {
+        const statePath = path.join(os.homedir(), '.nexus-prime', 'dashboard-state.json');
+        if (!fs.existsSync(path.dirname(statePath))) {
+            fs.mkdirSync(path.dirname(statePath), { recursive: true });
+        }
+        
+        let state: any = { schemaVersion: 0 };
+        if (fs.existsSync(statePath)) {
+            try {
+                state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+            } catch {
+                // ignore
+            }
+        }
+
+        if ((state.schemaVersion || 0) < DASHBOARD_SCHEMA_VERSION) {
+            console.error(`[Dashboard] Migrating state from v${state.schemaVersion || 0} to v${DASHBOARD_SCHEMA_VERSION}`);
+            state.schemaVersion = DASHBOARD_SCHEMA_VERSION;
+            fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+        }
+    }
+
     private async initialize(): Promise<void> {
+        this.migrateDashboardState();
+
         const probe = await this.probeDashboard(DEFAULT_PORT);
 
         if (probe.status === 'compatible') {
@@ -569,6 +595,19 @@ export class DashboardServer {
 
         if (req.method === 'GET' && url.pathname === '/api/federation') {
             this.respondJson(res, this.getRuntime()?.getNetworkStatus() ?? {});
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/repo-tree') {
+            try {
+                const { RepoTreeGenerator } = await import('../engines/repo-tree.js');
+                const orchestrator = this.getOrchestrator();
+                // Access private repoRoot via cast if needed, or use cwd
+                const repoRoot = (orchestrator as any)?.repoRoot || process.cwd();
+                this.respondJson(res, new RepoTreeGenerator(repoRoot).generate());
+            } catch (err) {
+                this.respondJson(res, { error: 'Failed to generate repo tree' }, 500);
+            }
             return;
         }
 
@@ -999,7 +1038,7 @@ export class DashboardServer {
         });
 
         res.write('retry: 3000\n\n');
-        res.write(`event: bootstrap\ndata: ${JSON.stringify({ connected: true, timestamp: Date.now() })}\n\n`);
+        res.write(`event: bootstrap\ndata: ${JSON.stringify({ connected: true, timestamp: Date.now(), version: DASHBOARD_API_VERSION })}\n\n`);
 
         const history = this.getEventCards();
         for (const evt of history) {

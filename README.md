@@ -129,12 +129,12 @@ Use `nexus_plan_execution` only when you explicitly want the ledger before mutat
 
 ### 2. Files read without question → Ghost Pass + Token Budgeting
 **Problem:** Agents read 25 files to answer a question that needed 3. No pre-read analysis. No decision about whether a file should even be read.
-**How:** `nexus_ghost_pass` runs a pre-read analysis pass. Source-aware token budgeting then allocates budget across repo, memory, RAG, patterns, and runtime traces — recording what was selected and what was dropped.
-**Proof:** Lifetime token telemetry, by-source allocation, per-run drilldowns survive restart.
+**How:** `nexus_ghost_pass` runs a pre-read analysis pass. Source-aware token budgeting then allocates budget across repo, memory, RAG, patterns, and runtime traces — recording what was selected and what was dropped. Tiered context loading (L0/L1/L2) progressively deepens reads based on relevance instead of loading everything at full depth. Background context compaction strips low-signal content while retaining structural elements.
+**Proof:** Lifetime token analytics with per-session breakdowns, compression ratios, and USD savings — persisted in SQLite, surviving restarts.
 
 ### 3. Memory that grows but never learns → Memory Fabric
 **Problem:** Memory accumulates without decay. Old notes outrank recent updates. No mechanism for deciding what's ephemeral vs. durable.
-**How:** The memory control plane applies fact extraction, reconciliation, quarantine, and vault projection on top of SQLite + graph base. Memories are scored, contradictions detected, and stale facts fade.
+**How:** The memory control plane applies fact extraction, reconciliation, quarantine, and vault projection on top of SQLite + graph base. Memories are scored, contradictions detected, and stale facts fade. A compaction sentinel flushes working memory to durable storage before context window compaction. Background maintenance runs on a 5-minute cycle for entropy-based expiration and deduplication.
 **Proof:** Dashboard exposes memory health, scope, trace, and shared-worker context.
 
 ### 4. RAG as prompt stuffing → Session-First RAG Gate
@@ -219,10 +219,10 @@ flowchart TD
 ## Client Setup and Runtime Contract
 
 ### Supported MCP Clients
-Nexus Prime provides automated setup for **9 coding agents**:
+Nexus Prime provides automated setup for **12 coding agents**:
 - 🔴 **Codex**
 - 🔵 **Cursor**
-- 🍊 **Claude Code**
+- 🍊 **Claude Code** (CLI + Desktop + VS Code extension)
 - 🟢 **Opencode**
 - 🌊 **Windsurf**
 - 🛡️ **Antigravity / OpenClaw**
@@ -230,7 +230,7 @@ Nexus Prime provides automated setup for **9 coding agents**:
 - 🔗 **Continue.dev**
 - ⚙️ **Cline**
 
-All agent configurations are written automatically on `npm install`. The first Nexus run inside a repo writes workspace-scoped client files. `nexus-prime setup <client>` and `nexus-prime setup all` remain the explicit refresh/fix path.
+All agent configurations are written automatically on `npm install` with XDG-aware path resolution. The first Nexus run inside a repo writes workspace-scoped client files. `nexus-prime setup <client>` and `nexus-prime setup all` remain the explicit refresh/fix path. Run `nexus-prime setup diagnose` for a dry-run validation of all client paths.
 
 ### Automated Integration
 ```bash
