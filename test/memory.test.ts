@@ -15,6 +15,12 @@ import * as fs from 'fs';
 
 // Use an isolated test DB (not the real one)
 const TEST_DB = path.join(os.tmpdir(), `nexus-test-memory-${Date.now()}.db`);
+const TEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-test-home-'));
+const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
+
+process.env.HOME = TEST_HOME;
+process.env.USERPROFILE = TEST_HOME;
 
 async function runTests() {
     console.log('\n🧪 Memory Engine — Semantic Recall Tests\n');
@@ -193,6 +199,7 @@ async function runTests() {
 
     // ── Cleanup ───────────────────────────────────────────────────────────────
     try { fs.unlinkSync(TEST_DB); } catch { /* ignore */ }
+    fs.rmSync(TEST_HOME, { recursive: true, force: true });
 
     // ── Summary ───────────────────────────────────────────────────────────────
     console.log('\n' + '─'.repeat(50));
@@ -209,4 +216,9 @@ async function runTests() {
 runTests().catch(e => {
     console.error('\n💥 Test runner crashed:', e);
     process.exit(1);
+}).finally(() => {
+    if (ORIGINAL_HOME == null) delete process.env.HOME;
+    else process.env.HOME = ORIGINAL_HOME;
+    if (ORIGINAL_USERPROFILE == null) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = ORIGINAL_USERPROFILE;
 });

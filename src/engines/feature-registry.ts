@@ -33,11 +33,11 @@ const MCP_SURFACES: FeatureRegistryItem[] = [
     { name: 'nexus_orchestrate', surface: 'core MCP', purpose: 'Plan, select assets, execute through worktree-backed runtime, and persist truth.', notes: 'Default raw-prompt execution path.' },
     { name: 'nexus_plan_execution', surface: 'planning MCP', purpose: 'Inspect the planner ledger before mutation.', notes: 'Used when operators want a pre-run ledger.' },
     { name: 'nexus_recall_memory / nexus_memory_stats / nexus_store_memory', surface: 'memory MCP', purpose: 'Inspect and persist durable learnings.', notes: 'Feeds the memory fabric and handoff flow.' },
-    { name: 'nexus_optimize_tokens', surface: 'optimization MCP', purpose: 'Inspect or override source-aware token budgeting.', notes: 'Manual/diagnostic surface; orchestration applies budgeting automatically.' },
-    { name: 'nexus_mindkit_check / nexus_ghost_pass / nexus_spawn_workers', surface: 'safety + runtime MCP', purpose: 'Run governance preflight, pre-read analysis, and explicit swarm control.', notes: 'Expert or low-level surfaces.' },
+    { name: 'nexus_optimize_tokens', surface: 'optimization MCP', purpose: 'Generate a token-saving reading plan before broad file inspection.', notes: 'Mandatory before reading 3+ files from client-visible intent.' },
+    { name: 'nexus_mindkit_check / nexus_ghost_pass / nexus_spawn_workers', surface: 'safety + runtime MCP', purpose: 'Run governance preflight, refactor pre-flight analysis, and explicit swarm control.', notes: 'Mindkit and ghost-pass are required lifecycle checks for risky or multi-file mutation.' },
     { name: 'nexus_memory_export / import / backup / maintain / trace', surface: 'memory portability MCP', purpose: 'Export, restore, maintain, and inspect local-first memory bundles.', notes: 'Supports backup/resume and OpenClaw-oriented bridge packs.' },
     { name: 'nexus_list_skills / workflows / hooks / automations / specialists / crews', surface: 'catalog MCP', purpose: 'Expose what the runtime can activate.', notes: 'Used for explicit operator control and diagnostics.' },
-    { name: 'nexus_run_status / nexus_federation_status / nexus_session_dna', surface: 'runtime truth MCP', purpose: 'Inspect persisted run state, federation status, and handoff DNA.', notes: 'Used after execution or during operating-layer work.' },
+    { name: 'nexus_run_status / nexus_federation_status / nexus_session_dna', surface: 'runtime truth MCP', purpose: 'Inspect persisted run state, federation status, and handoff DNA.', notes: 'Session DNA generation is mandatory before ending a meaningful session.' },
 ];
 
 const CLIENT_BOOTSTRAP_TARGETS: FeatureRegistryItem[] = [

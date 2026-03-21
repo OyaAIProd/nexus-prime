@@ -77,6 +77,7 @@ const __filename = fileURLToPath(import.meta.url);
 const PROJECT_ROOT = path.resolve(path.dirname(__filename), '..', '..', '..');
 
 type McpToolProfile = 'autonomous' | 'full';
+type LifecyclePhase = 'pre-bootstrap' | 'bootstrapped' | 'orchestrated' | 'working' | 'closing';
 type McpToolDefinition = {
     name: string;
     description: string;
@@ -164,12 +165,127 @@ class SessionTelemetry {
     private tokensOptimized = 0;
     private memoriesStored = 0;
     private memoriesRecalled = 0;
+    private lifecyclePhase: LifecyclePhase = 'pre-bootstrap';
+    private optimizeTokensCalled = false;
+    private mindkitCheckCalled = false;
+    private storeMemoryCalledPostOrchestrate = false;
+    private sessionDnaCalled = false;
+    private fileReadIntentCount = 0;
+    private callsSinceOrchestrate = 0;
+    private fileIntentPaths = new Set<string>();
     public bootstrapped = false;
 
-    recordCall() { this.callCount++; }
+    recordCall() {
+        this.callCount++;
+        if (this.isPostOrchestratePhase()) {
+            this.callsSinceOrchestrate++;
+        }
+    }
     recordTokens(saved: number) { this.tokensOptimized += saved; }
     recordStore() { this.memoriesStored++; }
     recordRecall(count: number) { this.memoriesRecalled += count; }
+
+    snapshot() {
+        return {
+            callCount: this.callCount,
+            tokensOptimized: this.tokensOptimized,
+            memoriesStored: this.memoriesStored,
+            memoriesRecalled: this.memoriesRecalled,
+            lifecyclePhase: this.lifecyclePhase,
+            optimizeTokensCalled: this.optimizeTokensCalled,
+            mindkitCheckCalled: this.mindkitCheckCalled,
+            storeMemoryCalledPostOrchestrate: this.storeMemoryCalledPostOrchestrate,
+            sessionDnaCalled: this.sessionDnaCalled,
+            fileReadIntentCount: this.fileReadIntentCount,
+            callsSinceOrchestrate: this.callsSinceOrchestrate,
+        };
+    }
+
+    advancePhase(nextPhase: LifecyclePhase): void {
+        if (this.lifecyclePhase === nextPhase) return;
+        this.lifecyclePhase = nextPhase;
+        if (nextPhase === 'bootstrapped' || nextPhase === 'orchestrated') {
+            this.resetFileIntentTracking();
+            this.optimizeTokensCalled = false;
+        }
+        if (nextPhase === 'orchestrated') {
+            this.mindkitCheckCalled = false;
+            this.storeMemoryCalledPostOrchestrate = false;
+            this.sessionDnaCalled = false;
+            this.callsSinceOrchestrate = 0;
+        }
+    }
+
+    observeSuccessfulToolCall(toolName: string, args: Record<string, unknown>): void {
+        if (toolName === 'nexus_session_bootstrap') {
+            this.bootstrapped = true;
+            this.advancePhase('bootstrapped');
+            this.noteFileIntent(args.files);
+            return;
+        }
+
+        if (toolName === 'nexus_orchestrate') {
+            this.advancePhase('orchestrated');
+            this.noteFileIntent(args.files);
+            return;
+        }
+
+        if (toolName === 'nexus_optimize_tokens') {
+            this.optimizeTokensCalled = true;
+            if (this.lifecyclePhase === 'orchestrated') this.advancePhase('working');
+            this.noteFileIntent(args.files);
+            return;
+        }
+
+        if (toolName === 'nexus_mindkit_check') {
+            this.mindkitCheckCalled = true;
+            if (this.lifecyclePhase === 'orchestrated') this.advancePhase('working');
+            this.noteFileIntent(args.filesToModify);
+            return;
+        }
+
+        if (toolName === 'nexus_ghost_pass') {
+            if (this.lifecyclePhase === 'orchestrated') this.advancePhase('working');
+            this.noteFileIntent(args.files);
+            return;
+        }
+
+        if (toolName === 'nexus_store_memory') {
+            if (this.isPostOrchestratePhase()) {
+                this.storeMemoryCalledPostOrchestrate = true;
+            }
+            if (this.lifecyclePhase === 'orchestrated') this.advancePhase('working');
+            return;
+        }
+
+        if (toolName === 'nexus_session_dna' && String(args.action ?? 'load') === 'generate') {
+            this.sessionDnaCalled = true;
+            this.advancePhase('closing');
+            return;
+        }
+
+        if (this.lifecyclePhase === 'orchestrated') {
+            this.advancePhase('working');
+        }
+    }
+
+    needsOptimizeTokens(currentToolName?: string): boolean {
+        if (currentToolName === 'nexus_optimize_tokens') return false;
+        if (this.lifecyclePhase === 'pre-bootstrap') return false;
+        return this.fileReadIntentCount >= 3 && !this.optimizeTokensCalled;
+    }
+
+    needsStoreMemory(currentToolName?: string): boolean {
+        if (currentToolName === 'nexus_store_memory') return false;
+        return this.isPostOrchestratePhase()
+            && this.callsSinceOrchestrate >= 15
+            && !this.storeMemoryCalledPostOrchestrate;
+    }
+
+    needsSessionDna(currentToolName?: string): boolean {
+        if (currentToolName === 'nexus_session_dna') return false;
+        return this.isPostOrchestratePhase() && !this.sessionDnaCalled;
+    }
 
     notifyStore(priority: number, tags: string[], memStats: { cortex: number; totalLinks: number }): string {
         return `\nMemory telemetry: priority ${priority.toFixed(2)} · tags ${tags.join(', ') || 'none'} · cortex ${memStats.cortex} · zettel ${memStats.totalLinks}`;
@@ -215,14 +331,14 @@ class SessionTelemetry {
                 nudges.push('Guardrail FAILED. Do NOT proceed. Re-scope the task or call nexus_ghost_pass for a safer approach.');
                 break;
             case 'high_call_count':
-                if (this.callCount > 20) {
-                    nudges.push('20+ tool calls reached. Next: call nexus_store_memory with a session summary.');
+                if (this.callsSinceOrchestrate >= 15 && !this.storeMemoryCalledPostOrchestrate) {
+                    nudges.push('15+ post-orchestrate tool calls reached. Next: call nexus_store_memory with a session summary.');
                 }
                 break;
         }
 
         if (nudges.length === 0) return '';
-        return `\n<nexus-next-step>\n${nudges.map(n => `  → ${n}`).join('\n')}\n</nexus-next-step>`;
+        return `\n\nMANDATORY NEXT STEPS:\n${nudges.map((n) => `- ${n}`).join('\n')}\nDo NOT proceed without completing these steps.`;
     }
 
     format(memStats?: { totalLinks: number; prefrontal: number; hippocampus: number; cortex: number }): string {
@@ -231,8 +347,30 @@ class SessionTelemetry {
         const parts = [
             `${this.callCount} calls`,
             memStats ? `${memStats.totalLinks} Zettel links` : null,
+            `phase ${this.lifecyclePhase}`,
         ].filter(Boolean);
         return `\nSession telemetry (${uptimeStr}): ${parts.join(' · ')}`;
+    }
+
+    private noteFileIntent(rawPaths: unknown): void {
+        if (!Array.isArray(rawPaths)) return;
+        for (const rawPath of rawPaths) {
+            const normalized = String(rawPath || '').trim();
+            if (!normalized) continue;
+            this.fileIntentPaths.add(normalized);
+        }
+        this.fileReadIntentCount = this.fileIntentPaths.size;
+    }
+
+    private resetFileIntentTracking(): void {
+        this.fileIntentPaths.clear();
+        this.fileReadIntentCount = 0;
+    }
+
+    private isPostOrchestratePhase(): boolean {
+        return this.lifecyclePhase === 'orchestrated'
+            || this.lifecyclePhase === 'working'
+            || this.lifecyclePhase === 'closing';
     }
 }
 
@@ -271,12 +409,10 @@ export class MCPAdapter implements Adapter {
         for (let i = 0; i < keys.length; i += 2) {
             const k1 = keys[i];
             const v1 = String(metrics[k1]).substring(0, 20);
-            const p1 = `\x1b[33m${k1}:\x1b[0m ${v1}`.padEnd(42, ' ');
-            
+
             if (i + 1 < keys.length) {
                 const k2 = keys[i + 1];
                 const v2 = String(metrics[k2]).substring(0, 20);
-                const p2 = `\x1b[33m${k2}:\x1b[0m ${v2}`.padEnd(42, ' ');
                 // We have to hardcode padding because ansi escape codes mess with .padEnd length
                 console.error(`\x1b[36m║ \x1b[33m${k1}:\x1b[37m ${v1.padEnd(20, ' ')} │ \x1b[33m${k2}:\x1b[37m ${v2.padEnd(19, ' ')} \x1b[36m║\x1b[0m`);
             } else {
@@ -363,9 +499,79 @@ export class MCPAdapter implements Adapter {
             : 'autonomous';
     }
 
+    private formatProtocolChecklist(): string {
+        return [
+            'PROTOCOL CHECKLIST (follow every step):',
+            '[x] nexus_session_bootstrap — DONE',
+            '[ ] nexus_orchestrate — Call NOW with the user\'s request',
+            '[ ] nexus_optimize_tokens — Call BEFORE reading 3+ files',
+            '[ ] nexus_mindkit_check — Call BEFORE any file modifications',
+            '[ ] nexus_store_memory — Call AFTER significant findings AND at session end',
+            '[ ] nexus_session_dna — Call BEFORE ending this session',
+        ].join('\n');
+    }
+
+    private formatRemainingProtocolSteps(): string {
+        return [
+            'REMAINING PROTOCOL STEPS (MANDATORY):',
+            '- Call nexus_optimize_tokens(goal, files) BEFORE reading 3+ files',
+            '- Call nexus_mindkit_check(action, filesToModify) BEFORE modifying any files',
+            '- Call nexus_store_memory(content, priority, tags) with key findings from this work',
+            '- Call nexus_session_dna(action="generate") BEFORE ending this session',
+            'Do NOT skip these steps. The orchestrate call handled planning and execution, but these lifecycle steps are your responsibility.',
+        ].join('\n');
+    }
+
+    private prependTextToResponse(
+        result: { content: Array<{ type: string; text: string }> },
+        text: string,
+    ): { content: Array<{ type: string; text: string }> } {
+        if (!text.trim()) return result;
+        const content = result.content.map((item, index) => {
+            if (index === 0 && item.type === 'text') {
+                return {
+                    ...item,
+                    text: `${text}\n\n${item.text}`,
+                };
+            }
+            return item;
+        });
+        return { ...result, content };
+    }
+
+    private decorateLifecycleResponse(
+        toolName: string,
+        result: { content: Array<{ type: string; text: string }> },
+    ): { content: Array<{ type: string; text: string }> } {
+        const telemetry = this.telemetry.snapshot();
+        const warnings: string[] = [];
+
+        if (this.telemetry.needsOptimizeTokens(toolName)) {
+            warnings.push(
+                `Nexus only sees best-effort file intent from tool arguments. Current intent references ${telemetry.fileReadIntentCount} file(s), and nexus_optimize_tokens has not been called in this phase. Call nexus_optimize_tokens(goal, files) before broad reading.`
+            );
+        }
+
+        if (this.telemetry.needsStoreMemory(toolName)) {
+            warnings.push(
+                `${telemetry.callsSinceOrchestrate} post-orchestrate tool calls have happened without nexus_store_memory. Store the key findings before continuing.`
+            );
+        }
+
+        if (warnings.length === 0) return result;
+
+        return this.prependTextToResponse(
+            result,
+            [
+                'LIFECYCLE WARNING:',
+                ...warnings.map((warning) => `- ${warning}`),
+            ].join('\n'),
+        );
+    }
+
     private describeClientInstructionStatus(profile: McpToolProfile): string {
         return profile === 'autonomous'
-            ? 'Autonomous MCP profile active. Prefer nexus_session_bootstrap then nexus_orchestrate.'
+            ? 'Autonomous MCP profile active. REQUIRED start: nexus_session_bootstrap, then nexus_orchestrate. During-work and session-close lifecycle tools remain mandatory.'
             : 'Full MCP profile active. Low-level and authoring tools are exposed.';
     }
 
@@ -401,7 +607,19 @@ export class MCPAdapter implements Adapter {
             return 'Optional: Inspect the execution ledger before calling nexus_orchestrate. Skip unless you need pre-run visibility into what Nexus will choose.';
         }
         if (name === 'nexus_optimize_tokens') {
-            return 'Call when reading 3+ files. Returns a reading plan that saves 50-90% tokens. Follow the plan output — do not bulk-read the repo.';
+            return 'MANDATORY before reading 3+ files. Returns a token-saving reading plan. Follow it exactly and do not bulk-read the repo.';
+        }
+        if (name === 'nexus_mindkit_check') {
+            return 'MANDATORY before any file modification or destructive operation. Returns PASS/FAIL. Do NOT proceed if it returns FAIL.';
+        }
+        if (name === 'nexus_store_memory') {
+            return 'MANDATORY after significant findings and at session end. Store root causes, architecture decisions, and reusable patterns.';
+        }
+        if (name === 'nexus_session_dna') {
+            return 'MANDATORY at session end. Generates the handover snapshot for this session. Never skip this step.';
+        }
+        if (name === 'nexus_ghost_pass') {
+            return 'MANDATORY before refactoring 3+ files. Provides a safe execution plan, risk map, and worker guidance.';
         }
         if (name === 'nexus_spawn_workers') {
             return 'Call when modifying 3+ interrelated files or when nexus_ghost_pass recommends parallel execution. Prefer nexus_orchestrate for automatic worker management.';
@@ -421,7 +639,7 @@ export class MCPAdapter implements Adapter {
                 // ── Memory ────────────────────────────────────────────────────────
                 {
                     name: 'nexus_store_memory',
-                    description: 'Store a finding, insight, or memory into Nexus Prime. Use after discovering bugs, architecture decisions, or patterns. Priority 0-1 (1.0 = critical). High-priority items auto-fission to long-term memory.',
+                    description: 'Store a finding, insight, or memory into Nexus Prime. MANDATORY after significant findings and at session end. Priority 0-1 (1.0 = critical). High-priority items auto-fission to long-term memory.',
                     inputSchema: {
                         type: 'object',
                         properties: {
@@ -672,7 +890,7 @@ export class MCPAdapter implements Adapter {
                 },
                 {
                     name: 'nexus_session_dna',
-                    description: 'Generate or load a Session DNA snapshot. Captures files accessed/modified, decisions made, skills used, and recommended next steps for perfect session handover. Use "generate" to create a snapshot of the current session, "load" to retrieve the most recent previous session\'s DNA.',
+                    description: 'Generate or load a Session DNA snapshot. MANDATORY at session end when using "generate". Captures files accessed/modified, decisions made, skills used, and recommended next steps for perfect session handover.',
                     inputSchema: {
                         type: 'object',
                         properties: {
@@ -1253,20 +1471,21 @@ export class MCPAdapter implements Adapter {
 
             this.telemetry.recordCall();
             this.sessionDNA.recordToolCall();
-            
+
             const toolName = String(request.params?.name ?? '');
             if (toolName === 'nexus_session_bootstrap') {
                 this.telemetry.bootstrapped = true;
             }
+            const args = request.params?.arguments ?? {};
 
             const callId = `mcp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
             const startTimeMs = Date.now();
-            
+
             nexusEventBus.emit('mcp.call.start', {
                 callId,
                 serverName: 'nexus-prime',
                 toolName,
-                args: request.params?.arguments ?? {}
+                args,
             });
 
             let result;
@@ -1294,6 +1513,8 @@ export class MCPAdapter implements Adapter {
                 throw error;
             }
 
+            this.telemetry.observeSuccessfulToolCall(toolName, args);
+
             if (
                 !this.telemetry.bootstrapped &&
                 toolName !== 'nexus_session_bootstrap' &&
@@ -1315,7 +1536,7 @@ export class MCPAdapter implements Adapter {
                 };
             }
 
-            return result;
+            return this.decorateLifecycleResponse(toolName, result);
         });
     }
 
@@ -1403,6 +1624,7 @@ export class MCPAdapter implements Adapter {
                                 `Bootstrap status: ${bootstrap.clientBootstrapStatus?.clients?.length || 0} client manifests tracked`,
                             ]),
                             formatJsonDetails('Structured details', payload),
+                            this.formatProtocolChecklist(),
                         ].join('\n\n'),
                     }],
                 };
@@ -1512,6 +1734,7 @@ export class MCPAdapter implements Adapter {
                                 ]),
                                 execution.result ? `Result\n\`\`\`\n${execution.result}\n\`\`\`` : '',
                                 formatJsonDetails('Structured details', payload),
+                                this.formatRemainingProtocolSteps(),
                             ].filter(Boolean).join('\n\n'),
                         }],
                     };
@@ -1540,6 +1763,7 @@ export class MCPAdapter implements Adapter {
                                     runtimeUsage?.skipReasons?.length ? `Skipped stages: ${runtimeUsage.skipReasons.join(' · ')}` : 'Skipped stages: not recorded',
                                 ]),
                                 formatJsonDetails('Structured details', payload),
+                                this.formatRemainingProtocolSteps(),
                             ].join('\n\n'),
                         }],
                     };
@@ -1568,8 +1792,6 @@ export class MCPAdapter implements Adapter {
                 const id = this.nexusRef.storeMemory(content, priority, tags);
                 this.telemetry.recordStore();
                 this.sessionDNA.recordMemoryStore();
-                const memStats = this.nexusRef.getMemoryStats();
-                const notification = this.telemetry.notifyStore(priority, tags, memStats);
                 const nudge = this.telemetry.planningNudge('store', { priority });
 
                 // Auto-Gist Publish Phase 8
@@ -1611,8 +1833,6 @@ export class MCPAdapter implements Adapter {
                 nexusEventBus.emit('memory.recall', { query, count: memories.length });
                 this.telemetry.recordRecall(memories.length);
                 this.sessionDNA.recordMemoryRecall();
-                const memStats = this.nexusRef.getMemoryStats();
-                const notification = this.telemetry.notifyRecall(memories.length, query, memStats);
                 const nudge = this.telemetry.planningNudge('recall', { count: memories.length });
                 // Console ASCII UI
                 this.box('🔍 CORTEX MEMORY RECALL', [
@@ -2233,12 +2453,14 @@ export class MCPAdapter implements Adapter {
                     : undefined;
 
                 if (action === 'generate') {
+                    this.telemetry.observeSuccessfulToolCall('nexus_session_dna', { action });
                     // Sync counters from telemetry before generating
+                    const telemetry = this.telemetry.snapshot();
                     this.sessionDNA.syncFromTelemetry({
-                        callCount: (this.telemetry as any).callCount ?? 0,
-                        memoriesStored: (this.telemetry as any).memoriesStored ?? 0,
-                        memoriesRecalled: (this.telemetry as any).memoriesRecalled ?? 0,
-                        tokensOptimized: (this.telemetry as any).tokensOptimized ?? 0,
+                        callCount: telemetry.callCount,
+                        memoriesStored: telemetry.memoriesStored,
+                        memoriesRecalled: telemetry.memoriesRecalled,
+                        tokensOptimized: telemetry.tokensOptimized,
                     });
                     const dna = this.sessionDNA.flush();
                     const formatted = SessionDNAManager.format(dna);
@@ -3233,11 +3455,12 @@ export class MCPAdapter implements Adapter {
     async disconnect(): Promise<void> {
         // Auto-flush Session DNA on disconnect
         try {
+            const telemetry = this.telemetry.snapshot();
             this.sessionDNA.syncFromTelemetry({
-                callCount: (this.telemetry as any).callCount ?? 0,
-                memoriesStored: (this.telemetry as any).memoriesStored ?? 0,
-                memoriesRecalled: (this.telemetry as any).memoriesRecalled ?? 0,
-                tokensOptimized: (this.telemetry as any).tokensOptimized ?? 0,
+                callCount: telemetry.callCount,
+                memoriesStored: telemetry.memoriesStored,
+                memoriesRecalled: telemetry.memoriesRecalled,
+                tokensOptimized: telemetry.tokensOptimized,
             });
             this.sessionDNA.flush();
             console.error('[MCP Adapter] Session DNA flushed');

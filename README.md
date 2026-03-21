@@ -293,9 +293,9 @@ Read the full tiered market map: [Comparison](https://sir-ad.github.io/nexus-pri
 <details>
 <summary><b>🧭 Platform Feature Registry</b></summary>
 
-Generated from shared feature metadata at 2026-03-14T14:43:20.108Z.
+Generated from shared feature metadata at 2026-03-21T02:48:13.064Z.
 
-Inventory Snapshot: 109 skills · 64 workflows · 5 hooks · 3 automations · 7 crews · 139 specialists
+Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 crews · 139 specialists
 
 Control Plane Snapshot: 9 MCP surfaces · 6 client targets · 5 dashboard capabilities · 6 runtime subsystems · 5 release gates
 
@@ -310,11 +310,11 @@ Operator-facing entrypoints and expert control surfaces.
 | nexus_orchestrate | core MCP | Plan, select assets, execute through worktree-backed runtime, and persist truth. | Default raw-prompt execution path. |
 | nexus_plan_execution | planning MCP | Inspect the planner ledger before mutation. | Used when operators want a pre-run ledger. |
 | nexus_recall_memory / nexus_memory_stats / nexus_store_memory | memory MCP | Inspect and persist durable learnings. | Feeds the memory fabric and handoff flow. |
-| nexus_optimize_tokens | optimization MCP | Inspect or override source-aware token budgeting. | Manual/diagnostic surface; orchestration applies budgeting automatically. |
-| nexus_mindkit_check / nexus_ghost_pass / nexus_spawn_workers | safety + runtime MCP | Run governance preflight, pre-read analysis, and explicit swarm control. | Expert or low-level surfaces. |
+| nexus_optimize_tokens | optimization MCP | Generate a token-saving reading plan before broad file inspection. | Mandatory before reading 3+ files from client-visible intent. |
+| nexus_mindkit_check / nexus_ghost_pass / nexus_spawn_workers | safety + runtime MCP | Run governance preflight, refactor pre-flight analysis, and explicit swarm control. | Mindkit and ghost-pass are required lifecycle checks for risky or multi-file mutation. |
 | nexus_memory_export / import / backup / maintain / trace | memory portability MCP | Export, restore, maintain, and inspect local-first memory bundles. | Supports backup/resume and OpenClaw-oriented bridge packs. |
 | nexus_list_skills / workflows / hooks / automations / specialists / crews | catalog MCP | Expose what the runtime can activate. | Used for explicit operator control and diagnostics. |
-| nexus_run_status / nexus_federation_status / nexus_session_dna | runtime truth MCP | Inspect persisted run state, federation status, and handoff DNA. | Used after execution or during operating-layer work. |
+| nexus_run_status / nexus_federation_status / nexus_session_dna | runtime truth MCP | Inspect persisted run state, federation status, and handoff DNA. | Session DNA generation is mandatory before ending a meaningful session. |
 
 </details>
 
@@ -362,7 +362,7 @@ Core architecture layers that shape execution, memory, and visibility.
 | Source-Aware Token Budget | runtime subsystem | Allocates token budget across repo, memory, RAG, patterns, and runtime traces. | Persists selected and dropped context. |
 | Bootstrap Manifest Truth | runtime subsystem | Tracks configured client bootstrap artifacts independently from active heartbeats. | Supports installed vs active truth in the dashboard. |
 | Artifact Selection Audit | runtime subsystem | Explains why skills/workflows/crews/specialists were selected or rejected. | Persists auditable selection rationale. |
-| Bundled assets: 109 skills · 64 workflows · 5 hooks · 3 automations · 7 crews · 139 specialists | runtime subsystem | Summarizes the current bundled runtime inventory. | Detailed lists live in the runtime catalog section and dashboard catalog view. |
+| Bundled assets: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 crews · 139 specialists | runtime subsystem | Summarizes the current bundled runtime inventory. | Detailed lists live in the runtime catalog section and dashboard catalog view. |
 
 </details>
 
@@ -390,7 +390,7 @@ Quality and security checks required before release.
 
 Generated from bundled runtime catalogs plus repo-local overrides via `npm run generate:readme-catalog`.
 
-Inventory Snapshot: 109 skills · 64 workflows · 5 hooks · 3 automations · 7 crews
+Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 crews
 
 <details>
 <summary><b>Skills</b> (109)</summary>
@@ -582,12 +582,16 @@ Inventory Snapshot: 109 skills · 64 workflows · 5 hooks · 3 automations · 7 
 </details>
 
 <details>
-<summary><b>Hooks</b> (5)</summary>
+<summary><b>Hooks</b> (9)</summary>
 
 | Name | Type/Scope | Purpose | Trigger / When used |
 | --- | --- | --- | --- |
+| before-compaction-flush | read · base | Flush memory prefrontal to SQLite before context compaction. | before-compaction · context budget nearing limit |
+| before-mutate-guard | read · base | Local checkpoint before bounded file mutation. | before-mutate |
 | before-verify-approval | orchestrate · base | Attach approval-loop workflows before verification for domain work. | before-verify · verification checkpoint |
+| failure-summary | read · base | Local failure checkpoint for recovery notes and retry scope. | run.failed |
 | memory-shield-escalation | read · base | Flag stored memories for shield review when policy risk is detected. | memory.stored · high priority memory stored |
+| memory-stored-review | read · base | Local review hook for important stored memories. | memory.stored |
 | promotion-audit | read · base | Require a security-oriented audit note on promotion approval. | promotion.approved · promotion approved |
 | retry-narrow-scope | orchestrate · base | Focus retries on the failing surface after an error cluster. | retry · retry requested |
 | run-created-brief | read · base | Attach planning context and default orchestration on run creation. | run.created · run created |
@@ -595,12 +599,14 @@ Inventory Snapshot: 109 skills · 64 workflows · 5 hooks · 3 automations · 7 
 </details>
 
 <details>
-<summary><b>Automations</b> (3)</summary>
+<summary><b>Automations</b> (5)</summary>
 
 | Name | Type/Scope | Purpose | Trigger / When used |
 | --- | --- | --- | --- |
+| failure-followup | event · base | Queue a bounded retry follow-up after a failed run. | event:run.failed |
 | failure-recovery-automation | event · base | Queue retry and review workflows after a failed run. | event:run.failed |
 | memory-governance-automation | event · base | Attach memory and security review after memory storage events. | event:memory.stored |
+| session-close-followup | event · base | Queue a bounded approval follow-up after a verified run. | event:run.verified |
 | verified-followup-automation | event · base | Queue a bounded approval workflow after a verified run. | event:run.verified |
 
 </details>
@@ -626,6 +632,17 @@ Inventory Snapshot: 109 skills · 64 workflows · 5 hooks · 3 automations · 7 
 ## 📜 Release History
 
 <details open>
+<summary><b>v3.18.0</b> · 2026-03-21 · Lifecycle hardening across MCP, bootstrap artifacts, and release surfaces</summary>
+
+- **Lifecycle checklists and footers**: `nexus_session_bootstrap` now appends a mandatory protocol checklist, and `nexus_orchestrate` now appends a mandatory remaining-steps footer.
+- **Lifecycle warnings**: MCP responses now warn when 15+ post-orchestrate tool calls happen without `nexus_store_memory`, and when Nexus-visible 3+ file intent appears without `nexus_optimize_tokens`.
+- **Shared instruction closure**: `CLAUDE.md`, `AGENTS.md`, client bootstrap artifacts, and the feature registry now agree that `nexus_orchestrate` does not replace during-work or end-of-session lifecycle steps.
+- **Release-surface alignment**: Protocol, integrations, knowledge-base, README, and generated bootstrap surfaces now use the same mandatory lifecycle wording.
+
+Full notes: [releases/v3.18.0.md](./releases/v3.18.0.md) · Full history: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
 <summary><b>v3.17.0</b> · 2026-03-20 · Agent adoption hardening, memory readability, atlas code intelligence peer</summary>
 
 - **Hard bootstrap enforcement**: Non-bootstrap MCP tool calls return a structured `blocked` response with next-step guidance instead of a soft warning agents ignored. Read-only tools remain exempt.

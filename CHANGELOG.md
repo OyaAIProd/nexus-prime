@@ -2,7 +2,28 @@
 
 All notable changes to Nexus Prime are documented here.
 
-Release Index: [v3.17.0](#v3170--2026-03-20) · [v3.16.0](#v3160--2026-03-20) · [v3.15.0](#v3150--2026-03-16) · [v3.14.0](#v3140--2026-03-16) · [v3.13.0](#v3130--2026-03-15) · [v3.12.1 release note](./releases/v3.12.1.md)
+Release Index: [v3.18.0](#v3180--2026-03-21) · [v3.17.0](#v3170--2026-03-20) · [v3.16.0](#v3160--2026-03-20) · [v3.15.0](#v3150--2026-03-16) · [v3.14.0](#v3140--2026-03-16) · [v3.12.1 release note](./releases/v3.12.1.md)
+
+<details open>
+<summary><b>v3.18.0</b> · 2026-03-21 · Lifecycle hardening across MCP, bootstrap artifacts, and release surfaces</summary>
+
+### Added
+- **Lifecycle protocol checklist**: `nexus_session_bootstrap` responses now append a mandatory checklist covering bootstrap, orchestration, token optimization, governance, memory storage, and session DNA.
+- **Orchestrate footer**: `nexus_orchestrate` responses now append a mandatory remaining-steps footer so clients are told what lifecycle work still belongs to them after orchestration.
+- **Lifecycle response warnings**: MCP responses now prepend warnings when 15+ post-orchestrate tool calls happen without `nexus_store_memory`, and when Nexus-visible file intent reaches 3+ files without `nexus_optimize_tokens`.
+- **Lifecycle phase tracking**: Session telemetry now tracks bootstrap, orchestration, working, and closing phases plus explicit lifecycle-tool usage.
+
+### Changed
+- **Planning nudges**: Replaced XML-wrapped `<nexus-next-step>` tags with plain-text `MANDATORY NEXT STEPS` blocks that clients can read directly.
+- **Tool descriptions**: `nexus_optimize_tokens`, `nexus_mindkit_check`, `nexus_store_memory`, `nexus_session_dna`, and `nexus_ghost_pass` now use mandatory lifecycle wording in the MCP tool list.
+- **Bootstrap instructions**: `CLAUDE.md`, `AGENTS.md`, client bootstrap bundles, and Codex managed blocks now state explicitly that `nexus_orchestrate` does not replace during-work or end-of-session lifecycle steps.
+- **Public lifecycle wording**: Protocol docs, integrations docs, the knowledge base, feature registry, README release surface, and generated bootstrap artifacts now align on the mandatory lifecycle.
+
+### Fixed
+- **Client ambiguity**: Removed the “these two calls handle everything automatically” implication from tracked instruction surfaces so external agents are no longer told to skip `nexus_optimize_tokens`, `nexus_mindkit_check`, `nexus_store_memory`, or `nexus_session_dna`.
+- **Heuristic honesty**: Optimize-token warnings now describe file-intent tracking as best-effort from tool arguments instead of implying Nexus can observe arbitrary shell or editor file reads.
+
+</details>
 
 <details open>
 <summary><b>v3.17.0</b> · 2026-03-20 · Agent adoption hardening, memory readability, atlas code intelligence peer</summary>

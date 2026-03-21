@@ -5,7 +5,7 @@ For the concise agent-facing instructions, see [CLAUDE.md](../CLAUDE.md).
 
 ## Context Order
 
-Recommended working sequence:
+MANDATORY working sequence unless the operator explicitly asks for low-level control:
 
 ```
 nexus_session_bootstrap(goal="<task>", files=[...])
@@ -14,8 +14,11 @@ nexus_memory_stats()
 nexus_plan_execution(goal="<task>", files=[...]) only when you want the ledger before execution
 nexus_list_skills(), nexus_list_workflows(), nexus_list_specialists(), nexus_list_crews() when catalog awareness will narrow execution
 nexus_list_hooks() and nexus_list_automations() only for operating-layer behavior, retries, continuations, or recurring execution
-nexus_optimize_tokens(...) before reading 3+ files when you need to inspect or override the runtime decision
-nexus_mindkit_check(...) before risky mutation
+nexus_optimize_tokens(...) before reading 3+ files
+nexus_mindkit_check(...) before any file modification or destructive operation
+nexus_ghost_pass(...) before refactoring 3+ files
+nexus_store_memory(...) after significant findings
+nexus_session_dna(action="generate") before ending the session
 ```
 
 ## Subsystem Triggers
@@ -50,29 +53,50 @@ Each worker writes `.agent/runtime/context.json` and `.agent/runtime/context.md`
 ```
 nexus_session_bootstrap(goal="<today's task>", files=[...])
 ```
-For non-trivial work, call `nexus_orchestrate(...)` next, or `nexus_plan_execution(...)` first if you explicitly want to inspect the ledger before running.
+For non-trivial work, you MUST call `nexus_orchestrate(...)` next, or `nexus_plan_execution(...)` first only if you explicitly want to inspect the ledger before running.
 
 ### During Work
 
 ```
+nexus_optimize_tokens(
+  goal="<what you're doing>",
+  files=["src/foo.ts", "src/bar.ts", "..."]
+)
+nexus_mindkit_check(
+  action="<what you're about to do>",
+  tokenCount=<estimate>,
+  filesToModify=["path/to/file"],
+  isDestructive=false
+)
+nexus_ghost_pass(
+  goal="<what you're changing>",
+  files=["path/to/file", "..."]
+)
 nexus_store_memory(
   content="<specific durable learning>",
   priority=0.8,
   tags=["#bug", "#architecture", "#decision"]
 )
 ```
+Required during-work rules:
+- Call `nexus_optimize_tokens` before reading 3+ files.
+- Call `nexus_mindkit_check` before any file modification or destructive operation.
+- Call `nexus_ghost_pass` before refactoring 3+ files.
+- Call `nexus_store_memory` after significant findings.
+
 Good memories include root causes, architecture decisions, reuse patterns, failure modes, and file maps.
 
 ### End
 
 ```
-nexus_session_dna(action="generate")
 nexus_store_memory(
   content="Session YYYY-MM-DD: <what changed, why, and what remains>",
   priority=0.85,
   tags=["#session-summary"]
 )
+nexus_session_dna(action="generate")
 ```
+Both steps are REQUIRED. `nexus_orchestrate` does NOT replace them.
 
 ### Before Reading Files
 
@@ -82,7 +106,7 @@ nexus_optimize_tokens(
   files=["src/foo.ts", "src/bar.ts", "..."]
 )
 ```
-Use this for 3+ files. Follow the optimizer output. Do not bulk-read the repo anyway.
+Use this for 3+ files. This is mandatory client protocol, not an optional inspection aid. Follow the optimizer output. Do not bulk-read the repo anyway.
 
 ### Before Risky Operations
 
@@ -94,7 +118,7 @@ nexus_mindkit_check(
   isDestructive=false
 )
 ```
-If `passed` is false, stop and resolve the violation first.
+If `passed` is false, stop and resolve the violation first. Do not modify files until it passes.
 
 ## Operating Recipes
 
@@ -107,8 +131,12 @@ If `passed` is false, stop and resolve the violation first.
 ## Anti-Patterns
 
 - Do not skip `nexus_session_bootstrap` or jump straight into manual repo exploration.
+- Do not treat `nexus_orchestrate` as a replacement for `nexus_optimize_tokens`, `nexus_mindkit_check`, `nexus_store_memory`, or `nexus_session_dna`.
 - Use the orchestrator to automate exploration when possible.
-- Avoid reading 10+ files before calling `nexus_optimize_tokens`.
+- Do not read 3+ files before calling `nexus_optimize_tokens`.
+- Do not modify files before `nexus_mindkit_check`.
+- Do not end a session without `nexus_store_memory` and `nexus_session_dna(action="generate")`.
+- Treat lifecycle warnings from the MCP adapter as enforcement reminders, not optional tips.
 - Do not treat populated catalogs as proof that a subsystem was used in this runtime.
 - Do not use hooks or automations as generic replacements for planning.
 - Do not store vague memories like "fixed a bug"; store the exact cause and effect.

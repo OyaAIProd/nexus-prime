@@ -383,7 +383,10 @@ nexus-prime setup all</code></pre>
                     <li>Confirm `nexus-prime-mcp` appears in connected servers.</li>
                     <li>Use <code>nexus-prime bootstrap status</code> if you want to inspect the persisted bootstrap manifest across clients.</li>
                     <li>Call <code>nexus_session_bootstrap</code> with a real task to verify the bridge and the default execution path.</li>
-                    <li>For non-trivial work, follow with <code>nexus_orchestrate</code> instead of manually chaining low-level tools.</li>
+                    <li>For non-trivial work, call <code>nexus_orchestrate</code> next instead of manually chaining low-level tools.</li>
+                    <li>Before reading 3+ files, call <code>nexus_optimize_tokens</code>.</li>
+                    <li>Before any file modification, call <code>nexus_mindkit_check</code>.</li>
+                    <li>Store key findings with <code>nexus_store_memory</code> and close with <code>nexus_session_dna(action="generate")</code>.</li>
                 </ol>
             </article>
 

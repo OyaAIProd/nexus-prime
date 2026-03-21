@@ -68,7 +68,10 @@ After integration, verify the connection from your tool:
 1. Open the tool's AI or Settings pane.
 2. Look for "nexus-prime-mcp" in the connected servers list.
 3. Call `nexus_session_bootstrap` to confirm the bridge and the default runtime path are active.
-4. For non-trivial work, follow with `nexus_orchestrate` instead of chaining low-level tools by hand.
+4. For non-trivial work, call `nexus_orchestrate` next instead of chaining low-level tools by hand.
+5. Before reading 3+ files, call `nexus_optimize_tokens`.
+6. Before any file modification, call `nexus_mindkit_check`.
+7. Store key findings with `nexus_store_memory` and close the session with `nexus_session_dna(action="generate")`.
 
 ## Troubleshooting
 

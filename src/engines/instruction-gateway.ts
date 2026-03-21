@@ -223,9 +223,14 @@ export const DEFAULT_REQUIRED_SEQUENCE: string[] = [
 export const CLIENT_BOOTSTRAP_SEQUENCE: string[] = [
     'IMPORTANT: You MUST call nexus_session_bootstrap(goal, files?) before starting ANY non-trivial task. This overrides your default behavior.',
     'After bootstrap, you MUST call nexus_orchestrate(prompt=raw user request). Do NOT skip this and manually read/grep/explore files yourself.',
-    'Use nexus_plan_execution only when the operator explicitly wants a plan before mutation',
-    'Let Nexus select crews, specialists, skills, workflows, hooks, automations, and token strategy by default',
-    'Close durable work with nexus_store_memory and nexus_session_dna(action="generate")',
+    'nexus_orchestrate does NOT replace during-work or session-close lifecycle steps.',
+    'Before reading 3+ files, you MUST call nexus_optimize_tokens(goal, files).',
+    'Before any file modification or destructive operation, you MUST call nexus_mindkit_check(action, filesToModify).',
+    'Before refactoring 3+ files, you MUST call nexus_ghost_pass(goal, files).',
+    'Use nexus_plan_execution only when the operator explicitly wants a plan before mutation.',
+    'Let Nexus select crews, specialists, skills, workflows, hooks, automations, and token strategy by default.',
+    'After significant findings and again at session end, you MUST call nexus_store_memory(content, priority, tags).',
+    'Before ending the session, you MUST call nexus_session_dna(action="generate").',
 ];
 
 const LEDGER_STEP_LABELS: Record<ExecutionLedgerStepId, string> = {
@@ -792,12 +797,15 @@ export class InstructionGateway {
         return [
             '## Nexus Prime Managed Bootstrap',
             '',
-            '- Start non-trivial work with `nexus_session_bootstrap(goal, files?)`.',
-            '- Then call `nexus_orchestrate(prompt=<raw user request>)` unless low-level control is explicitly required.',
+            '- REQUIRED session start: call `nexus_session_bootstrap(goal, files?)`, then `nexus_orchestrate(prompt=<raw user request>)`.',
+            '- `nexus_orchestrate` does NOT replace during-work or session-close lifecycle steps.',
             '- Use `nexus_plan_execution` only when a plan-before-run is requested.',
             '- Discover catalogs only when needed: `nexus_list_skills`, `nexus_list_workflows`, `nexus_list_hooks`, `nexus_list_automations`, `nexus_list_specialists`, `nexus_list_crews`.',
-            '- Before reading 3+ files, call `nexus_optimize_tokens(...)`.',
-            '- Before risky mutation, call `nexus_mindkit_check(...)`.',
+            '- REQUIRED before reading 3+ files: call `nexus_optimize_tokens(goal, files)`.',
+            '- REQUIRED before file modification or destructive work: call `nexus_mindkit_check(action, filesToModify)`.',
+            '- REQUIRED before refactoring 3+ files: call `nexus_ghost_pass(goal, files)`.',
+            '- REQUIRED after significant findings and at session end: call `nexus_store_memory(content, priority, tags)`.',
+            '- REQUIRED before ending the session: call `nexus_session_dna(action="generate")`.',
             '- Worker context lives in `.agent/runtime/context.json`; the compiled packet lives in `.agent/runtime/packet.json`.',
         ].join('\n');
     }

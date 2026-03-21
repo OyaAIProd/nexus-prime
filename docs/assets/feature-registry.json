@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-03-14T14:43:20.108Z",
+  "generatedAt": "2026-03-21T02:48:13.064Z",
   "generatedFor": "nexus-prime",
   "counts": {
     "mcpSurfaces": 9,
@@ -9,8 +9,8 @@
     "releaseGates": 5,
     "skills": 109,
     "workflows": 64,
-    "hooks": 5,
-    "automations": 3,
+    "hooks": 9,
+    "automations": 5,
     "crews": 7,
     "specialists": 139
   },
@@ -47,14 +47,14 @@
         {
           "name": "nexus_optimize_tokens",
           "surface": "optimization MCP",
-          "purpose": "Inspect or override source-aware token budgeting.",
-          "notes": "Manual/diagnostic surface; orchestration applies budgeting automatically."
+          "purpose": "Generate a token-saving reading plan before broad file inspection.",
+          "notes": "Mandatory before reading 3+ files from client-visible intent."
         },
         {
           "name": "nexus_mindkit_check / nexus_ghost_pass / nexus_spawn_workers",
           "surface": "safety + runtime MCP",
-          "purpose": "Run governance preflight, pre-read analysis, and explicit swarm control.",
-          "notes": "Expert or low-level surfaces."
+          "purpose": "Run governance preflight, refactor pre-flight analysis, and explicit swarm control.",
+          "notes": "Mindkit and ghost-pass are required lifecycle checks for risky or multi-file mutation."
         },
         {
           "name": "nexus_memory_export / import / backup / maintain / trace",
@@ -72,7 +72,7 @@
           "name": "nexus_run_status / nexus_federation_status / nexus_session_dna",
           "surface": "runtime truth MCP",
           "purpose": "Inspect persisted run state, federation status, and handoff DNA.",
-          "notes": "Used after execution or during operating-layer work."
+          "notes": "Session DNA generation is mandatory before ending a meaningful session."
         }
       ]
     },
@@ -198,7 +198,7 @@
           "notes": "Persists auditable selection rationale."
         },
         {
-          "name": "Bundled assets: 109 skills · 64 workflows · 5 hooks · 3 automations · 7 crews · 139 specialists",
+          "name": "Bundled assets: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 crews · 139 specialists",
           "surface": "runtime subsystem",
           "purpose": "Summarizes the current bundled runtime inventory.",
           "notes": "Detailed lists live in the runtime catalog section and dashboard catalog view."

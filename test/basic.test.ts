@@ -329,8 +329,10 @@ async function test() {
 
     const mcpAdapter = new MCPAdapter() as any;
     mcpAdapter.setNexusRef(nexus);
-    const autonomousTools = mcpAdapter.debugListTools('autonomous').map((tool: any) => tool.name);
-    const fullTools = mcpAdapter.debugListTools('full').map((tool: any) => tool.name);
+    const autonomousDefinitions = mcpAdapter.debugListTools('autonomous');
+    const fullDefinitions = mcpAdapter.debugListTools('full');
+    const autonomousTools = autonomousDefinitions.map((tool: any) => tool.name);
+    const fullTools = fullDefinitions.map((tool: any) => tool.name);
     assert.deepStrictEqual(
       autonomousTools.slice(0, 3),
       ['nexus_session_bootstrap', 'nexus_orchestrate', 'nexus_plan_execution'],
@@ -349,6 +351,26 @@ async function test() {
     assert.ok(fullTools.includes('nexus_memory_trace'), 'full MCP profile should expose memory trace inspection');
     assert.strictEqual(fullTools[0], 'nexus_session_bootstrap', 'full MCP profile should still prioritize bootstrap first');
     assert.strictEqual(fullTools[1], 'nexus_orchestrate', 'full MCP profile should still prioritize orchestrate second');
+    assert.ok(
+      autonomousDefinitions.find((tool: any) => tool.name === 'nexus_optimize_tokens')?.description.includes('MANDATORY before reading 3+ files'),
+      'optimize tool description should use mandatory lifecycle language'
+    );
+    assert.ok(
+      autonomousDefinitions.find((tool: any) => tool.name === 'nexus_mindkit_check')?.description.includes('MANDATORY before any file modification'),
+      'mindkit tool description should use mandatory lifecycle language'
+    );
+    assert.ok(
+      autonomousDefinitions.find((tool: any) => tool.name === 'nexus_store_memory')?.description.includes('MANDATORY after significant findings'),
+      'store-memory tool description should use mandatory lifecycle language'
+    );
+    assert.ok(
+      autonomousDefinitions.find((tool: any) => tool.name === 'nexus_session_dna')?.description.includes('MANDATORY at session end'),
+      'session-dna tool description should use mandatory lifecycle language'
+    );
+    assert.ok(
+      autonomousDefinitions.find((tool: any) => tool.name === 'nexus_ghost_pass')?.description.includes('MANDATORY before refactoring 3+ files'),
+      'ghost-pass tool description should use mandatory lifecycle language'
+    );
 
     const bootstrapResponse = await mcpAdapter.handleToolCall({
       params: {
@@ -362,6 +384,7 @@ async function test() {
     const bootstrapText = bootstrapResponse.content[0].text;
     assert.ok(bootstrapText.includes('Session bootstrap ready.'), 'bootstrap tool should render a summary-first status line');
     assert.ok(bootstrapText.includes('Recommended next step: nexus_orchestrate'), 'bootstrap tool should keep the next action scannable');
+    assert.ok(bootstrapText.includes('PROTOCOL CHECKLIST (follow every step):'), 'bootstrap tool should append the mandatory lifecycle checklist');
     const bootstrapPayload = extractJsonBlock(bootstrapText);
     assert.strictEqual(bootstrapPayload.recommendedNextStep, 'nexus_orchestrate', 'bootstrap tool should recommend orchestration as the next step');
     assert.strictEqual(bootstrapPayload.tokenOptimization.required, true, 'bootstrap tool should report token optimization for 3+ files');
@@ -381,6 +404,28 @@ async function test() {
     assert.strictEqual(runtime.getUsageSnapshot().clientInstructionStatus?.toolProfile, 'autonomous', 'runtime snapshot should record the active autonomous tool profile');
     assert.ok(runtime.getUsageSnapshot().taskGraph?.phases?.length, 'runtime snapshot should persist the task graph preview');
     assert.ok(runtime.getUsageSnapshot().workerPlan?.totalWorkers, 'runtime snapshot should persist the worker plan preview');
+
+    const orchestrateResponse = await mcpAdapter.handleToolCall({
+      params: {
+        name: 'nexus_orchestrate',
+        arguments: {
+          prompt: 'Summarize the current fixture repo runtime posture without changing package.json semantics',
+          files: ['README.md', 'package.json', 'src/app.ts'],
+        }
+      }
+    });
+    const orchestrateText = orchestrateResponse.content[0].text;
+    assert.ok(orchestrateText.includes('REMAINING PROTOCOL STEPS (MANDATORY):'), 'orchestrate tool should append the mandatory lifecycle footer');
+
+    const lifecycleProbe = { content: [{ type: 'text', text: 'Lifecycle probe output' }] };
+    mcpAdapter.telemetry.observeSuccessfulToolCall('nexus_orchestrate', { files: ['README.md', 'package.json', 'src/app.ts'] });
+    for (let i = 0; i < 15; i += 1) {
+      mcpAdapter.telemetry.recordCall();
+    }
+    const decoratedProbe = mcpAdapter.decorateLifecycleResponse('nexus_memory_stats', lifecycleProbe);
+    assert.ok(decoratedProbe.content[0].text.includes('LIFECYCLE WARNING:'), 'response decoration should prepend lifecycle warnings');
+    assert.ok(decoratedProbe.content[0].text.includes('best-effort file intent from tool arguments'), 'optimize warning should describe the heuristic file-intent scope truthfully');
+    assert.ok(decoratedProbe.content[0].text.includes('nexus_store_memory'), 'store-memory warning should remind the agent to persist findings');
 
     const exportedMemory = await mcpAdapter.handleToolCall({
       params: {
@@ -440,10 +485,14 @@ async function test() {
     const setupEnv = { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome };
     fs.writeFileSync(path.join(repoRoot, 'AGENTS.md'), '# Project Rules\n\n- Keep existing project guidance.\n', 'utf8');
     execSync(`node "${cliPath}" setup codex`, { cwd: repoRoot, env: setupEnv, stdio: 'ignore' });
+    execSync(`node "${cliPath}" setup claude`, { cwd: repoRoot, env: setupEnv, stdio: 'ignore' });
+    execSync(`node "${cliPath}" setup opencode`, { cwd: repoRoot, env: setupEnv, stdio: 'ignore' });
     execSync(`node "${cliPath}" setup cursor`, { cwd: repoRoot, env: setupEnv, stdio: 'ignore' });
     execSync(`node "${cliPath}" setup windsurf`, { cwd: repoRoot, env: setupEnv, stdio: 'ignore' });
     execSync(`node "${cliPath}" setup antigravity`, { cwd: repoRoot, env: setupEnv, stdio: 'ignore' });
     const codexAgentsPath = path.join(repoRoot, 'AGENTS.md');
+    const claudeBootstrapPath = path.join(repoRoot, '.agent', 'client-bootstrap', 'claude-code.md');
+    const opencodeBootstrapPath = path.join(repoRoot, '.agent', 'client-bootstrap', 'opencode.md');
     const cursorRulePath = path.join(repoRoot, '.cursor', 'rules', 'nexus-prime.mdc');
     const windsurfRulePath = path.join(repoRoot, '.windsurfrules');
     const antigravitySkillDir = path.join(fakeHome, '.antigravity', 'skills', 'nexus-prime');
@@ -451,24 +500,41 @@ async function test() {
     assert.ok(codexAgents.includes('# Project Rules'), 'Codex setup should preserve existing AGENTS guidance');
     assert.ok(codexAgents.includes('nexus-prime:codex-bootstrap:start'), 'Codex setup should write a managed bootstrap block');
     assert.ok(codexAgents.includes('nexus_session_bootstrap'), 'Codex setup should teach the bootstrap-first sequence in AGENTS.md');
+    assert.ok(codexAgents.includes('nexus_orchestrate` does NOT replace during-work or session-close lifecycle steps'), 'Codex managed block should teach the mandatory lifecycle beyond orchestration');
     execSync(`node "${cliPath}" setup codex`, { cwd: repoRoot, env: setupEnv, stdio: 'ignore' });
     const codexAgentsSecondPass = fs.readFileSync(codexAgentsPath, 'utf8');
     assert.strictEqual((codexAgentsSecondPass.match(/nexus-prime:codex-bootstrap:start/g) || []).length, 1, 'Codex setup should update its managed AGENTS block instead of duplicating it');
+    assert.ok(fs.existsSync(path.join(repoRoot, '.mcp.json')), 'Claude setup should write a workspace MCP config');
+    assert.ok(fs.existsSync(path.join(fakeHome, '.config', 'opencode', 'opencode.json')), 'Opencode setup should write a home-scoped MCP config');
+    assert.ok(fs.existsSync(claudeBootstrapPath), 'Claude setup should write a project-local bootstrap note');
+    assert.ok(fs.existsSync(opencodeBootstrapPath), 'Opencode setup should write a project-local bootstrap note');
     assert.ok(fs.existsSync(path.join(fakeHome, '.cursor', 'mcp.json')), 'Cursor setup should write an MCP config');
     assert.ok(fs.existsSync(path.join(fakeHome, '.windsurf', 'mcp.json')), 'Windsurf setup should write an MCP config');
     assert.ok(fs.existsSync(path.join(fakeHome, '.antigravity', 'mcp.json')), 'Antigravity setup should write an MCP config');
     assert.ok(fs.existsSync(cursorRulePath), 'Cursor setup should write a project-local .mdc rule');
     assert.ok(fs.existsSync(windsurfRulePath), 'Windsurf setup should write a project-local .windsurfrules file');
     assert.ok(fs.existsSync(antigravitySkillDir), 'Antigravity setup should write a home-scoped skill bundle');
+    const claudeBootstrap = fs.readFileSync(claudeBootstrapPath, 'utf8');
+    const opencodeBootstrap = fs.readFileSync(opencodeBootstrapPath, 'utf8');
+    assert.ok(claudeBootstrap.includes('nexus_orchestrate does NOT replace during-work or session-close lifecycle steps'), 'Claude bootstrap note should carry the mandatory lifecycle wording');
+    assert.ok(opencodeBootstrap.includes('nexus_orchestrate does NOT replace during-work or session-close lifecycle steps'), 'Opencode bootstrap note should carry the mandatory lifecycle wording');
+    assert.ok(!claudeBootstrap.includes('These two calls handle memory recovery, skill selection, token optimization, and execution planning automatically.'), 'Claude bootstrap note should remove the old two-calls-do-everything sentence');
+    assert.ok(!opencodeBootstrap.includes('These two calls handle memory recovery, skill selection, token optimization, and execution planning automatically.'), 'Opencode bootstrap note should remove the old two-calls-do-everything sentence');
     assert.ok(fs.readFileSync(cursorRulePath, 'utf8').includes('nexus_session_bootstrap'), 'Cursor rule file should teach the bootstrap-first sequence');
+    assert.ok(fs.readFileSync(cursorRulePath, 'utf8').includes('nexus_store_memory'), 'Cursor rule file should teach the session-close lifecycle');
     assert.ok(fs.readFileSync(windsurfRulePath, 'utf8').includes('nexus_orchestrate'), 'Windsurf rule file should teach the orchestrate path');
+    assert.ok(fs.readFileSync(windsurfRulePath, 'utf8').includes('nexus_session_dna(action="generate")'), 'Windsurf rule file should teach the session-close lifecycle');
     const antigravitySkillFiles = fs.readdirSync(antigravitySkillDir);
     assert.ok(antigravitySkillFiles.length > 0, 'Antigravity setup should emit at least one SKILL.md file');
+    const antigravityCombined = antigravitySkillFiles
+      .map((fileName) => fs.readFileSync(path.join(antigravitySkillDir, fileName), 'utf8'))
+      .join('\n');
     antigravitySkillFiles.forEach((fileName) => {
       const content = fs.readFileSync(path.join(antigravitySkillDir, fileName), 'utf8');
       assert.ok(content.includes('nexus_session_bootstrap'), 'Antigravity skill files should teach the bootstrap-first sequence');
       assert.ok(content.length <= 6500, 'Antigravity setup should keep each skill artifact below the compact size budget');
     });
+    assert.ok(antigravityCombined.includes('nexus_orchestrate does NOT replace during-work or session-close lifecycle steps'), 'Antigravity skill bundle should inherit the mandatory lifecycle wording');
     const statusOutput = execSync(`node "${cliPath}" setup status`, { cwd: repoRoot, env: setupEnv, encoding: 'utf8' });
     assert.ok(statusOutput.includes('Codex: ✅'), 'setup status should report Codex as installed');
     assert.ok(statusOutput.includes('Cursor: ✅'), 'setup status should report Cursor as installed');
