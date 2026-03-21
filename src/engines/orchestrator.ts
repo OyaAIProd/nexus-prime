@@ -1225,10 +1225,8 @@ export class OrchestratorEngine {
     let entries;
     try {
       entries = fs.readdirSync(root, { withFileTypes: true });
-    } catch (e: any) {
-      if (e.code === 'EACCES') {
-        throw new Error(`EACCES Permission Denied: Nexus Prime scanner requires elevated permissions to access '${root}'. Please run the daemon/installation with 'sudo' or grant Full Disk Access.`);
-      }
+    } catch {
+      // Gracefully skip inaccessible directories (EACCES, EPERM, etc.)
       return seen;
     }
     for (const entry of entries) {
