@@ -190,11 +190,11 @@ function isAtlasDetected(): boolean {
     try {
         const configPath = join(homedir(), '.goatlas', 'config.json');
         if (existsSync(configPath)) return true;
-    } catch {}
+    } catch { /* ignore */ }
     try {
         execSync('which goatlas', { stdio: 'ignore', timeout: 2000 });
         return true;
-    } catch {}
+    } catch { /* ignore */ }
     return false;
 }
 

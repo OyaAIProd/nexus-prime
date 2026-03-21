@@ -143,7 +143,7 @@ export class ContextCompressor {
         }
 
         // Structural brackets
-        if (/^[{}()\[\]]+$/.test(trimmed)) {
+        if (/^[{}()[\]]+$/.test(trimmed)) {
             score += 1.5;
         }
 
