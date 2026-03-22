@@ -17,6 +17,8 @@ import { randomUUID } from 'crypto';
 import { Embedder, HyperbolicMath } from './embedder.js';
 import { GraphMemoryEngine } from './graph-memory.js';
 import { podNetwork } from './pod-network.js';
+import { nexusEventBus } from './event-bus.js';
+import { SECRET_PATTERNS } from './security-shield.js';
 import {
   createEmptyReconciliationSummary,
   createMemoryProvenance,
@@ -51,6 +53,9 @@ export interface MemoryItem {
   entropy: number; // 0.0 (fresh) to 1.0 (dead/noise)
   mass: number;    // Weight of importance (gravity)
   trust: number;
+  qmdRecency?: number;
+  qmdFrequency?: number;
+  qmdRelevance?: number;
   expiresAt?: number;
   supersedes?: string;
   supersededBy?: string;
@@ -158,6 +163,7 @@ export interface MemoryConfig {
   decayRate?: number;
   priorityRetention?: number;
   flushEntropyThreshold?: number;
+  recallCandidateLimit?: number;
 }
 
 export interface MemoryAuditResult {
@@ -242,6 +248,11 @@ export class MemoryEngine {
   private lastReconciliationSummary: MemoryReconciliationSummary = createEmptyReconciliationSummary();
 
   private config: Required<MemoryConfig>;
+  private readonly incrementAccessStmt: Database.Statement;
+  private readonly incrementAccessTxn: (ids: string[]) => void;
+  private vaultDirty = new Set<string>();
+  private vaultFlushTimer?: NodeJS.Timeout;
+  private vaultNeedsFullSync = false;
 
   // In-RAM working tiers (flushed to DB periodically)
   private prefrontal: MemoryItem[] = [];
@@ -260,6 +271,7 @@ export class MemoryEngine {
       decayRate: config?.decayRate ?? 0.05,
       priorityRetention: config?.priorityRetention ?? 0.95,
       flushEntropyThreshold: config?.flushEntropyThreshold ?? 0.9,
+      recallCandidateLimit: Math.max(config?.recallCandidateLimit ?? 200, 1),
     };
     
     const dbDir = path.join(os.homedir(), '.nexus-prime');
@@ -273,7 +285,7 @@ export class MemoryEngine {
       this.graphMirror = undefined;
     }
     this.sessionId = randomUUID();
-    this.embedder = new Embedder();
+    this.embedder = new Embedder(this.db);
     this.vaultDir = path.join(dbDir, 'memory-vault');
     this.vaultItemsDir = path.join(this.vaultDir, 'items');
     this.vaultExportsDir = path.join(this.vaultDir, 'exports');
@@ -289,6 +301,14 @@ export class MemoryEngine {
     fs.mkdirSync(this.vaultSessionNotesDir, { recursive: true });
 
     this.initSchema();
+    this.incrementAccessStmt = this.db.prepare(
+      'UPDATE memories SET access_count = access_count + 1 WHERE id = ?'
+    );
+    this.incrementAccessTxn = this.db.transaction((ids: string[]) => {
+      for (const id of ids) {
+        this.incrementAccessStmt.run(id);
+      }
+    });
     this.load();
   }
 
@@ -297,6 +317,24 @@ export class MemoryEngine {
   // ─────────────────────────────────────────────────────────────────────────
 
   private initSchema(): void {
+    this.db.pragma('journal_mode = WAL');
+    this.db.pragma('synchronous = NORMAL');
+    this.db.pragma('cache_size = -32000');
+    this.db.pragma('foreign_keys = ON');
+    this.db.pragma('temp_store = MEMORY');
+
+    this.runMigrations();
+  }
+
+  private runMigrations(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_version (
+        version INTEGER PRIMARY KEY,
+        applied_at INTEGER NOT NULL,
+        description TEXT
+      );
+    `);
+
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memories (
         id          TEXT PRIMARY KEY,
@@ -315,6 +353,9 @@ export class MemoryEngine {
         entropy     REAL NOT NULL DEFAULT 0.0,
         mass        REAL NOT NULL DEFAULT 1.0,
         trust       REAL NOT NULL DEFAULT 0.6,
+        qmd_recency REAL DEFAULT NULL,
+        qmd_frequency REAL DEFAULT NULL,
+        qmd_relevance REAL DEFAULT NULL,
         provenance_json TEXT NOT NULL DEFAULT '{}',
         expires_at  INTEGER,
         supersedes  TEXT,
@@ -350,6 +391,15 @@ export class MemoryEngine {
     if (!columns.includes('trust')) {
       this.db.exec("ALTER TABLE memories ADD COLUMN trust REAL NOT NULL DEFAULT 0.6");
     }
+    if (!columns.includes('qmd_recency')) {
+      this.db.exec('ALTER TABLE memories ADD COLUMN qmd_recency REAL DEFAULT NULL');
+    }
+    if (!columns.includes('qmd_frequency')) {
+      this.db.exec('ALTER TABLE memories ADD COLUMN qmd_frequency REAL DEFAULT NULL');
+    }
+    if (!columns.includes('qmd_relevance')) {
+      this.db.exec('ALTER TABLE memories ADD COLUMN qmd_relevance REAL DEFAULT NULL');
+    }
     if (!columns.includes('provenance_json')) {
       this.db.exec("ALTER TABLE memories ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '{}'");
     }
@@ -377,6 +427,9 @@ export class MemoryEngine {
       CREATE INDEX IF NOT EXISTS idx_memories_tier      ON memories(tier);
       CREATE INDEX IF NOT EXISTS idx_memories_priority  ON memories(priority DESC);
       CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_memories_state_scope ON memories(state, scope);
+      CREATE INDEX IF NOT EXISTS idx_memories_state_expiry ON memories(state, expires_at);
+      CREATE INDEX IF NOT EXISTS idx_memories_session_state ON memories(session_id, state);
       CREATE INDEX IF NOT EXISTS idx_links_from         ON memory_links(from_id);
 
       CREATE TABLE IF NOT EXISTS token_ledger(
@@ -394,7 +447,38 @@ export class MemoryEngine {
       );
       CREATE INDEX IF NOT EXISTS idx_token_ledger_session ON token_ledger(session_id);
       CREATE INDEX IF NOT EXISTS idx_token_ledger_timestamp ON token_ledger(timestamp DESC);
+
+      CREATE TABLE IF NOT EXISTS vocabulary_stats (
+        term TEXT PRIMARY KEY,
+        df INTEGER NOT NULL DEFAULT 1,
+        last_seen INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS vocabulary_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      INSERT OR IGNORE INTO vocabulary_meta(key, value) VALUES('doc_count', '0');
     `);
+
+    const currentVersion = (
+      this.db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v?: number } | undefined
+    )?.v ?? 0;
+    if (currentVersion < 1) {
+      this.db.prepare(
+        'INSERT OR IGNORE INTO schema_version(version, applied_at, description) VALUES (?, ?, ?)'
+      ).run(1, Date.now(), 'baseline');
+    }
+    if (currentVersion < 2) {
+      this.db.prepare(
+        'INSERT OR IGNORE INTO schema_version(version, applied_at, description) VALUES (?, ?, ?)'
+      ).run(2, Date.now(), 'qmd-columns');
+    }
+    if (currentVersion < 3) {
+      this.db.prepare(
+        'INSERT OR IGNORE INTO schema_version(version, applied_at, description) VALUES (?, ?, ?)'
+      ).run(3, Date.now(), 'vocabulary-stats');
+    }
+    this.rebuildPersistentVocabularyStatsIfNeeded();
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -426,11 +510,7 @@ export class MemoryEngine {
       `SELECT * FROM memories ORDER BY priority DESC, timestamp DESC LIMIT 500`
     ).all() as any[];
 
-    // Fit TF-IDF vocabulary on all stored content
-    const allContent = rows.map(r => r.content as string);
-    if (allContent.length > 0) {
-      this.embedder.fitVocabulary(allContent);
-    }
+    this.embedder.rebuildPersistentVocabulary();
 
     for (const row of rows) {
       const item: MemoryItem = {
@@ -464,7 +544,8 @@ export class MemoryEngine {
     }
 
     this.primeGraphMirror(rows);
-    this.syncVault();
+    this.syncVault(true);
+    this.checkGraphCoverage();
   }
 
   /** Flush prefrontal to DB (called on MCP shutdown) */
@@ -536,6 +617,12 @@ export class MemoryEngine {
     if (itemsFlushed > 0) {
       this.flush();
     }
+    this.flushVaultSync();
+    nexusEventBus.emit('memory.flushed', {
+      count: itemsFlushed,
+      reason,
+      ts: Date.now(),
+    });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -551,6 +638,7 @@ export class MemoryEngine {
     options: {
       sessionId?: string;
       timestamp?: number;
+      tier?: MemoryItem['tier'];
       scope?: MemoryItem['scope'];
       state?: MemoryItem['state'];
       source?: MemoryItem['source'];
@@ -571,6 +659,7 @@ export class MemoryEngine {
     const scope = options.scope ?? this.inferScope(normalizedTags, priority);
     const state = options.state ?? this.inferState(normalizedTags, check, priority);
     const source = options.source ?? this.inferSource(normalizedTags);
+    const tier = options.tier ?? 'prefrontal';
     const timestamp = options.timestamp ?? Date.now();
     const sessionId = options.sessionId ?? this.sessionId;
     const trust = Number(options.trust ?? this.estimateTrust(normalizedTags, check, priority));
@@ -592,7 +681,7 @@ export class MemoryEngine {
       tags: state === 'quarantined' && !normalizedTags.includes('#quarantine')
         ? [...normalizedTags, '#quarantine']
         : normalizedTags,
-      tier: 'prefrontal',
+      tier,
       scope,
       state,
       source,
@@ -612,13 +701,14 @@ export class MemoryEngine {
     // Write to DB immediately (don't wait for flush)
     this.db.prepare(`
       INSERT INTO memories(id, content, priority, timestamp, tags, tier, scope, state, source, session_id, access_count, parent_id, depth, entropy, mass, trust, provenance_json, expires_at, supersedes, superseded_by)
-    VALUES(?, ?, ?, ?, ?, 'prefrontal', ?, ?, ?, ?, 0, ?, ?, 0.0, ?, ?, ?, ?, ?, ?)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0.0, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         content,
         priority,
         item.timestamp,
         JSON.stringify(item.tags),
+        item.tier,
         item.scope,
         item.state,
         item.source,
@@ -646,7 +736,9 @@ export class MemoryEngine {
 
 
     // Add to RAM prefrontal
-    this.prefrontal.push(item);
+    if (item.tier === 'prefrontal') {
+      this.prefrontal.push(item);
+    }
 
     if (this.prefrontal.length > this.maxPrefrontal) {
       this.consolidate();
@@ -657,7 +749,13 @@ export class MemoryEngine {
       this.fission(item);
     }
 
-    this.syncVault();
+    nexusEventBus.emit('memory.store', {
+      id,
+      priority: item.priority,
+      tags: item.tags,
+      tier: item.tier,
+    });
+    this.markVaultDirty(id);
     this.mirrorIntoGraph(item);
 
     return id;
@@ -733,25 +831,34 @@ export class MemoryEngine {
       ...summary,
       generatedAt: Date.now(),
     };
-    this.syncVault();
+    this.syncVault(true);
     return { storedIds, summary: this.lastReconciliationSummary };
   }
 
   async recall(query: string, k: number = 5): Promise<string[]> {
     this.expireMemories();
+    const now = Date.now();
+    const candidateRows = this.db.prepare(`
+      SELECT *
+      FROM memories
+      WHERE state = 'active'
+        AND (expires_at IS NULL OR expires_at > ?)
+      ORDER BY priority DESC, timestamp DESC
+      LIMIT ?
+    `).all(now, this.config.recallCandidateLimit) as any[];
+    const candidateItems = candidateRows.map((row) => this.rowToItem(row));
     // ── Stage 1: Vector search (semantic) ────────────────────────────────────
     const queryVector = await this.embedder.embed(query);
     const vectorMatches: Map<string, number> = new Map();
 
-    const allItems = this.getAllItems().filter((item) => item.state === 'active');
-    for (const item of allItems) {
+    for (const item of candidateItems) {
       const itemVector = this.embedder.localEmbed(item.content);
       const hDist = HyperbolicMath.dist(queryVector, itemVector);
       let score = 1 / (1 + hDist);
 
       // Hierarchy Boost: if item has a parent that matches query, boost child
       if (item.parentId) {
-        const parent = allItems.find(i => i.id === item.parentId);
+        const parent = candidateItems.find(i => i.id === item.parentId);
         if (parent) {
           const parentVector = this.embedder.localEmbed(parent.content);
           const pDist = HyperbolicMath.dist(queryVector, parentVector);
@@ -765,25 +872,19 @@ export class MemoryEngine {
     const podFindings = podNetwork.recall([]);
     const queryLower = query.toLowerCase();
 
-    const rows = this.db.prepare(`
-    SELECT *, access_count FROM memories
-      WHERE state = 'active' AND (expires_at IS NULL OR expires_at > ?)
-      ORDER BY priority DESC, timestamp DESC
-      LIMIT 300
-    `).all(Date.now()) as any[];
-
-    const scored = rows.map(row => {
+    const scored = candidateRows.map(row => {
       const vectorScore = vectorMatches.get(row.id as string) ?? 0;
-      const recencyScore = Math.exp(-(Date.now() - row.timestamp) / (7 * 24 * 3600 * 1000));
+      const item = this.rowToItem(row);
+      const recencyScore = Math.exp(-(now - row.timestamp) / (7 * 24 * 3600 * 1000));
       const priorityScore = row.priority as number;
       const accessBonus = Math.min((row.access_count as number) * 0.05, 0.3);
-      const entropyPenalty = 1 - (row.entropy as number ?? 0);
       const massBoost = (row.mass as number ?? 1.0) * 0.2;
+      const qmdScore = this.computeQmdScore(item);
 
       return {
         content: row.content as string,
         id: row.id as string,
-        score: (vectorScore * 0.5 + priorityScore * 0.25 + recencyScore * 0.15 + accessBonus * 0.1 + massBoost) * entropyPenalty
+        score: vectorScore * 0.4 + priorityScore * 0.15 + recencyScore * 0.1 + accessBonus * 0.05 + massBoost + qmdScore * 0.3,
       };
     });
 
@@ -804,9 +905,12 @@ export class MemoryEngine {
 
     // Increment access count for recalled items
     if (top.length > 0) {
-      const ids = top.filter(t => (t as any).id).map(t => `'${(t as any).id}'`).join(',');
-      if (ids) {
-        this.db.exec(`UPDATE memories SET access_count = access_count + 1 WHERE id IN(${ids})`);
+      const ids = top.flatMap((entry) => {
+        const candidateId = (entry as { id?: string }).id;
+        return typeof candidateId === 'string' ? [candidateId] : [];
+      });
+      if (ids.length > 0) {
+        this.incrementAccessTxn(ids);
       }
     }
 
@@ -822,7 +926,7 @@ export class MemoryEngine {
     const words = normalized.split(/\W+/).filter(Boolean);
     const findings: MemoryCheckFinding[] = [];
     const duplicateCluster: string[] = [];
-    const allItems = this.getAllItems();
+    const allItems = this.listContentCheckCandidates();
 
     for (const item of allItems) {
       const candidateWords = item.content.toLowerCase().split(/\W+/).filter(Boolean);
@@ -854,7 +958,7 @@ export class MemoryEngine {
       });
     }
 
-    if (/(api[_-]?key|secret|token|password|ghp_|sk-[a-z0-9]{8,})/i.test(content)) {
+    if (SECRET_PATTERNS.some((pattern) => pattern.test(content))) {
       findings.push({
         id: 'secret-pattern',
         severity: 'high',
@@ -943,8 +1047,8 @@ export class MemoryEngine {
 
   maintain(): MemoryMaintenanceResult {
     this.expireMemories();
-    const before = this.getAllItems();
-    this.db.exec(`
+    const before = this.getStateCounts();
+    const cooled = this.db.prepare(`
       UPDATE memories
       SET entropy = MIN(entropy + 0.03, 1.0),
           priority = CASE WHEN state = 'active' THEN priority * 0.98 ELSE priority END,
@@ -954,16 +1058,16 @@ export class MemoryEngine {
             ELSE state
           END
       WHERE state != 'expired'
-    `);
-    const after = this.getAllItems();
-    this.syncVault();
+    `).run().changes;
+    const after = this.getStateCounts();
+    this.syncVault(true);
     return {
       generatedAt: Date.now(),
-      expired: after.filter((item) => item.state === 'expired').length - before.filter((item) => item.state === 'expired').length,
-      cooled: after.filter((item, index) => item.priority < (before[index]?.priority ?? item.priority)).length,
-      quarantined: after.filter((item) => item.state === 'quarantined').length,
-      scrapMarked: after.filter((item) => item.state === 'scrap').length,
-      retained: after.filter((item) => item.state === 'active').length,
+      expired: (after.expired ?? 0) - (before.expired ?? 0),
+      cooled,
+      quarantined: after.quarantined ?? 0,
+      scrapMarked: after.scrap ?? 0,
+      retained: after.active ?? 0,
     };
   }
 
@@ -1105,30 +1209,30 @@ export class MemoryEngine {
     this.db.prepare(`
       UPDATE memory_links SET weight = MIN(weight * 1.3, 1.0) WHERE to_id = ?
       `).run(item.id);
-    this.syncVault();
+    this.markVaultDirty(item.id);
   }
 
   /** Periodic cooling cycle: increases entropy and decays priority */
   coolDown(): void {
     const { decayRate, priorityRetention } = this.config;
     
-    this.db.exec(`
+    this.db.prepare(`
       UPDATE memories
-      SET entropy = MIN(entropy + ${decayRate}, 1.0),
-          priority = priority * ${priorityRetention}
+      SET entropy = MAX(0.0, MIN(1.0, entropy + ?)),
+          priority = priority * ?
       WHERE tier != 'cortex'
-    `);
+    `).run(decayRate, priorityRetention);
 
     // Apply access-frequency retention: frequently accessed memories decay slower
-    this.db.exec(`
+    this.db.prepare(`
       UPDATE memories
-      SET entropy = entropy - (${decayRate} / (1 + access_count * 0.1))
+      SET entropy = MAX(0.0, MIN(1.0, entropy - (? / (1.0 + CAST(access_count AS REAL) * 0.1))))
       WHERE tier != 'cortex' AND access_count > 0
-    `);
+    `).run(decayRate);
 
     // Force flush high entropy items (this will promote/demote based on priority)
     this.consolidate();
-    this.syncVault();
+    this.syncVault(true);
   }
 
   /** Maintenance cycle: runs coolDown() then expires memories where entropy > threshold AND accessCount < 2 AND age > 7 days */
@@ -1139,16 +1243,16 @@ export class MemoryEngine {
     const { flushEntropyThreshold } = this.config;
     const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
     
-    this.db.exec(`
+    this.db.prepare(`
       UPDATE memories
       SET state = 'expired'
       WHERE state = 'active'
-        AND entropy > ${flushEntropyThreshold}
+        AND entropy > ?
         AND access_count < 2
-        AND timestamp < ${sevenDaysAgo}
-    `);
+        AND timestamp < ?
+    `).run(flushEntropyThreshold, sevenDaysAgo);
     
-    this.syncVault();
+    this.syncVault(true);
   }
 
   backgroundLinkMaintenance(): void {
@@ -1201,7 +1305,7 @@ export class MemoryEngine {
         )
       `).run(hippoCount - this.maxHippocampus);
     }
-    this.syncVault();
+    this.syncVault(true);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1269,7 +1373,68 @@ export class MemoryEngine {
     return Math.max(0, Math.min(1, 1 - (age / horizon)));
   }
 
-  private syncVault(): void {
+  private syncVault(force: boolean = false): void {
+    if (force) {
+      this.vaultNeedsFullSync = true;
+    }
+    if (!this.vaultFlushTimer) {
+      this.vaultFlushTimer = setTimeout(() => {
+        this.flushDirtyVault();
+      }, 2000);
+      this.vaultFlushTimer.unref();
+    }
+  }
+
+  public flushVaultSync(): void {
+    if (this.vaultFlushTimer) {
+      clearTimeout(this.vaultFlushTimer);
+      this.vaultFlushTimer = undefined;
+    }
+    this.flushDirtyVault(true);
+  }
+
+  private markVaultDirty(id: string): void {
+    this.vaultDirty.add(id);
+    this.syncVault(false);
+  }
+
+  private flushDirtyVault(force: boolean = false): void {
+    this.vaultFlushTimer = undefined;
+    if (force || this.vaultNeedsFullSync || this.vaultDirty.size === 0) {
+      this.syncVaultFull();
+      this.vaultDirty.clear();
+      this.vaultNeedsFullSync = false;
+      return;
+    }
+
+    this.expireMemories();
+    const ids = [...this.vaultDirty];
+    this.vaultDirty.clear();
+    const items = ids
+      .map((id) => this.getById(id))
+      .filter((item): item is MemoryItem => Boolean(item));
+    const currentIds = new Set(items.map((item) => item.id));
+
+    for (const item of items) {
+      this.writeVaultItem(item);
+    }
+
+    for (const id of ids) {
+      if (!currentIds.has(id)) {
+        this.removeVaultItem(id);
+      }
+    }
+
+    fs.writeFileSync(path.join(this.vaultDir, 'index.json'), JSON.stringify({
+      generatedAt: Date.now(),
+      sessionId: this.sessionId,
+      total: this.getTotalMemoryCount(),
+      health: this.getHealthSummary(),
+      items: this.listVaultIndexItems(),
+    }, null, 2), 'utf8');
+  }
+
+  private syncVaultFull(): void {
     this.expireMemories();
     const items = this.getAllItems();
     const seen = new Set<string>();
@@ -1277,20 +1442,8 @@ export class MemoryEngine {
     const noteSeen = new Set<string>();
     for (const item of items) {
       seen.add(item.id);
-      fs.writeFileSync(
-        path.join(this.vaultItemsDir, `${item.id}.json`),
-        JSON.stringify({
-          ...item,
-          excerpt: item.content.length > 140 ? `${item.content.slice(0, 137)}...` : item.content,
-          relevanceScore: this.relevanceScore(item),
-          importanceScore: this.importanceScore(item),
-          freshnessScore: this.freshnessScore(item),
-          trustScore: item.trust,
-        }, null, 2),
-        'utf8',
-      );
+      this.writeVaultItem(item);
       const notePath = path.join(memoryNotesDir, `${item.id}.md`);
-      fs.writeFileSync(notePath, this.renderMemoryNote(item), 'utf8');
       noteSeen.add(notePath);
     }
     for (const entry of fs.readdirSync(this.vaultItemsDir)) {
@@ -1313,17 +1466,39 @@ export class MemoryEngine {
       sessionId: this.sessionId,
       total: items.length,
       health: this.getHealthSummary(),
-      items: items.map((item) => ({
-        id: item.id,
-        tier: item.tier,
-        scope: item.scope,
-        state: item.state,
-        source: item.source,
-        priority: item.priority,
-        tags: item.tags,
-        trust: item.trust,
-      })),
+      items: this.listVaultIndexItems(),
     }, null, 2), 'utf8');
+  }
+
+  private writeVaultItem(item: MemoryItem): void {
+    fs.writeFileSync(
+      path.join(this.vaultItemsDir, `${item.id}.json`),
+      JSON.stringify({
+        ...item,
+        excerpt: item.content.length > 140 ? `${item.content.slice(0, 137)}...` : item.content,
+        relevanceScore: this.relevanceScore(item),
+        importanceScore: this.importanceScore(item),
+        freshnessScore: this.freshnessScore(item),
+        trustScore: item.trust,
+      }, null, 2),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(this.vaultNotesDir, 'memories', `${item.id}.md`),
+      this.renderMemoryNote(item),
+      'utf8',
+    );
+  }
+
+  private removeVaultItem(id: string): void {
+    const jsonPath = path.join(this.vaultItemsDir, `${id}.json`);
+    const notePath = path.join(this.vaultNotesDir, 'memories', `${id}.md`);
+    if (fs.existsSync(jsonPath)) {
+      fs.unlinkSync(jsonPath);
+    }
+    if (fs.existsSync(notePath)) {
+      fs.unlinkSync(notePath);
+    }
   }
 
   private renderMemoryNote(item: MemoryItem): string {
@@ -1487,7 +1662,7 @@ export class MemoryEngine {
     priority: number;
     sessionId?: string;
   }): { action: MemoryReconciliationAction; reason: string; relatedIds: string[] } {
-    const related = this.getAllItems()
+    const related = this.listReconciliationCandidates()
       .filter((item) => item.state !== 'expired')
       .map((item) => ({
         item,
@@ -1563,11 +1738,100 @@ export class MemoryEngine {
       entropy: row.entropy ?? 0,
       mass: row.mass ?? 1.0,
       trust: row.trust ?? 0.6,
+      qmdRecency: row.qmd_recency ?? undefined,
+      qmdFrequency: row.qmd_frequency ?? undefined,
+      qmdRelevance: row.qmd_relevance ?? undefined,
       expiresAt: row.expires_at ?? undefined,
       supersedes: row.supersedes ?? undefined,
       supersededBy: row.superseded_by ?? undefined,
       provenance: this.parseProvenance(row.provenance_json, row.source ?? 'runtime', row.session_id, row.tags),
     };
+  }
+
+  private getById(id: string): MemoryItem | undefined {
+    const row = this.db.prepare('SELECT * FROM memories WHERE id = ?').get(id) as any;
+    return row ? this.rowToItem(row) : undefined;
+  }
+
+  private getTotalMemoryCount(): number {
+    const row = this.db.prepare('SELECT COUNT(*) as c FROM memories').get() as { c?: number } | undefined;
+    return row?.c ?? 0;
+  }
+
+  private getStateCounts(): Record<string, number> {
+    const rows = this.db.prepare(`
+      SELECT state, COUNT(*) as c
+      FROM memories
+      GROUP BY state
+    `).all() as Array<{ state: string; c: number }>;
+    return rows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.state] = row.c;
+      return acc;
+    }, {});
+  }
+
+  private listVaultIndexItems(): Array<{
+    id: string;
+    tier: MemoryItem['tier'];
+    scope: MemoryItem['scope'];
+    state: MemoryItem['state'];
+    source: MemoryItem['source'];
+    priority: number;
+    tags: string[];
+    trust: number;
+  }> {
+    const rows = this.db.prepare(`
+      SELECT id, tier, scope, state, source, priority, tags, trust
+      FROM memories
+      ORDER BY priority DESC, timestamp DESC
+    `).all() as Array<{
+      id: string;
+      tier: MemoryItem['tier'];
+      scope: MemoryItem['scope'];
+      state: MemoryItem['state'];
+      source: MemoryItem['source'];
+      priority: number;
+      tags: string;
+      trust: number;
+    }>;
+    return rows.map((row) => ({
+      ...row,
+      tags: safeParseTags(row.tags),
+    }));
+  }
+
+  private listContentCheckCandidates(limit: number = 500): MemoryItem[] {
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM memories
+      WHERE state != 'expired'
+      ORDER BY priority DESC, timestamp DESC
+      LIMIT ?
+    `).all(limit) as any[];
+    return rows.map((row) => this.rowToItem(row));
+  }
+
+  private listReconciliationCandidates(limit: number = 50, entropyLimit: number = 0.88): MemoryItem[] {
+    const rows = this.db.prepare(`
+      SELECT id, content, tags, tier, scope, state, source, session_id, access_count,
+             parent_id, depth, priority, timestamp, entropy, mass, trust,
+             qmd_recency, qmd_frequency, qmd_relevance,
+             provenance_json, expires_at, supersedes, superseded_by
+      FROM memories
+      WHERE state != 'scrap' AND entropy < ?
+      ORDER BY priority DESC, timestamp DESC
+      LIMIT ?
+    `).all(entropyLimit, limit) as any[];
+    return rows.map((row) => this.rowToItem(row));
+  }
+
+  private computeQmdScore(item: MemoryItem): number {
+    const now = Date.now();
+    const ageDays = (now - item.timestamp) / 86_400_000;
+    const recency = item.qmdRecency ?? Math.max(0, 1 - ageDays / 30);
+    const frequency = item.qmdFrequency ?? Math.min(1, item.accessCount / 20);
+    const relevance = item.qmdRelevance ?? (1 - item.entropy);
+    return 0.3 * recency + 0.3 * frequency + 0.2 * relevance + 0.2 * item.trust;
   }
 
   private getAllItems(): MemoryItem[] {
@@ -1642,26 +1906,26 @@ export class MemoryEngine {
   private buildTimeline(item: MemoryItem): MemorySnapshot[] {
     const lineage = this.buildLineage(item);
     const rootId = lineage[0]?.id ?? item.id;
-    const related = this.getAllItems().filter((candidate) => {
-      if (candidate.id === item.id) return true;
-      if (candidate.sessionId && candidate.sessionId === item.sessionId) return true;
-      return this.belongsToLineage(candidate, rootId);
-    });
+    const rows = this.db.prepare(`
+      WITH RECURSIVE lineage(id, depth) AS (
+        SELECT id, 0 FROM memories WHERE id = ?
+        UNION ALL
+        SELECT m.id, lineage.depth + 1
+        FROM memories m
+        INNER JOIN lineage ON m.parent_id = lineage.id
+        WHERE lineage.depth < 20
+      )
+      SELECT DISTINCT m.*
+      FROM memories m
+      LEFT JOIN lineage l ON l.id = m.id
+      WHERE l.id IS NOT NULL
+         OR m.id = ?
+         OR (? IS NOT NULL AND m.session_id = ?)
+      ORDER BY m.timestamp ASC
+      LIMIT 24
+    `).all(rootId, item.id, item.sessionId ?? null, item.sessionId ?? null) as any[];
 
-    return related
-      .sort((a, b) => a.timestamp - b.timestamp)
-      .slice(0, 24)
-      .map((candidate) => this.toSnapshot(candidate));
-  }
-
-  private belongsToLineage(item: MemoryItem, rootId: string): boolean {
-    let current: MemoryItem | undefined = item;
-    while (current?.parentId) {
-      if (current.parentId === rootId) return true;
-      const row = this.db.prepare('SELECT * FROM memories WHERE id = ?').get(current.parentId) as any;
-      current = row ? this.rowToItem(row) : undefined;
-    }
-    return item.id === rootId;
+    return rows.map((row) => this.toSnapshot(this.rowToItem(row)));
   }
 
   private extractEntityReferences(item: MemoryItem): MemoryEntityReference[] {
@@ -1736,16 +2000,48 @@ export class MemoryEngine {
     source?: MemoryItem['source'];
     sessionId?: string;
   } = {}): MemorySnapshot[] {
-    const now = Date.now();
-    return this.getAllItems()
-      .filter((item) => !filters.tier || item.tier === filters.tier)
-      .filter((item) => !filters.tag || item.tags.includes(filters.tag))
-      .filter((item) => !filters.scope || item.scope === filters.scope)
-      .filter((item) => !filters.state || item.state === filters.state)
-      .filter((item) => !filters.source || item.source === filters.source)
-      .filter((item) => !filters.sessionId || item.sessionId === filters.sessionId)
-      .filter((item) => !filters.recencyMs || now - item.timestamp <= filters.recencyMs)
-      .map((item) => this.toSnapshot(item))
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filters.tier) {
+      clauses.push('tier = ?');
+      params.push(filters.tier);
+    }
+    if (filters.scope) {
+      clauses.push('scope = ?');
+      params.push(filters.scope);
+    }
+    if (filters.state) {
+      clauses.push('state = ?');
+      params.push(filters.state);
+    }
+    if (filters.source) {
+      clauses.push('source = ?');
+      params.push(filters.source);
+    }
+    if (filters.sessionId) {
+      clauses.push('session_id = ?');
+      params.push(filters.sessionId);
+    }
+    if (filters.recencyMs) {
+      clauses.push('timestamp >= ?');
+      params.push(Date.now() - filters.recencyMs);
+    }
+    if (filters.tag) {
+      clauses.push('EXISTS (SELECT 1 FROM json_each(memories.tags) WHERE value = ?)');
+      params.push(filters.tag);
+    }
+
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM memories
+      ${where}
+      ORDER BY priority DESC, timestamp DESC
+      LIMIT ?
+    `).all(...params, Math.max(limit * 4, limit, 1)) as any[];
+
+    return rows
+      .map((row) => this.toSnapshot(this.rowToItem(row)))
       .filter((item) => !filters.linkedType || item.related.some((reference) => reference.type === filters.linkedType))
       .sort((a, b) => (b.importanceScore - a.importanceScore) || (b.relevanceScore - a.relevanceScore) || (b.timestamp - a.timestamp))
       .slice(0, Math.max(limit, 1));
@@ -1851,11 +2147,21 @@ export class MemoryEngine {
   clear(): void {
     this.prefrontal = [];
     this.db.exec('DELETE FROM memory_links; DELETE FROM memories;');
-    this.syncVault();
+    this.syncVault(true);
   }
 
   getHealthSummary(): MemoryHealthSummary {
-    const items = this.getAllItems();
+    const counts = this.getStateCounts();
+    const promoted = (this.db.prepare(`
+      SELECT COUNT(*) as c
+      FROM memories
+      WHERE scope = 'promoted' OR tier = 'cortex'
+    `).get() as { c?: number } | undefined)?.c ?? 0;
+    const shared = (this.db.prepare(`
+      SELECT COUNT(*) as c
+      FROM memories
+      WHERE scope = 'shared'
+    `).get() as { c?: number } | undefined)?.c ?? 0;
     const topTagsRaw = this.db.prepare(`
       SELECT value as tag, COUNT(*) as c
       FROM memories, json_each(memories.tags)
@@ -1863,13 +2169,13 @@ export class MemoryEngine {
     `).all() as Array<{ tag: string }>;
     return {
       generatedAt: Date.now(),
-      total: items.length,
-      active: items.filter((item) => item.state === 'active').length,
-      quarantined: items.filter((item) => item.state === 'quarantined').length,
-      scrap: items.filter((item) => item.state === 'scrap').length,
-      expired: items.filter((item) => item.state === 'expired').length,
-      promoted: items.filter((item) => item.scope === 'promoted' || item.tier === 'cortex').length,
-      shared: items.filter((item) => item.scope === 'shared').length,
+      total: this.getTotalMemoryCount(),
+      active: counts.active ?? 0,
+      quarantined: counts.quarantined ?? 0,
+      scrap: counts.scrap ?? 0,
+      expired: counts.expired ?? 0,
+      promoted,
+      shared,
       topTags: topTagsRaw.map((entry) => entry.tag),
     };
   }
@@ -1880,21 +2186,41 @@ export class MemoryEngine {
     byState: Record<string, number>;
     sharedContextCount: number;
   } {
-    const items = this.getAllItems()
-      .filter((item) => !sessionId || item.sessionId === sessionId || item.scope !== 'session');
-    const byScope: Record<string, number> = {};
-    const byState: Record<string, number> = {};
-
-    for (const item of items) {
-      byScope[item.scope] = (byScope[item.scope] ?? 0) + 1;
-      byState[item.state] = (byState[item.state] ?? 0) + 1;
-    }
+    const visibilityClause = sessionId ? 'WHERE session_id = ? OR scope != ?' : '';
+    const visibilityParams = sessionId ? [sessionId, 'session'] : [];
+    const byScopeRows = this.db.prepare(`
+      SELECT scope, COUNT(*) as c
+      FROM memories
+      ${visibilityClause}
+      GROUP BY scope
+    `).all(...visibilityParams) as Array<{ scope: string; c: number }>;
+    const byStateRows = this.db.prepare(`
+      SELECT state, COUNT(*) as c
+      FROM memories
+      ${visibilityClause}
+      GROUP BY state
+    `).all(...visibilityParams) as Array<{ state: string; c: number }>;
+    const sharedContextCount = (this.db.prepare(`
+      SELECT COUNT(*) as c
+      FROM memories
+      WHERE scope = 'shared'
+        AND state = 'active'
+        ${sessionId ? 'AND (session_id = ? OR scope != ?)' : ''}
+    `).get(...visibilityParams) as { c?: number } | undefined)?.c ?? 0;
+    const byScope = byScopeRows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.scope] = row.c;
+      return acc;
+    }, {});
+    const byState = byStateRows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.state] = row.c;
+      return acc;
+    }, {});
 
     return {
       generatedAt: Date.now(),
       byScope,
       byState,
-      sharedContextCount: items.filter((item) => item.scope === 'shared' && item.state === 'active').length,
+      sharedContextCount,
     };
   }
 
@@ -2015,7 +2341,7 @@ export class MemoryEngine {
       if (tags.includes('#quarantine')) quarantined += 1;
       importedIds.push(id);
     }
-    this.syncVault();
+    this.syncVault(true);
     return { imported, duplicates, quarantined, importedIds };
   }
 
@@ -2037,6 +2363,7 @@ export class MemoryEngine {
 
   close(): void {
     this.flush();
+    this.flushVaultSync();
     this.db.close();
     this.graphMirror?.close();
   }
@@ -2045,16 +2372,20 @@ export class MemoryEngine {
     if (!this.graphMirror) return;
     try {
       this.graphMirror.store(item.content, item.priority, item.tags);
-    } catch {
-      // Graph mirroring must not block the primary memory path.
+    } catch (err) {
+      nexusEventBus.emit('graph.sync.failed', {
+        reason: String(err),
+        ts: Date.now(),
+      });
+      this.graphMirror = undefined;
     }
   }
 
-  private primeGraphMirror(rows: Array<{ content: string; priority: number; tags: string }> = []): void {
+  private primeGraphMirror(rows: Array<{ content: string; priority: number; tags: string }> = [], force: boolean = false): void {
     if (!this.graphMirror || rows.length === 0) return;
     try {
       const stats = this.graphMirror.getGraphStats();
-      if (stats.entities > 0 || stats.facts > 0) {
+      if (!force && (stats.entities > 0 || stats.facts > 0)) {
         return;
       }
       rows.forEach((row) => {
@@ -2064,9 +2395,51 @@ export class MemoryEngine {
           safeParseTags(row.tags),
         );
       });
-    } catch {
-      // Ignore graph priming failures and keep the main memory engine available.
+    } catch (err) {
+      nexusEventBus.emit('graph.sync.failed', {
+        reason: String(err),
+        ts: Date.now(),
+      });
+      this.graphMirror = undefined;
     }
+  }
+
+  private checkGraphCoverage(): void {
+    if (!this.graphMirror) return;
+    const memCount = this.getTotalMemoryCount();
+    if (memCount === 0) return;
+    const stats = this.graphMirror.getGraphStats();
+    if (stats.entities < memCount * 0.5) {
+      nexusEventBus.emit('graph.coverage.low', {
+        memCount,
+        graphEntities: stats.entities,
+      });
+      const rows = this.db.prepare(`
+        SELECT content, priority, tags
+        FROM memories
+        ORDER BY priority DESC, timestamp DESC
+        LIMIT 500
+      `).all() as Array<{ content: string; priority: number; tags: string }>;
+      this.primeGraphMirror(rows, true);
+    }
+  }
+
+  private rebuildPersistentVocabularyStatsIfNeeded(): void {
+    const docCountRow = this.db.prepare(
+      `SELECT value FROM vocabulary_meta WHERE key = 'doc_count'`
+    ).get() as { value?: string } | undefined;
+    const docCount = Number.parseInt(docCountRow?.value ?? '0', 10);
+    const statsRow = this.db.prepare('SELECT COUNT(*) as c FROM vocabulary_stats').get() as { c?: number } | undefined;
+    if ((docCountRow?.value ?? '0') !== '0' || (statsRow?.c ?? 0) > 0) {
+      return;
+    }
+
+    const rows = this.db.prepare('SELECT content FROM memories ORDER BY timestamp ASC').all() as Array<{ content: string }>;
+    if (rows.length === 0) {
+      return;
+    }
+
+    this.embedder.fitVocabulary(rows.map((row) => row.content));
   }
 }
 

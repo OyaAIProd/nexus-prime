@@ -49,10 +49,10 @@ import { architectsToolDefinitions, handleArchitectsToolCall } from '../../archi
 
 const tokenEngine = new TokenSupremacyEngine();
 const guardrailEngine = new GuardrailEngine();
-const darwinLoop = new DarwinLoop();
 const casEngine = new ContinuousAttentionStream();
 const kvBridge = createKVBridge({ agents: 3 });
 const orchestrator = new OrchestratorEngine();
+const darwinLoop = new DarwinLoop(orchestrator.getMemoryEngine());
 const federation = new FederationEngine();
 const fallbackRuntime = createSubAgentRuntime({ repoRoot: process.cwd() });
 

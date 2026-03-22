@@ -1,0 +1,10 @@
+{
+  "rawMarkdown": "# Gemini CLI Integration\n\nPackages all 61 Agency agents as a Gemini CLI extension. The extension\ninstalls to `~/.gemini/extensions/agency-agents/`.\n\n## Install\n\n```bash\n./scripts/install.sh --tool gemini-cli\n```\n\n## Activate a Skill\n\nIn Gemini CLI, reference an agent by name:\n\n```\nUse the frontend-developer skill to help me build this UI.\n```\n\n## Extension Structure\n\n```\n~/.gemini/extensions/agency-agents/\n  gemini-extension.json\n  skills/\n    frontend-developer/SKILL.md\n    backend-architect/SKILL.md\n    reality-checker/SKILL.md\n    ...\n```\n\n## Regenerate\n\n```bash\n./scripts/convert.sh --tool gemini-cli\n```\n",
+  "sections": {
+    "overview": "# Gemini CLI Integration\n\nPackages all 61 Agency agents as a Gemini CLI extension. The extension\ninstalls to `~/.gemini/extensions/agency-agents/`.",
+    "install": "```bash\n./scripts/install.sh --tool gemini-cli\n```",
+    "activate a skill": "In Gemini CLI, reference an agent by name:\n\n```\nUse the frontend-developer skill to help me build this UI.\n```",
+    "extension structure": "```\n~/.gemini/extensions/agency-agents/\n  gemini-extension.json\n  skills/\n    frontend-developer/SKILL.md\n    backend-architect/SKILL.md\n    reality-checker/SKILL.md\n    ...\n```",
+    "regenerate": "```bash\n./scripts/convert.sh --tool gemini-cli\n```"
+  }
+}

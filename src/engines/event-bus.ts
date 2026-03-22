@@ -12,6 +12,8 @@ export type NexusEventType =
     | 'planner.stage'
     | 'memory.store'
     | 'memory.recall'
+    | 'memory.flushed'
+    | 'memory.health.tick'
     | 'pod.signal'
     | 'tokens.optimized'
     | 'phantom.worker.start'
@@ -21,7 +23,10 @@ export type NexusEventType =
     | 'guardrail.check'
     | 'ghost.pass'
     | 'graph.query'
+    | 'graph.sync.failed'
+    | 'graph.coverage.low'
     | 'darwin.cycle'
+    | 'darwin.cycle.complete'
     | 'session.dna'
     | 'skill.register'
     | 'skill.deploy'
@@ -41,6 +46,8 @@ export type NexusEventType =
     | 'client.inferred'
     | 'client.status'
     | 'dashboard.action'
+    | 'nexus.shutdown'
+    | 'orchestrator.disposed'
     | 'nexusnet.publish'
     | 'nexusnet.sync'
     | 'mcp.call.start'
@@ -104,13 +111,18 @@ export type NexusEventType =
     | 'architects.convergence.merged'
     | 'architects.convergence.failed'
     | 'architects.dispatch.go'
-    | 'architects.dispatch.queued';
+    | 'architects.dispatch.queued'
+    | 'ledger.duplicate-prevented'
+    | 'nexus.circuit-open'
+    | 'nexus.circuit-tripped';
 
 export interface NexusEventPayloads {
     'system.boot': { version: string; toolsCount: number };
     'planner.stage': { runId?: string; stage: string; status: string; owner: string; assets: number };
     'memory.store': { id: string; priority: number; tags: string[]; tier: string };
     'memory.recall': { query: string; count: number };
+    'memory.flushed': { count: number; reason: string; ts: number };
+    'memory.health.tick': { counts: Array<{ state: string; c: number }>; ts: number };
     'pod.signal': { workerId: string; type: string; content: string; confidence?: number; tags?: string[] };
     'tokens.optimized': {
         savings: number;
@@ -131,7 +143,10 @@ export interface NexusEventPayloads {
     'guardrail.check': { action: string; passed: boolean; score: number };
     'ghost.pass': { task: string; risks: number; workers: number };
     'graph.query': { query: string; resultsCount: number };
+    'graph.sync.failed': { reason: string; memoryId?: string; ts: number };
+    'graph.coverage.low': { memCount: number; graphEntities: number };
     'darwin.cycle': { hypothesis: string; outcome: string };
+    'darwin.cycle.complete': { id: string; outcome: string; targetFile: string };
     'session.dna': { sessionId: string; action: 'generated' | 'loaded' };
     'skill.register': { name: string; id: string };
     'skill.deploy': { skillId: string; scope: string; status: string };
@@ -151,6 +166,8 @@ export interface NexusEventPayloads {
     'client.inferred': { clientId: string; displayName: string; source: string; state: string; evidence: string[] };
     'client.status': { clientId: string; displayName: string; previous: string; next: string; source: string };
     'dashboard.action': { action: string; status: string; target?: string };
+    'nexus.shutdown': { signal: string };
+    'orchestrator.disposed': { ts: number };
     'nexusnet.publish': { type: string; byteSize: number };
     'nexusnet.sync': { newItemsCount: number };
     'mcp.call.start': { callId: string; serverName: string; toolName: string; args: any };
@@ -215,6 +232,9 @@ export interface NexusEventPayloads {
     'architects.convergence.failed': { runId: string; worklistId: string; error: string };
     'architects.dispatch.go': { operativeId: string; workItemId: string };
     'architects.dispatch.queued': { operativeId: string; workItemId: string; depth: number };
+    'ledger.duplicate-prevented': { fingerprint: string; existingId: string };
+    'nexus.circuit-open': { remainingMs: number; consecutiveFailures: number };
+    'nexus.circuit-tripped': { consecutiveFailures: number };
 }
 
 export interface NexusEvent<T extends NexusEventType = NexusEventType> {

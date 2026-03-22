@@ -1,0 +1,9 @@
+{
+  "rawMarkdown": "# Windsurf Integration\n\nAll 61 Agency agents are consolidated into a single `.windsurfrules` file.\nRules are **project-scoped** — install them from your project root.\n\n## Install\n\n```bash\n# Run from your project root\ncd /your/project\n/path/to/agency-agents/scripts/install.sh --tool windsurf\n```\n\n## Activate an Agent\n\nIn Windsurf, reference an agent by name in your prompt:\n\n```\nUse the Frontend Developer agent to build this component.\n```\n\n## Regenerate\n\n```bash\n./scripts/convert.sh --tool windsurf\n```\n",
+  "sections": {
+    "overview": "# Windsurf Integration\n\nAll 61 Agency agents are consolidated into a single `.windsurfrules` file.\nRules are **project-scoped** — install them from your project root.",
+    "install": "```bash\n# Run from your project root\ncd /your/project\n/path/to/agency-agents/scripts/install.sh --tool windsurf\n```",
+    "activate an agent": "In Windsurf, reference an agent by name in your prompt:\n\n```\nUse the Frontend Developer agent to build this component.\n```",
+    "regenerate": "```bash\n./scripts/convert.sh --tool windsurf\n```"
+  }
+}

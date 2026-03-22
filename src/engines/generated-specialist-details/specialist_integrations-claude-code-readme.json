@@ -1,0 +1,9 @@
+{
+  "rawMarkdown": "# Claude Code Integration\n\nThe Agency was built for Claude Code. No conversion needed — agents work\nnatively with the existing `.md` + YAML frontmatter format.\n\n## Install\n\n```bash\n# Copy all agents to your Claude Code agents directory\n./scripts/install.sh --tool claude-code\n\n# Or manually copy a category\ncp engineering/*.md ~/.claude/agents/\n```\n\n## Activate an Agent\n\nIn any Claude Code session, reference an agent by name:\n\n```\nActivate Frontend Developer and help me build a React component.\n```\n\n```\nUse the Reality Checker agent to verify this feature is production-ready.\n```\n\n## Agent Directory\n\nAgents are organized into divisions. See the [main README](../../README.md) for\nthe full roster of 61 specialists.\n",
+  "sections": {
+    "overview": "# Claude Code Integration\n\nThe Agency was built for Claude Code. No conversion needed — agents work\nnatively with the existing `.md` + YAML frontmatter format.",
+    "install": "```bash\n# Copy all agents to your Claude Code agents directory\n./scripts/install.sh --tool claude-code\n\n# Or manually copy a category\ncp engineering/*.md ~/.claude/agents/\n```",
+    "activate an agent": "In any Claude Code session, reference an agent by name:\n\n```\nActivate Frontend Developer and help me build a React component.\n```\n\n```\nUse the Reality Checker agent to verify this feature is production-ready.\n```",
+    "agent directory": "Agents are organized into divisions. See the [main README](../../README.md) for\nthe full roster of 61 specialists."
+  }
+}

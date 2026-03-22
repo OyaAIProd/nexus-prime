@@ -37,12 +37,20 @@ export interface ShieldInput {
     connectors?: ConnectorBinding[];
 }
 
-const SECRET_PATTERNS = [
-    /api[_-]?key\s*[:=]\s*["']?[a-z0-9_-]{12,}/i,
-    /secret\s*[:=]\s*["']?[a-z0-9_-]{8,}/i,
-    /ghp_[a-z0-9]{20,}/i,
-    /xox[baprs]-[a-z0-9-]{10,}/i,
-    /sk-[a-z0-9]{16,}/i,
+export const SECRET_PATTERNS: RegExp[] = [
+    /sk-[a-zA-Z0-9]{16,}/i,
+    /sk-ant-[a-zA-Z0-9\-_]{20,}/i,
+    /AKIA[0-9A-Z]{16}/,
+    /aws[_-]?secret[_-]?access[_-]?key\s*[:=]\s*[^\s"']{16,}/i,
+    /ghp_[a-zA-Z0-9]{36}/,
+    /github_pat_[a-zA-Z0-9_]{36,}/,
+    /gho_[a-zA-Z0-9]{36}/,
+    /xox[baprs]-[a-zA-Z0-9-]{10,}/i,
+    /sk_live_[a-zA-Z0-9]{20,}/,
+    /sk_test_[a-zA-Z0-9]{20,}/,
+    /Bearer\s+[a-zA-Z0-9\-._~+/]{20,}/i,
+    /[A-Z][A-Z0-9_]{2,}_(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD|CREDENTIAL)\s*=\s*[^\s#]{8,}/,
+    /api[_-]?key\s*[:=]\s*["']?[a-zA-Z0-9_\-]{16,}/i,
 ];
 
 const CLAIM_PATTERNS = [

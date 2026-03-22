@@ -197,6 +197,7 @@ export class NexusPrime {
     this.synapse?.stop();
     this.architects?.stop();
     this.dashboardServer.stop();
+    this.orchestrator.dispose();
     this.sessionDNA.flush();
 
     this.running = false;
@@ -207,6 +208,9 @@ export class NexusPrime {
   flushMemory(): void {
     if (this.memoryEngine && typeof this.memoryEngine.flush === 'function') {
       this.memoryEngine.flush();
+    }
+    if (this.memoryEngine && typeof this.memoryEngine.flushVaultSync === 'function') {
+      this.memoryEngine.flushVaultSync();
     }
   }
 

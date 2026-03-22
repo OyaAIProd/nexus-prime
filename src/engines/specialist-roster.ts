@@ -1,5 +1,14 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { BUILTIN_SKILL_PACKS, BUILTIN_WORKFLOW_PACKS, detectDomains, slugify } from './runtime-assets.js';
-import { IMPORTED_SPECIALISTS, type ImportedSpecialistSeed } from './generated-specialists.js';
+import { IMPORTED_SPECIALIST_PROFILES, type ImportedSpecialistProfileSeed } from './generated-specialist-profiles.js';
+
+type ImportedSpecialistSeed = ImportedSpecialistProfileSeed & {
+    path?: string;
+    rawMarkdown: string;
+    sections: Record<string, string>;
+};
 
 export type SpecialistAuthority = 'advisory' | 'review' | 'mutate';
 export type OptimizationProfile = 'standard' | 'max';
@@ -93,7 +102,18 @@ export interface CrewTemplate {
     fallbackCrewId?: string;
 }
 
-const SPECIALISTS: SpecialistProfile[] = IMPORTED_SPECIALISTS.map(normalizeSpecialist).sort((left, right) =>
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const SPECIALIST_DETAIL_DIR = path.join(__dirname, 'generated-specialist-details');
+
+interface SpecialistDetailPayload {
+    rawMarkdown: string;
+    sections: Record<string, string>;
+}
+
+const specialistDetailCache = new Map<string, SpecialistDetailPayload>();
+
+const SPECIALISTS: SpecialistProfile[] = IMPORTED_SPECIALIST_PROFILES.map(withLazyDetails).sort((left, right) =>
     left.name.localeCompare(right.name)
 );
 
@@ -255,7 +275,7 @@ function normalizeSpecialist(seed: ImportedSpecialistSeed): SpecialistProfile {
     const authority = inferAuthority(seed);
 
     return {
-        specialistId: `specialist_${slugify(seed.path.replace(/\.md$/, ''))}`,
+        specialistId: `specialist_${slugify((seed.path ?? seed.sourcePath).replace(/\.md$/, ''))}`,
         name: seed.name,
         division: seed.division,
         description: seed.description,
@@ -277,8 +297,41 @@ function normalizeSpecialist(seed: ImportedSpecialistSeed): SpecialistProfile {
         recommendedWorkflows: inferRecommendedWorkflows(domains),
         rawMarkdown: seed.rawMarkdown,
         sections: seed.sections,
-        sourcePath: seed.path,
+        sourcePath: seed.path ?? seed.sourcePath,
     };
+}
+
+function withLazyDetails(seed: ImportedSpecialistProfileSeed): SpecialistProfile {
+    const profile = { ...seed } as SpecialistProfile;
+    Object.defineProperty(profile, 'rawMarkdown', {
+        enumerable: true,
+        get() {
+            return loadSpecialistDetail(seed.specialistId).rawMarkdown;
+        },
+    });
+    Object.defineProperty(profile, 'sections', {
+        enumerable: true,
+        get() {
+            return loadSpecialistDetail(seed.specialistId).sections;
+        },
+    });
+    return profile;
+}
+
+function loadSpecialistDetail(specialistId: string): SpecialistDetailPayload {
+    const cached = specialistDetailCache.get(specialistId);
+    if (cached) return cached;
+
+    const detailPath = path.join(SPECIALIST_DETAIL_DIR, `${specialistId}.json`);
+    if (!fs.existsSync(detailPath)) {
+        const fallback: SpecialistDetailPayload = { rawMarkdown: '', sections: {} };
+        specialistDetailCache.set(specialistId, fallback);
+        return fallback;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(detailPath, 'utf8')) as SpecialistDetailPayload;
+    specialistDetailCache.set(specialistId, parsed);
+    return parsed;
 }
 
 function buildCrewTemplates(specialists: SpecialistProfile[]): CrewTemplate[] {
@@ -543,7 +596,7 @@ function buildReviewGates(crew: SelectedCrew, selectedSpecialists: SelectedSpeci
 }
 
 function inferAuthority(seed: ImportedSpecialistSeed): SpecialistAuthority {
-    const pathValue = seed.path.toLowerCase();
+    const pathValue = (seed.path ?? seed.sourcePath).toLowerCase();
     const nameValue = seed.name.toLowerCase();
     const text = `${seed.description}\n${Object.values(seed.sections).join('\n')}`.toLowerCase();
 

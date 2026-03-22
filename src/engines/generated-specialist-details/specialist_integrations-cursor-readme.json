@@ -1,0 +1,9 @@
+{
+  "rawMarkdown": "# Cursor Integration\n\nConverts all 61 Agency agents into Cursor `.mdc` rule files. Rules are\n**project-scoped** — install them from your project root.\n\n## Install\n\n```bash\n# Run from your project root\ncd /your/project\n/path/to/agency-agents/scripts/install.sh --tool cursor\n```\n\nThis creates `.cursor/rules/<agent-slug>.mdc` files in your project.\n\n## Activate a Rule\n\nIn Cursor, reference an agent in your prompt:\n\n```\n@frontend-developer Review this React component for performance issues.\n```\n\nOr enable a rule as always-on by editing its frontmatter:\n\n```yaml\n---\ndescription: Expert frontend developer...\nglobs: \"**/*.tsx,**/*.ts\"\nalwaysApply: true\n---\n```\n\n## Regenerate\n\n```bash\n./scripts/convert.sh --tool cursor\n```\n",
+  "sections": {
+    "overview": "# Cursor Integration\n\nConverts all 61 Agency agents into Cursor `.mdc` rule files. Rules are\n**project-scoped** — install them from your project root.",
+    "install": "```bash\n# Run from your project root\ncd /your/project\n/path/to/agency-agents/scripts/install.sh --tool cursor\n```\n\nThis creates `.cursor/rules/<agent-slug>.mdc` files in your project.",
+    "activate a rule": "In Cursor, reference an agent in your prompt:\n\n```\n@frontend-developer Review this React component for performance issues.\n```\n\nOr enable a rule as always-on by editing its frontmatter:\n\n```yaml\n---\ndescription: Expert frontend developer...\nglobs: \"**/*.tsx,**/*.ts\"\nalwaysApply: true\n---\n```",
+    "regenerate": "```bash\n./scripts/convert.sh --tool cursor\n```"
+  }
+}
