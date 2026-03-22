@@ -143,8 +143,6 @@ export class ByzantineConsensus {
         // Check if we have enough votes to decide
         const forCount = Array.from(proposal.votes.values()).filter(v => v).length;
         const againstCount = Array.from(proposal.votes.values()).filter(v => !v).length;
-        const total = proposal.votes.size;
-
         // Can we decide?
         if (forCount >= this.quorum) {
             this.commitProposal(proposal);

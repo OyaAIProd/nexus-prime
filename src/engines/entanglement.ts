@@ -20,9 +20,7 @@ import {
     normalize,
     bornRuleSample,
     probabilities,
-    applyBias,
-    partialTraceB,
-    cAbs2
+    applyBias
 } from './hilbert-space.js';
 import { nexusEventBus } from './event-bus.js';
 
@@ -291,8 +289,9 @@ export class EntanglementEngine {
     private getCorrelationsAfterMeasurement(
         state: EntangledState,
         measuredAgentId: string,
-        _outcome: number
+        outcome: number
     ): Map<string, number[]> {
+        void outcome;
         const correlations = new Map<string, number[]>();
 
         for (let i = 0; i < state.agentIds.length; i++) {

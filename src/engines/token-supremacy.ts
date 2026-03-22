@@ -11,7 +11,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { ContextAssembler, type AssemblyResult, type BudgetConfig } from './context-assembler.js';
-import { TieredContextEngine, type ContextTier, type TieredContextResult } from './tiered-context.js';
+import { type ContextTier } from './tiered-context.js';
 import { ContinuousAttentionStream } from './index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ export class TokenSupremacyEngine {
                 };
             } else if (estFull > 5_000) {
                 // Large but relevant — read hot sections
-                const { start, end } = this.estimateHotLines(file, taskKeywords);
+                const { start, end } = this.estimateHotLines(file);
                 plan = {
                     file,
                     action: 'partial',
@@ -464,8 +464,7 @@ export class TokenSupremacyEngine {
     }
 
     private estimateHotLines(
-        file: FileRef,
-        keywords: string[]
+        file: FileRef
     ): { start: number; end: number } {
         // Without reading the file, estimate hot sections by filename heuristics
         // In production, the Ghost Pass pre-reads and provides actual line hints
@@ -560,7 +559,7 @@ export class TokenSupremacyEngine {
         let totalTokens = 0;
         let fullReadTokens = 0;
 
-        for (const [filePath, { chunks, file }] of fileMap) {
+        for (const { chunks, file } of fileMap.values()) {
             const estFull = Math.ceil(file.sizeBytes / 4);
             fullReadTokens += estFull;
 

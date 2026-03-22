@@ -119,8 +119,6 @@ export class TokenOptimizer {
       const relevance = this.computeRelevance(context, subtask);
       
       let tokens: number;
-      let strategy: 'compress' | 'expand' | 'standard';
-
       // Determine strategy
       const isFamiliar = this.isFamiliar(subtask);
       const isNovel = this.isNovel(subtask);
@@ -128,15 +126,12 @@ export class TokenOptimizer {
       if (isFamiliar) {
         // Compress: familiar pattern, use dictionary
         tokens = Math.floor(this.maxTokens * complexity * relevance * 0.1);
-        strategy = 'compress';
       } else if (isNovel) {
         // Expand: novel situation, explore more
         tokens = Math.floor(this.maxTokens * complexity * relevance * 2);
-        strategy = 'expand';
       } else {
         // Standard allocation
         tokens = Math.floor(this.maxTokens * complexity * relevance);
-        strategy = 'standard';
       }
 
       breakdown.push({ part: subtask, tokens });

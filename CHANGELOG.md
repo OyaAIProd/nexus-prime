@@ -2,7 +2,30 @@
 
 All notable changes to Nexus Prime are documented here.
 
-Release Index: [v3.18.0](#v3180--2026-03-21) · [v3.17.0](#v3170--2026-03-20) · [v3.16.0](#v3160--2026-03-20) · [v3.15.0](#v3150--2026-03-16) · [v3.14.0](#v3140--2026-03-16) · [v3.12.1 release note](./releases/v3.12.1.md)
+Release Index: [v4.0.0](#v400--2026-03-22) · [v3.18.0](#v3180--2026-03-21) · [v3.17.0](#v3170--2026-03-20) · [v3.16.0](#v3160--2026-03-20) · [v3.15.0](#v3150--2026-03-16) · [v3.14.0](#v3140--2026-03-16)
+
+<details open>
+<summary><b>v4.0.0</b> · 2026-03-22 · Engine stabilization, release hardening, and roster light-loading</summary>
+
+### Added
+- **Engine regression coverage**: Added targeted tests for memory SQL safety, graph-sync failure signaling, entropy clamping, compaction sentinel cleanup, embedder persistence, skill outcome memory sinks, Darwin outcome mirroring, and orchestrator lifecycle helpers.
+- **Schema-backed vocabulary state**: Added `vocabulary_stats` and `vocabulary_meta` persistence so cumulative document frequency and `doc_count` survive restarts and rebuild TF-IDF weights without recomputing from only the latest batch.
+- **Graph and lifecycle telemetry**: Added typed events for memory flushes, graph sync failure/coverage, orchestrator disposal, shutdown, circuit breaker state, duplicate-run prevention, memory health ticks, and Darwin cycle completion.
+- **Lightweight specialist roster index**: Added generated specialist profile metadata plus lazy detail payload loading so the roster stays synchronous while heavy specialist content loads only when requested.
+
+### Changed
+- **Memory engine safety and performance**: `initSchema()` now applies WAL/NORMAL/cache/foreign-key/temp-store pragmas first, hot recall paths use targeted SQL with `recallCandidateLimit`, vault writes are debounced with synchronous flush-on-dispose, and timeline ancestry uses a recursive CTE.
+- **Orchestrator lifecycle**: `dispose()` is now synchronous, shutdown ownership lives in CLI/runtime entrypoints, repeated-failure tracking only increments on explicit `failed` runs, and `implementation_plan.md` mutation is gated behind `NEXUS_ANNOTATE_IMPL_PLAN`.
+- **Compaction and background health**: Compaction sentinel cleanup now uses the event-bus unsubscribe contract correctly, and the memory background worker emits aggregate health ticks while auto-quarantining high-entropy low-access items.
+- **Security surface**: Secret detection is centralized in `security-shield.ts` and reused by memory checks instead of maintaining separate inline regex logic.
+
+### Fixed
+- **Memory constructor ordering**: Fresh memory databases no longer fail on startup from preparing access-count statements before the `memories` table exists.
+- **Entropy drift**: `coolDown()` now clamps entropy into `[0, 1]` on both update passes.
+- **Hyperbolic dead stub**: `HyperbolicMath.mobiusAdd()` now throws explicitly instead of silently returning an invalid scalar.
+- **Graph divergence opacity**: Graph mirror write failures now emit `graph.sync.failed` and self-disable rather than silently diverging from SQLite-backed memory truth.
+
+</details>
 
 <details open>
 <summary><b>v3.18.0</b> · 2026-03-21 · Lifecycle hardening across MCP, bootstrap artifacts, and release surfaces</summary>

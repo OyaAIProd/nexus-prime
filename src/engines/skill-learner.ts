@@ -1,5 +1,4 @@
-import { SkillRuntime, SkillArtifact } from './skill-runtime.js';
-import { slugify } from './runtime-assets.js';
+import { SkillRuntime } from './skill-runtime.js';
 import type { InstructionPacket, ExecutionLedger } from './instruction-gateway.js';
 import type { MemoryEngine } from './memory.js';
 

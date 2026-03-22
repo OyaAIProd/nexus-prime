@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { nexusEventBus } from '../../engines/event-bus.js';
-import { getActiveLockForWorkItem, getWorkItem, insertConstructionLock, releaseConstructionLockRecord, updateWorkItemStatus } from '../worklist/crud.js';
+import { getActiveLockForWorkItem, insertConstructionLock, releaseConstructionLockRecord, updateWorkItemStatus } from '../worklist/crud.js';
 import type { ArchitectsDb, ArchitectsProviders, ConstructionLock, WorkItemStatus } from '../types.js';
 
 export async function acquireConstructionLock(

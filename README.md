@@ -632,14 +632,14 @@ Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 
 ## 📜 Release History
 
 <details open>
-<summary><b>v3.18.0</b> · 2026-03-21 · Lifecycle hardening across MCP, bootstrap artifacts, and release surfaces</summary>
+<summary><b>v4.0.0</b> · 2026-03-22 · Engine stabilization, release hardening, and roster light-loading</summary>
 
-- **Lifecycle checklists and footers**: `nexus_session_bootstrap` now appends a mandatory protocol checklist, and `nexus_orchestrate` now appends a mandatory remaining-steps footer.
-- **Lifecycle warnings**: MCP responses now warn when 15+ post-orchestrate tool calls happen without `nexus_store_memory`, and when Nexus-visible 3+ file intent appears without `nexus_optimize_tokens`.
-- **Shared instruction closure**: `CLAUDE.md`, `AGENTS.md`, client bootstrap artifacts, and the feature registry now agree that `nexus_orchestrate` does not replace during-work or end-of-session lifecycle steps.
-- **Release-surface alignment**: Protocol, integrations, knowledge-base, README, and generated bootstrap surfaces now use the same mandatory lifecycle wording.
+- **Memory vault hardening**: SQLite pragmas, access-count parameterization, entropy clamping, graph failure telemetry, debounced vault writes, and recursive-CTE lineage now stabilize memory behavior under real runtime load.
+- **Lifecycle cleanup**: `OrchestratorEngine.dispose()` is synchronous, shutdown ownership stays in entrypoints, compaction sentinel cleanup uses stored unsubscribe closures, and circuit/dedupe telemetry is persisted through typed events.
+- **Persistent vocabulary scoring**: TF-IDF vocabulary state now rebuilds from `vocabulary_stats` + `vocabulary_meta.doc_count` instead of drifting toward only the latest document batch.
+- **Roster cold-start reduction**: Specialist planning/listing stays synchronous while heavyweight specialist markdown and sections load lazily from detail payloads.
 
-Full notes: [releases/v3.18.0.md](./releases/v3.18.0.md) · Full history: [CHANGELOG.md](./CHANGELOG.md)
+Full notes: [releases/v4.0.0.md](./releases/v4.0.0.md) · Full history: [CHANGELOG.md](./CHANGELOG.md)
 </details>
 
 <details>

@@ -662,7 +662,6 @@ export function ensureBootstrap(options: EnsureBootstrapOptions): BootstrapManif
     }
 
     const workspaceRoot = resolve(options.workspaceRoot ?? process.cwd());
-    const _phase = options.phase ?? 'runtime';
     const allowWorkspace = workspaceEligible(workspaceRoot);
     const scope: 'all' | 'home' = allowWorkspace ? 'all' : 'home';
 

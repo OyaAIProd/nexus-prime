@@ -14,8 +14,8 @@ import { ArchitectsWard } from './ward/supervisor.js';
 import { ArchitectsSentinel } from './sentinel/patrol.js';
 import { runConvergenceQueue, setConvergencePaused } from './convergence/queue.js';
 import { DispatchGovernor } from './dispatch/governor.js';
-import { getWorklist, getWorkItemsForWorklist, insertBlueprint, insertWorkItem, insertWorklist, upsertWorkItem, updateWorkItemStatus } from './worklist/crud.js';
-import type { ArchitectsProviders, ArchitectsRuntime, SentinelReport, WorkItemStatus } from './types.js';
+import { getWorklist, getWorkItemsForWorklist, insertBlueprint, insertWorklist, upsertWorkItem, updateWorkItemStatus } from './worklist/crud.js';
+import type { ArchitectsProviders, ArchitectsRuntime, WorkItemStatus } from './types.js';
 
 interface InitArchitectsOptions {
   repoRoot: string;

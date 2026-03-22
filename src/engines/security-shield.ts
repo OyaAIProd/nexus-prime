@@ -50,7 +50,7 @@ export const SECRET_PATTERNS: RegExp[] = [
     /sk_test_[a-zA-Z0-9]{20,}/,
     /Bearer\s+[a-zA-Z0-9\-._~+/]{20,}/i,
     /[A-Z][A-Z0-9_]{2,}_(KEY|SECRET|TOKEN|PASSWORD|PASSWD|PWD|CREDENTIAL)\s*=\s*[^\s#]{8,}/,
-    /api[_-]?key\s*[:=]\s*["']?[a-zA-Z0-9_\-]{16,}/i,
+    /api[_-]?key\s*[:=]\s*["']?[a-zA-Z0-9_-]{16,}/i,
 ];
 
 const CLAIM_PATTERNS = [

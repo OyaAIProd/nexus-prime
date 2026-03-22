@@ -1,14 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BUILTIN_SKILL_PACKS, BUILTIN_WORKFLOW_PACKS, detectDomains, slugify } from './runtime-assets.js';
+import { detectDomains } from './runtime-assets.js';
 import { IMPORTED_SPECIALIST_PROFILES, type ImportedSpecialistProfileSeed } from './generated-specialist-profiles.js';
-
-type ImportedSpecialistSeed = ImportedSpecialistProfileSeed & {
-    path?: string;
-    rawMarkdown: string;
-    sections: Record<string, string>;
-};
 
 export type SpecialistAuthority = 'advisory' | 'review' | 'mutate';
 export type OptimizationProfile = 'standard' | 'max';
@@ -266,38 +260,6 @@ export function planSpecialists(input: {
         reviewGates,
         continuation,
         ledger,
-    };
-}
-
-function normalizeSpecialist(seed: ImportedSpecialistSeed): SpecialistProfile {
-    const text = `${seed.name}\n${seed.description}\n${Object.values(seed.sections).join('\n')}`;
-    const domains = detectDomains(text, [seed.division, ...seed.aliases]);
-    const authority = inferAuthority(seed);
-
-    return {
-        specialistId: `specialist_${slugify((seed.path ?? seed.sourcePath).replace(/\.md$/, ''))}`,
-        name: seed.name,
-        division: seed.division,
-        description: seed.description,
-        emoji: seed.emoji,
-        color: seed.color,
-        vibe: seed.vibe,
-        authority,
-        domains,
-        tools: mapPreferredTools(seed),
-        roleAffinity: inferRoleAffinity(seed, authority),
-        mission: sectionOr(seed, ['mission', 'core mission', 'role definition'], seed.description),
-        rules: extractBullets(sectionOr(seed, ['rules', 'critical rules you must follow'], '')),
-        workflow: extractWorkflow(sectionOr(seed, ['workflow', 'workflow process'], '')),
-        deliverables: extractBullets(sectionOr(seed, ['deliverables', 'technical deliverables', 'deliverable template'], '')),
-        communicationStyle: extractBullets(sectionOr(seed, ['communication', 'communication style'], '')),
-        successMetrics: extractBullets(sectionOr(seed, ['success', 'success metrics'], '')),
-        aliases: seed.aliases,
-        recommendedSkills: inferRecommendedSkills(domains, authority),
-        recommendedWorkflows: inferRecommendedWorkflows(domains),
-        rawMarkdown: seed.rawMarkdown,
-        sections: seed.sections,
-        sourcePath: seed.path ?? seed.sourcePath,
     };
 }
 
@@ -593,102 +555,6 @@ function buildReviewGates(crew: SelectedCrew, selectedSpecialists: SelectedSpeci
         { gate: 'devops', status: 'planned', owner: 'DevOps Shipper', rationale: 'Packaging, release notes, deploy, and rollback.' },
         { gate: 'marketer-docs', status: 'planned', owner: 'Marketer Docs Layer', rationale: 'Append-only website/docs/README surfacing.' },
     ];
-}
-
-function inferAuthority(seed: ImportedSpecialistSeed): SpecialistAuthority {
-    const pathValue = (seed.path ?? seed.sourcePath).toLowerCase();
-    const nameValue = seed.name.toLowerCase();
-    const text = `${seed.description}\n${Object.values(seed.sections).join('\n')}`.toLowerCase();
-
-    if (
-        /(frontend|backend|mobile|ai engineer|devops|prototype|senior developer|unity|unreal|godot|metal|visionos|maintainer|builder|engineer|architect)/.test(nameValue) ||
-        /(implement|build|deploy|infrastructure|ci\/cd|pipeline|systems engineer|editor tool|integration engineering)/.test(text)
-    ) {
-        return 'mutate';
-    }
-
-    if (/(security|compliance|auditor|checker|researcher|review|tester|qa|analyzer|producer|manager)/.test(nameValue) || pathValue.includes('testing/')) {
-        return 'review';
-    }
-
-    return 'advisory';
-}
-
-function inferRoleAffinity(seed: ImportedSpecialistSeed, authority: SpecialistAuthority): string[] {
-    const affinity = new Set<string>();
-    affinity.add('planner');
-    if (authority === 'mutate') affinity.add('coder');
-    if (authority !== 'mutate') affinity.add('reviewer');
-    if (seed.division === 'testing') affinity.add('verifier');
-    if (seed.division === 'marketing' || seed.division === 'product' || seed.division === 'project-management' || seed.division === 'strategy') {
-        affinity.add('planner');
-    }
-    if (seed.division === 'specialized') affinity.add('research-shadow');
-    return [...affinity];
-}
-
-function inferRecommendedSkills(domains: string[], authority: SpecialistAuthority): string[] {
-    const seedSkills = BUILTIN_SKILL_PACKS
-        .filter((skill) => domains.includes(skill.domain))
-        .filter((skill) => authority === 'mutate' || skill.riskClass !== 'mutate')
-        .slice(0, authority === 'mutate' ? 6 : 4)
-        .map((skill) => skill.name);
-    return dedupeStrings(seedSkills);
-}
-
-function inferRecommendedWorkflows(domains: string[]): string[] {
-    return dedupeStrings(BUILTIN_WORKFLOW_PACKS.filter((workflow) => domains.includes(workflow.domain)).slice(0, 4).map((workflow) => workflow.name));
-}
-
-function mapPreferredTools(seed: ImportedSpecialistSeed): string[] {
-    const raw = `${seed.description}\n${Object.values(seed.sections).join('\n')}`.toLowerCase();
-    const mapped = new Set<string>();
-    const declared = seed.tools.map((value) => value.toLowerCase());
-
-    if (declared.some((tool) => tool.includes('read'))) mapped.add('read_file');
-    if (declared.some((tool) => tool.includes('write') || tool.includes('edit'))) {
-        mapped.add('write_file');
-        mapped.add('replace_text');
-    }
-    if (declared.some((tool) => tool.includes('web'))) mapped.add('run_command');
-
-    if (/(build|implement|write|code|deploy|configure|edit)/.test(raw)) {
-        mapped.add('replace_text');
-        mapped.add('append_file');
-    }
-    if (/(test|analy|audit|measure|search|fetch|research)/.test(raw)) {
-        mapped.add('read_file');
-        mapped.add('run_command');
-    }
-
-    return [...mapped].filter(Boolean);
-}
-
-function sectionOr(seed: ImportedSpecialistSeed, keys: string[], fallback: string): string {
-    for (const key of keys) {
-        const direct = seed.sections[key];
-        if (direct) return direct;
-    }
-    return fallback;
-}
-
-function extractBullets(raw: string): string[] {
-    return raw
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter((line) => line.startsWith('- ') || line.startsWith('* ') || /^\d+\./.test(line))
-        .map((line) => line.replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, ''))
-        .slice(0, 8);
-}
-
-function extractWorkflow(raw: string): string[] {
-    const bullets = extractBullets(raw);
-    if (bullets.length > 0) return bullets;
-    return raw
-        .split(/\r?\n+/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .slice(0, 6);
 }
 
 function dedupeStrings(values: string[]): string[] {
