@@ -10,8 +10,6 @@
  */
 
 import type Database from 'better-sqlite3';
-import * as path from 'path';
-import * as os from 'os';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TF-IDF Vocabulary (built from stored documents)
@@ -60,7 +58,9 @@ export const HyperbolicMath = {
      * Mobius addition: u ⊕ v
      * Used to translate points in hyperbolic space while staying in the unit ball.
      */
-    mobiusAdd(_u: number[], _v: number[]): never {
+    mobiusAdd(u: number[], v: number[]): never {
+        void u;
+        void v;
         throw new Error(
             'HyperbolicMath.mobiusAdd() is not implemented. ' +
             'Do not call this method until a full Möbius addition is written and tested.'

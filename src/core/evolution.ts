@@ -5,7 +5,7 @@
  * Includes emergent grammar and fission protocol.
  */
 
-import { GrammarRule, EvolutionPolicy, Pattern, NetworkMessage } from './types.js';
+import { GrammarRule, EvolutionPolicy, Pattern } from './types.js';
 
 export class EvolutionEngine {
   private grammar: Map<string, GrammarRule> = new Map();

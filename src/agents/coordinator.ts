@@ -4,7 +4,7 @@
  * Swarm topologies and consensus protocols for multi-agent coordination.
  */
 
-import { Agent, NetworkMessage, ConsensusState, NodeState } from '../core/types.js';
+import { Agent, ConsensusState } from '../core/types.js';
 import { PhantomWorker, type WorkerTask } from '../phantom/index.js';
 import { randomUUID } from 'crypto';
 import { type FileRef } from '../engines/token-supremacy.js';

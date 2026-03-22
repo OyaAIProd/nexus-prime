@@ -155,7 +155,7 @@ export class ContinuousAttentionStream {
         this.codebook.observe(fullText);
 
         // Compress common patterns
-        const { compressed, ratio, replacements } = this.codebook.compress(fullText);
+        this.codebook.compress(fullText);
 
         // Step 4: Apply attention-weighted truncation for extreme compression
         // Tokens below a very low threshold get dropped entirely
@@ -166,7 +166,7 @@ export class ContinuousAttentionStream {
             }
         }
         const filteredText = filteredTokens.join(' ');
-        const { compressed: finalCompressed, ratio: finalRatio } = this.codebook.compress(filteredText);
+        const { compressed: finalCompressed } = this.codebook.compress(filteredText);
 
         const totalAttention = weights.reduce((s, w) => s + w, 0);
         const compressionRatio = tokens.length > 0 ? fullText.length / finalCompressed.length : 1;

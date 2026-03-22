@@ -159,7 +159,6 @@ export class MergeOracle {
         const resultParts: string[] = [];
 
         for (const hunkA of hunksA) {
-            let hasConflict = false;
             for (let i = 0; i < hunksB.length; i++) {
                 const hunkB = hunksB[i];
                 // Same file + overlapping line range = conflict
@@ -168,7 +167,6 @@ export class MergeOracle {
                     hunkA.endLine >= hunkB.startLine) {
                     conflicts.push(`${hunkA.file}:${hunkA.startLine}-${hunkA.endLine} (both approaches modify)`);
                     // Favor hunkA (higher-scored worker) for conflicts
-                    hasConflict = true;
                     usedB.add(i);
                 }
             }

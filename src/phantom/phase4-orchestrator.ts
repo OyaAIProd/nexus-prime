@@ -72,7 +72,7 @@ const TARGET_FILES = [
  * Strategy: Add nexus_mindkit_check as a thin wrapper tool in mcp.ts
  * Pure tool addition, no middleware — fast and safe
  */
-const workerAExecutor = async (worktreeDir: string, task: WorkerTask) => {
+const workerAExecutor = async (worktreeDir: string) => {
     const mcpPath = path.join(worktreeDir, 'src/agents/adapters/mcp.ts');
 
     if (!fs.existsSync(mcpPath)) {
@@ -194,7 +194,7 @@ const workerAExecutor = async (worktreeDir: string, task: WorkerTask) => {
  * Strategy: Add tool + middleware that auto-checks EVERY tool call
  * More ambitious: guardrail wrapper on the entire CallTool handler
  */
-const workerBExecutor = async (worktreeDir: string, task: WorkerTask) => {
+const workerBExecutor = async (worktreeDir: string) => {
     const mcpPath = path.join(worktreeDir, 'src/agents/adapters/mcp.ts');
 
     if (!fs.existsSync(mcpPath)) {

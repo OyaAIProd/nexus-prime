@@ -2428,7 +2428,6 @@ export class MemoryEngine {
     const docCountRow = this.db.prepare(
       `SELECT value FROM vocabulary_meta WHERE key = 'doc_count'`
     ).get() as { value?: string } | undefined;
-    const docCount = Number.parseInt(docCountRow?.value ?? '0', 10);
     const statsRow = this.db.prepare('SELECT COUNT(*) as c FROM vocabulary_stats').get() as { c?: number } | undefined;
     if ((docCountRow?.value ?? '0') !== '0' || (statsRow?.c ?? 0) > 0) {
       return;

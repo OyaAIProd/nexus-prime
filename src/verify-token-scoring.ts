@@ -1,5 +1,4 @@
 import { TokenSupremacyEngine } from './engines/token-supremacy.js';
-import * as path from 'path';
 import * as fs from 'fs';
 
 async function verify() {

@@ -1,6 +1,5 @@
 import { PODNetwork } from './engines/pod-network.js';
 import { fork } from 'child_process';
-import * as path from 'path';
 import * as fs from 'fs';
 
 async function verify() {

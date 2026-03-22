@@ -102,7 +102,7 @@ function test() {
   expectIncludes(indexHtml, 'dashboard_cockpit_hero.png', 'landing page should reference the cockpit hero screenshot');
   expectIncludes(indexHtml, 'dashboard_runtime_sequence.png', 'landing page should reference the runtime sequence screenshot');
   expectIncludes(indexHtml, 'dashboard_knowledge_trace.png', 'landing page should reference the knowledge trace screenshot');
-  expectIncludes(indexHtml, 'v3.18.0', 'landing page should advertise the current release in its changelog block');
+  expectIncludes(indexHtml, 'v4.0.0', 'landing page should advertise the current release in its changelog block');
   expectIncludes(indexHtml, 'nexus-prime setup codex', 'landing page should document Codex setup');
   expectIncludes(indexHtml, 'auto-establish bootstrap artifacts', 'landing page should explain automatic bootstrap behavior');
   expectIncludes(knowledgeBaseHtml, 'rel="canonical"', 'knowledge base should declare a canonical URL');

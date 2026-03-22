@@ -7,7 +7,6 @@
  * Phase: 8F (Darwin Loop)
  */
 
-import * as path from 'path';
 import { DarwinJournal, type DarwinCycle } from './darwin-journal.js';
 import type { MemoryEngine } from './memory.js';
 import { nexusEventBus } from './event-bus.js';
