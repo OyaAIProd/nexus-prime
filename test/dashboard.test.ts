@@ -130,6 +130,8 @@ function assertHealthContract(health: any, address: string): void {
   assert.strictEqual(health.capabilities.memoryShared, true, 'shared-memory capability should be advertised');
   assert.strictEqual(health.capabilities.worktreeHealth, true, 'worktree-health capability should be advertised');
   assert.strictEqual(health.capabilities.featureRegistry, true, 'feature-registry capability should be advertised');
+  assert.strictEqual(health.capabilities.synapse, true, 'synapse capability should be advertised');
+  assert.strictEqual(health.capabilities.architects, true, 'architects capability should be advertised');
 }
 
 async function test() {
@@ -295,6 +297,11 @@ async function test() {
       modelTiersRes,
       worktreeHealthRes,
       featureRegistryRes,
+      synapseTeamsRes,
+      synapseHealthRes,
+      synapseApprovalsRes,
+      architectsDispatchRes,
+      architectsEscalationsRes,
       primaryClientRes,
       specialistsRes,
       crewsRes,
@@ -336,6 +343,11 @@ async function test() {
       fetch(`${primaryAddress}/api/models/tiers?runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
       fetch(`${primaryAddress}/api/worktree-health?runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
       fetch(`${primaryAddress}/api/feature-registry`),
+      fetch(`${primaryAddress}/api/synapse/teams`),
+      fetch(`${primaryAddress}/api/synapse/health`),
+      fetch(`${primaryAddress}/api/synapse/approvals`),
+      fetch(`${primaryAddress}/api/architects/dispatch`),
+      fetch(`${primaryAddress}/api/architects/escalations`),
       fetch(`${primaryAddress}/api/clients/primary`),
       fetch(`${primaryAddress}/api/specialists`),
       fetch(`${primaryAddress}/api/crews`),
@@ -378,6 +390,11 @@ async function test() {
     const modelTiers = await modelTiersRes.json();
     const worktreeHealth = await worktreeHealthRes.json();
     const featureRegistry = await featureRegistryRes.json();
+    const synapseTeams = await synapseTeamsRes.json();
+    const synapseHealth = await synapseHealthRes.json();
+    const synapseApprovals = await synapseApprovalsRes.json();
+    const architectsDispatch = await architectsDispatchRes.json();
+    const architectsEscalations = await architectsEscalationsRes.json();
     const primaryClient = await primaryClientRes.json();
     const specialists = await specialistsRes.json();
     const crews = await crewsRes.json();
@@ -421,6 +438,8 @@ async function test() {
     assert.match(html, /catalog:\s*\{[\s\S]*defaultLibraryMode:\s*'platform'[\s\S]*showGraph:\s*false/m, 'catalog workspace should render inventory without the graph shell');
     assert.match(html, /governance:\s*\{[\s\S]*defaultLibraryMode:\s*'governance'[\s\S]*showGraph:\s*false/m, 'governance workspace should render as a non-graph-first center layout');
     assert.ok(html.includes('id="runtime-select"'), 'dashboard HTML should expose a runtime selector');
+    assert.ok(html.includes('id="synapse-label"'), 'dashboard HTML should expose Synapse status in the header');
+    assert.ok(html.includes('id="architects-label"'), 'dashboard HTML should expose Architects status in the header');
     assert.ok(html.includes('runtime-usage-summary'), 'dashboard HTML should expose runtime usage summary shell');
     assert.ok(html.includes('summary-chip'), 'dashboard HTML should render compact runtime summary chips');
     assert.ok(html.includes('id="plan-button"'), 'dashboard HTML should expose planner preview action');
@@ -502,6 +521,11 @@ async function test() {
     assert.ok(Array.isArray(modelTiers.trace) && modelTiers.trace.length > 0, 'model-tier API should expose stage trace');
     assert.ok(typeof worktreeHealth.overall === 'string', 'worktree-health API should expose overall status');
     assert.ok(Array.isArray(featureRegistry.sections) && featureRegistry.sections.length > 0, 'feature-registry API should expose generated sections');
+    assert.ok(Array.isArray(synapseTeams), 'synapse teams API should return a list');
+    assert.ok(Array.isArray(synapseHealth), 'synapse health API should return a list');
+    assert.ok(Array.isArray(synapseApprovals), 'synapse approvals API should return a list');
+    assert.ok(typeof architectsDispatch === 'object' && architectsDispatch !== null, 'architects dispatch API should return an object');
+    assert.ok(Array.isArray(architectsEscalations), 'architects escalations API should return a list');
     assert.strictEqual(primaryClient.clientId, 'codex', 'primary client API should prefer Codex when CODEX env is active');
     assert.strictEqual(primaryClient.state, 'primaryActive', 'primary client API should expose primary-active status');
     assert.ok(Array.isArray(specialists) && specialists.length > 20, 'specialists API should return the imported roster');

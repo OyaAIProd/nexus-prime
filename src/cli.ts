@@ -19,6 +19,7 @@ import { fileURLToPath } from 'url';
 import { PODNetwork } from './engines/pod-network.js';
 import { InstructionGateway, type ClientBootstrapArtifact } from './engines/instruction-gateway.js';
 import { ensureBootstrap, collectBootstrapManifest, validateTargetPath } from './engines/client-bootstrap.js';
+import { buildRuntimeSetupCommand } from './cli-setup.js';
 
 
 const tokenEngine = new TokenSupremacyEngine();
@@ -909,6 +910,7 @@ program
 program
   .command('setup')
   .description('Install MCP config plus client-native Nexus Prime instructions')
+  .addCommand(buildRuntimeSetupCommand())
   .addCommand(
     new Command('codex')
       .description('Integrate with Codex by creating or updating a managed AGENTS.md block')

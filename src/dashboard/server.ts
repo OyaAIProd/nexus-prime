@@ -13,6 +13,8 @@ import type { SubAgentRuntime } from '../phantom/runtime.js';
 import { RuntimeRegistry } from '../engines/runtime-registry.js';
 import type { OrchestratorEngine } from '../engines/orchestrator.js';
 import { buildFeatureRegistry } from '../engines/feature-registry.js';
+import type { SynapseRuntime } from '../synapse/index.js';
+import type { ArchitectsRuntime } from '../architects/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,6 +53,8 @@ const REQUIRED_CAPABILITIES = {
     memoryShared: true,
     worktreeHealth: true,
     featureRegistry: true,
+    synapse: true,
+    architects: true,
 } as const;
 
 const DEFAULT_SKILLS: Array<{ name: string; instructions: string; riskClass: 'read' | 'orchestrate' | 'mutate'; scope: 'session' | 'worker' | 'global' }> = [
@@ -82,6 +86,8 @@ interface DashboardServerOptions {
     memoryProvider?: () => MemoryEngine | undefined;
     adaptersProvider?: () => Adapter[];
     clientRegistryProvider?: () => ClientRegistry | undefined;
+    synapseProvider?: () => SynapseRuntime | undefined;
+    architectsProvider?: () => ArchitectsRuntime | undefined;
     repoRoot?: string;
 }
 
@@ -134,6 +140,8 @@ export class DashboardServer {
     private memoryProvider?: () => MemoryEngine | undefined;
     private adaptersProvider?: () => Adapter[];
     private clientRegistryProvider?: () => ClientRegistry | undefined;
+    private synapseProvider?: () => SynapseRuntime | undefined;
+    private architectsProvider?: () => ArchitectsRuntime | undefined;
     private repoRoot: string;
     private runtimeRegistry: RuntimeRegistry;
     private dashboardUrl: string | null = null;
@@ -148,6 +156,8 @@ export class DashboardServer {
         this.memoryProvider = options.memoryProvider;
         this.adaptersProvider = options.adaptersProvider;
         this.clientRegistryProvider = options.clientRegistryProvider;
+        this.synapseProvider = options.synapseProvider;
+        this.architectsProvider = options.architectsProvider;
         this.repoRoot = options.repoRoot ?? process.cwd();
         this.runtimeRegistry = new RuntimeRegistry();
         this.server = http.createServer((req, res) => {
@@ -355,6 +365,41 @@ export class DashboardServer {
 
         if (req.method === 'GET' && url.pathname === '/api/feature-registry') {
             this.respondJson(res, buildFeatureRegistry(this.repoRoot));
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/synapse/teams') {
+            this.respondJson(res, this.getSynapse()?.getStrikeTeamStatus() ?? []);
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/synapse/health') {
+            this.respondJson(res, this.getSynapse()?.getOperativeHealth() ?? []);
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/synapse/approvals') {
+            this.respondJson(res, this.getSynapse()?.getPendingApprovals() ?? []);
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/architects/dispatch') {
+            this.respondJson(res, this.getArchitects()?.getDispatchStatus() ?? {});
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/architects/escalations') {
+            this.respondJson(res, this.getArchitects()?.getWardEscalations() ?? []);
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/architects/worklist') {
+            const worklistId = url.searchParams.get('worklistId');
+            if (!worklistId) {
+                this.respondJson(res, { error: 'worklistId-required' }, 400);
+                return;
+            }
+            this.respondJson(res, this.getArchitects()?.getWorklist(worklistId) ?? { error: 'architects-unavailable' });
             return;
         }
 
@@ -1140,6 +1185,14 @@ export class DashboardServer {
 
     private getOrchestrator(): OrchestratorEngine | undefined {
         return this.orchestratorProvider?.();
+    }
+
+    private getSynapse(): SynapseRuntime | undefined {
+        return this.synapseProvider?.();
+    }
+
+    private getArchitects(): ArchitectsRuntime | undefined {
+        return this.architectsProvider?.();
     }
 
     private getMemory(): MemoryEngine | undefined {

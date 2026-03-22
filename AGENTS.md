@@ -41,3 +41,31 @@ Memory persists under ~/.nexus-prime/. Full operating protocol: docs/nexus-proto
 - Worker context lives in `.agent/runtime/context.json`; the compiled packet lives in `.agent/runtime/packet.json`.
 <!-- nexus-prime:codex-bootstrap:end -->
 
+<!-- nexus-prime:synapse:start -->
+## Synapse Operative Protocol
+> Only active when env SYNAPSE_OPERATIVE_ID is set.
+
+IF SYNAPSE_OPERATIVE_ID is set:
+1. `nexus_synapse_sortie_start(operativeId)` first in every session
+2. `nexus_synapse_echo(missionTitle)` before work
+3. `nexus_synapse_cost_report(...)` after significant LLM usage
+4. `nexus_synapse_mission_progress(...)` after meaningful findings
+5. `nexus_synapse_request_approval(...)` before delete/overwrite/reset and wait
+6. `nexus_synapse_sortie_end(...)` last in every session
+7. Check `nexus_architects_relay_inbox(...)` at session start
+8. Do not call `nexus_session_bootstrap` directly inside a Synapse sortie
+<!-- nexus-prime:synapse:end -->
+
+<!-- nexus-prime:architects:start -->
+## Architects Operative Protocol
+> Only active when env ARCHITECTS_OPERATIVE_ID is set.
+
+IF ARCHITECTS_OPERATIVE_ID is set:
+1. `nexus_architects_worklist_get(worklistId)` at session start
+2. `nexus_architects_workitem_claim(workItemId, operativeId)` before any work
+3. Work only on the branch assigned to that WorkItem
+4. `nexus_architects_workitem_complete(...)` when done or blocked
+5. Never push directly to main
+6. Use `nexus_architects_relay_send(...)` for operative-to-operative messages
+7. Escalate 2+ sortie blockers to ward via relay instead of waiting silently
+<!-- nexus-prime:architects:end -->
