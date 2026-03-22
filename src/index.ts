@@ -33,6 +33,8 @@ import {
   type SubAgentRuntime
 } from './phantom/index.js';
 import { ensureBootstrap } from './engines/client-bootstrap.js';
+import { initSynapse, type SynapseRuntime } from './synapse/index.js';
+import { initArchitects, type ArchitectsRuntime } from './architects/index.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -63,6 +65,8 @@ export class NexusPrime {
   private context: InfiniteContext;
   private running = false;
   private dashboardServer: DashboardServer;
+  private synapse: SynapseRuntime | null = null;
+  private architects: ArchitectsRuntime | null = null;
 
   constructor(config?: Partial<NexusConfig>) {
     const memoryDbPath = config?.memory?.cortex?.path ?? process.env.NEXUS_MEMORY_DB_PATH;
@@ -127,6 +131,8 @@ export class NexusPrime {
       memoryProvider: () => this.memoryEngine,
       adaptersProvider: () => this.getAdapters(),
       clientRegistryProvider: () => this.clientRegistry,
+      synapseProvider: () => this.synapse ?? undefined,
+      architectsProvider: () => this.architects ?? undefined,
       repoRoot: process.cwd(),
     });
   }
@@ -154,8 +160,24 @@ export class NexusPrime {
       await this.addAdapter(adapterType as AdapterType);
     }
 
+    this.synapse = initSynapse({
+      repoRoot: process.cwd(),
+      orchestrator: this.orchestrator,
+      memory: this.memoryEngine,
+      sessionDNA: this.sessionDNA,
+    });
+    this.architects = initArchitects({
+      repoRoot: process.cwd(),
+    });
+    if (this.synapse && this.architects) {
+      this.synapse.providers.claimWorkItem = async (workItemId, operativeId) =>
+        this.architects?.claimWorkItem(workItemId, operativeId) ?? null;
+      this.synapse.providers.completeWorkItem = async (workItemId, operativeId, status) =>
+        this.architects?.completeWorkItem(workItemId, operativeId, status) ?? null;
+    }
+
     this.dashboardServer.start();
-    nexusEventBus.emit('system.boot', { version: '3.12.1', toolsCount: 33 });
+    nexusEventBus.emit('system.boot', { version: '5.0.0', toolsCount: 55 });
 
     this.running = true;
     console.error('✅ Nexus Prime running with engines!');
@@ -172,7 +194,10 @@ export class NexusPrime {
       });
     }
 
+    this.synapse?.stop();
+    this.architects?.stop();
     this.dashboardServer.stop();
+    this.orchestrator.dispose();
     this.sessionDNA.flush();
 
     this.running = false;
@@ -183,6 +208,9 @@ export class NexusPrime {
   flushMemory(): void {
     if (this.memoryEngine && typeof this.memoryEngine.flush === 'function') {
       this.memoryEngine.flush();
+    }
+    if (this.memoryEngine && typeof this.memoryEngine.flushVaultSync === 'function') {
+      this.memoryEngine.flushVaultSync();
     }
   }
 
@@ -486,6 +514,14 @@ export class NexusPrime {
 
   getClientRegistry(): ClientRegistry {
     return this.clientRegistry;
+  }
+
+  getSynapse(): SynapseRuntime | null {
+    return this.synapse;
+  }
+
+  getArchitects(): ArchitectsRuntime | null {
+    return this.architects;
   }
 
   evolve(): void {

@@ -171,6 +171,27 @@ interface ResolvedSelections {
   audit: RuntimeArtifactSelectionAudit;
 }
 
+interface PreparedExecution {
+  intent: AutonomyIntent;
+  phases: string[];
+  primaryClient?: RuntimePrimaryClientSnapshot;
+  bootstrapManifest: BootstrapManifestStatus;
+  latestDNA?: ReturnType<typeof SessionDNAManager.loadLatest>;
+  memoryMatches: string[];
+  memoryStats: ReturnType<MemoryEngine['getStats']>;
+  candidateFiles: string[];
+  knowledgeFabric: KnowledgeFabricBundle;
+  plannedFiles: string[];
+  planner: Awaited<ReturnType<SubAgentRuntime['planExecution']>>;
+  selections: ResolvedSelections;
+  catalogHealth: RuntimeCatalogHealthSnapshot;
+  tokenBudget: RuntimeSourceAwareTokenBudgetSnapshot;
+  workerCount: number;
+  mode: RuntimeOrchestrationSnapshot['mode'];
+  taskGraph: RuntimeTaskGraphSnapshot;
+  workerPlan: RuntimeWorkerPlanSnapshot;
+}
+
 interface OrchestratorOptions {
   memory?: MemoryEngine;
   runtime?: SubAgentRuntime;
@@ -201,9 +222,15 @@ export class OrchestratorEngine {
   private flushInterval?: NodeJS.Timeout;
   private compactionSentinel?: CompactionSentinel;
   private memoryBackgroundWorker?: MemoryBackgroundWorker;
+  private unsubscribePreCompaction?: () => void;
   private repoTreeGenerator: RepoTreeGenerator;
   private skillRuntime: SkillRuntime;
   private skillLearner: SkillLearnerEngine;
+  private executionDedupeStore = new Map<string, { id: string; state: string; ts: number; promise?: Promise<ExecutionRun> }>();
+  private circuitOpenUntil = 0;
+  private consecutiveFailures = 0;
+  private readonly CIRCUIT_THRESHOLD = 3;
+  private readonly CIRCUIT_COOLDOWN_MS = 30_000;
 
   constructor(options: OrchestratorOptions = {}) {
     this.memory = options.memory || new MemoryEngine();
@@ -229,7 +256,7 @@ export class OrchestratorEngine {
     
     this.memoryBackgroundWorker = new MemoryBackgroundWorker(this.memory);
     this.repoTreeGenerator = new RepoTreeGenerator(this.repoRoot);
-    this.skillLearner = new SkillLearnerEngine(this.skillRuntime);
+    this.skillLearner = new SkillLearnerEngine(this.skillRuntime, this.memory);
   }
 
   /**
@@ -272,7 +299,7 @@ export class OrchestratorEngine {
     return subtasks.length > 0 ? subtasks : [task];
   }
 
-  public async bootstrapSession(task: string, options: Partial<ExecutionTask> = {}): Promise<SessionBootstrapResult> {
+  private async _prepareExecution(task: string, options: Partial<ExecutionTask> = {}): Promise<PreparedExecution> {
     const intent = this.classifyIntent(task);
     const phases = this.decomposeTask(task);
     const primaryClient = this.resolvePrimaryClient();
@@ -305,7 +332,6 @@ export class OrchestratorEngine {
     const selections = this.resolveSelections(task, intent, planner, knowledgeFabric, options);
     const catalogHealth = this.scanCatalogHealth(selections);
     const tokenBudget = this.toSourceAwareTokenBudget(knowledgeFabric, plannedFiles, 'knowledge-fabric-source-aware-budget');
-    const tokenOptimizationRequired = true; // MUST run mandatorily
     const workerCount = this.decideWorkers(
       options.workers,
       planner.swarmDecision.workers,
@@ -317,6 +343,116 @@ export class OrchestratorEngine {
     const mode = this.determineMode(intent, phases.length, workerCount);
     const taskGraph = this.buildTaskGraph(task, phases, intent);
     const workerPlan = this.buildWorkerPlan(workerCount, mode, taskGraph, knowledgeFabric);
+
+    return {
+      intent,
+      phases,
+      primaryClient,
+      bootstrapManifest,
+      latestDNA,
+      memoryMatches,
+      memoryStats,
+      candidateFiles,
+      knowledgeFabric,
+      plannedFiles,
+      planner,
+      selections,
+      catalogHealth,
+      tokenBudget,
+      workerCount,
+      mode,
+      taskGraph,
+      workerPlan,
+    };
+  }
+
+  private checkCircuit(): void {
+    if (Date.now() >= this.circuitOpenUntil) {
+      return;
+    }
+    const remainingMs = this.circuitOpenUntil - Date.now();
+    nexusEventBus.emit('nexus.circuit-open', {
+      remainingMs,
+      consecutiveFailures: this.consecutiveFailures,
+    });
+    throw new Error(
+      `Orchestration circuit open for ${Math.ceil(remainingMs / 1000)}s after ${this.consecutiveFailures} consecutive failures.`,
+    );
+  }
+
+  private getRunFingerprint(sessionId: string, task: string, clientId: string): string {
+    const key = `${sessionId}:${clientId}:${task.trim().toLowerCase().slice(0, 256)}`;
+    let hash = 5381n;
+    for (const char of key) {
+      hash = (hash * 33n ^ BigInt(char.charCodeAt(0))) & 0xFFFFFFFFFFFFFFFFn;
+    }
+    return hash.toString(16);
+  }
+
+  private nextRepeatedFailures(runState: string, previous: number): number {
+    if (runState === 'merged') return 0;
+    if (runState === 'failed') return Math.min(previous + 1, 8);
+    return previous;
+  }
+
+  private updateCircuitState(runState: string): void {
+    if (runState === 'failed') {
+      this.consecutiveFailures += 1;
+      if (this.consecutiveFailures >= this.CIRCUIT_THRESHOLD) {
+        this.circuitOpenUntil = Date.now() + this.CIRCUIT_COOLDOWN_MS;
+        nexusEventBus.emit('nexus.circuit-tripped', {
+          consecutiveFailures: this.consecutiveFailures,
+        });
+      }
+      return;
+    }
+
+    if (runState === 'merged') {
+      this.consecutiveFailures = 0;
+      this.circuitOpenUntil = 0;
+    }
+  }
+
+  public getMemoryEngine(): MemoryEngine {
+    return this.memory;
+  }
+
+  public dispose(): void {
+    if (this.flushInterval) {
+      clearInterval(this.flushInterval);
+      this.flushInterval = undefined;
+    }
+    this.unsubscribePreCompaction?.();
+    this.unsubscribePreCompaction = undefined;
+    this.compactionSentinel?.stop();
+    this.memoryBackgroundWorker?.stop();
+    this.memory.preCompactionFlush('dispose');
+    this.memory.flushVaultSync();
+    nexusEventBus.emit('orchestrator.disposed', { ts: Date.now() });
+  }
+
+  public async bootstrapSession(task: string, options: Partial<ExecutionTask> = {}): Promise<SessionBootstrapResult> {
+    const prepared = await this._prepareExecution(task, options);
+    const {
+      intent,
+      phases,
+      primaryClient,
+      bootstrapManifest,
+      latestDNA,
+      memoryMatches,
+      memoryStats,
+      candidateFiles,
+      knowledgeFabric,
+      plannedFiles,
+      planner,
+      selections,
+      catalogHealth,
+      tokenBudget,
+      mode,
+      taskGraph,
+      workerPlan,
+    } = prepared;
+    const tokenOptimizationRequired = true; // MUST run mandatorily
     const ragUsageSummary = this.toRagUsageSummary(knowledgeFabric, {
       usedInPlanner: knowledgeFabric.rag.hits.length > 0,
       usedInPacket: false,
@@ -365,11 +501,11 @@ export class OrchestratorEngine {
     this.ensurePeriodicFlushAndSentinel();
 
     // First-use project scan: auto-generate a repo-profile memory on first bootstrap
+    const repoTree = this.repoTreeGenerator.generate();
     try {
       const existingProfile = await this.memory.recall('#repo-profile', 2);
       const hasProfile = existingProfile.some(m => m.includes('#repo-profile') || m.includes('Repo profile:'));
       if (!hasProfile) {
-        const repoTree = new RepoTreeGenerator(this.repoRoot).generate();
         const extCounts: Record<string, number> = {};
         const countExtensions = (node: RepoTreeNode) => {
           if (node.type === 'file') {
@@ -442,7 +578,7 @@ export class OrchestratorEngine {
         selectedFiles: knowledgeFabric.repo.selectedFiles,
         modelTiers: knowledgeFabric.modelTierTrace.map((trace) => `${trace.stage}:${trace.tier}`),
       },
-      repoTree: new RepoTreeGenerator(this.repoRoot).generate(),
+      repoTree,
     };
   }
 
@@ -454,7 +590,7 @@ export class OrchestratorEngine {
       }, 30000);
       this.flushInterval.unref();
 
-      nexusEventBus.on('memory.pre-compaction', (payload) => {
+      this.unsubscribePreCompaction = nexusEventBus.on('memory.pre-compaction', (payload) => {
         this.memory.preCompactionFlush(payload.reason);
       });
     }
@@ -463,18 +599,38 @@ export class OrchestratorEngine {
       this.compactionSentinel = new CompactionSentinel();
       this.compactionSentinel.start();
     }
+    this.memoryBackgroundWorker?.start();
   }
 
   public async orchestrate(task: string, options: Partial<ExecutionTask> = {}): Promise<ExecutionRun> {
+    this.checkCircuit();
     const army = await this.induce(task);
-    const intent = this.classifyIntent(task);
-    const phases = this.decomposeTask(task);
-    const primaryClient = this.resolvePrimaryClient();
-    const bootstrapManifest = readBootstrapManifest();
+    const prepared = await this._prepareExecution(task, options);
+    const {
+      intent,
+      phases,
+      primaryClient,
+      bootstrapManifest,
+      latestDNA,
+      memoryMatches,
+      memoryStats,
+      candidateFiles,
+      knowledgeFabric,
+      plannedFiles,
+      planner,
+      selections,
+      catalogHealth,
+      tokenBudget,
+      workerCount,
+      mode,
+      taskGraph,
+      workerPlan,
+    } = prepared;
     this.runtime.recordClientToolCall('nexus_orchestrate', {
       orchestrateCalled: true,
       plannerCalled: true,
     });
+    this.ensurePeriodicFlushAndSentinel();
     const ledger = createExecutionLedger({
       sessionId: this.sessionState.sessionId,
       task,
@@ -489,14 +645,11 @@ export class OrchestratorEngine {
         source: primaryClient?.source ?? 'env',
       },
     });
-    const latestDNA = SessionDNAManager.loadLatest();
-    const memoryMatches = await this.memory.recall(task, 8);
     markExecutionLedgerStep(ledger, 'recall-memory', 'completed', {
       summary: `Recalled ${memoryMatches.length} memory match(es).`,
       details: { matches: memoryMatches.slice(0, 4) },
     });
     nexusEventBus.emit('memory.recall', { query: task, count: memoryMatches.length });
-    const memoryStats = this.memory.getStats();
     markExecutionLedgerStep(ledger, 'memory-stats', 'completed', {
       summary: `Loaded memory stats (${memoryStats.cortex} cortex / ${memoryStats.hippocampus} hippocampus).`,
       details: {
@@ -506,20 +659,10 @@ export class OrchestratorEngine {
         totalLinks: memoryStats.totalLinks,
       },
     });
-
-    const candidateFiles = options.files?.length
-      ? options.files
-      : this.discoverCandidateFiles(task);
-    await this.knowledgeFabric.ensureBootstrapCollection({
-      runtimeId: this.runtime.getRuntimeId(),
-      sessionId: this.sessionState.sessionId,
-      candidateFiles,
-    });
     markExecutionLedgerStep(ledger, 'candidate-file-discovery', 'completed', {
       summary: `${candidateFiles.length} candidate file(s) discovered.`,
       details: { files: candidateFiles.slice(0, 24) },
     });
-    const knowledgeFabric = this.composeKnowledgeFabric(task, candidateFiles, memoryMatches, intent);
     markExecutionLedgerStep(ledger, 'knowledge-fabric', 'completed', {
       summary: knowledgeFabric.summary,
       details: {
@@ -527,19 +670,6 @@ export class OrchestratorEngine {
         attachedCollections: knowledgeFabric.rag.attachedCollections.map((collection) => collection.collectionId),
         patternHits: knowledgeFabric.patterns.selected.map((pattern) => pattern.patternId),
       },
-    });
-    const plannedFiles = options.files?.length
-      ? options.files
-      : (knowledgeFabric.repo.selectedFiles.length > 0 ? knowledgeFabric.repo.selectedFiles : candidateFiles);
-    const planner = await this.runtime.planExecution({
-      goal: task,
-      files: plannedFiles,
-      skillNames: options.skillNames,
-      workflowSelectors: options.workflowSelectors,
-      crewSelectors: options.crewSelectors,
-      specialistSelectors: options.specialistSelectors,
-      workers: options.workers,
-      optimizationProfile: options.optimizationProfile,
     });
     markExecutionLedgerStep(ledger, 'planner-selection', 'completed', {
       summary: `Planner selected ${planner.selectedCrew?.name ?? 'baseline'}.`,
@@ -550,10 +680,7 @@ export class OrchestratorEngine {
         skills: planner.selectedSkills,
       },
     });
-    const selections = this.resolveSelections(task, intent, planner, knowledgeFabric, options);
-    const catalogHealth = this.scanCatalogHealth(selections);
     const tokenPlan = knowledgeFabric.repo.readingPlan;
-    const tokenBudget = this.toSourceAwareTokenBudget(knowledgeFabric, plannedFiles, 'knowledge-fabric-source-aware-budget');
     markExecutionLedgerStep(ledger, 'catalog-shortlist', 'completed', {
       summary: selections.audit.summary,
       details: {
@@ -575,17 +702,6 @@ export class OrchestratorEngine {
         estimatedSavings: Number(tokenPlan?.savings ?? 0),
       },
     });
-    const workerCount = this.decideWorkers(
-      options.workers,
-      planner.swarmDecision.workers,
-      phases.length,
-      intent,
-      this.sessionState.repeatedFailures,
-      knowledgeFabric,
-    );
-    const mode = this.determineMode(intent, phases.length, workerCount);
-    const taskGraph = this.buildTaskGraph(task, phases, intent);
-    const workerPlan = this.buildWorkerPlan(workerCount, mode, taskGraph, knowledgeFabric);
     const ragUsageSummary = this.toRagUsageSummary(knowledgeFabric, {
       usedInPlanner: knowledgeFabric.rag.hits.length > 0,
       usedInPacket: true,
@@ -727,7 +843,21 @@ export class OrchestratorEngine {
       agent.state = 'running';
     });
 
-    const run = await this.runtime.run({
+    const fingerprint = this.getRunFingerprint(
+      sessionState.sessionId,
+      task,
+      primaryClient?.clientId ?? 'unknown',
+    );
+    const existing = this.executionDedupeStore.get(fingerprint);
+    if (existing && (existing.state === 'pending' || existing.state === 'running') && existing.promise) {
+      nexusEventBus.emit('ledger.duplicate-prevented', {
+        fingerprint,
+        existingId: existing.id,
+      });
+      return existing.promise;
+    }
+
+    const runPromise = this.runtime.run({
       ...options,
       goal: task,
       files: options.files?.length ? options.files : plannedFiles,
@@ -745,6 +875,28 @@ export class OrchestratorEngine {
       executionLedger: ledger,
       knowledgeFabric,
     });
+    this.executionDedupeStore.set(fingerprint, {
+      id: ledger.runId,
+      state: 'running',
+      ts: Date.now(),
+      promise: runPromise,
+    });
+    let run: ExecutionRun;
+    try {
+      run = await runPromise;
+    } catch (error) {
+      this.executionDedupeStore.set(fingerprint, {
+        id: ledger.runId,
+        state: 'failed',
+        ts: Date.now(),
+      });
+      throw error;
+    }
+    this.executionDedupeStore.set(fingerprint, {
+      id: run.runId,
+      state: run.state,
+      ts: Date.now(),
+    });
     this.lastRun = run;
     const artifactOutcome = this.buildArtifactOutcome(selections.audit, run);
 
@@ -756,7 +908,7 @@ export class OrchestratorEngine {
     this.sessionState = {
       ...sessionState,
       updatedAt: Date.now(),
-      repeatedFailures: run.state === 'merged' ? 0 : Math.min(sessionState.repeatedFailures + 1, 8),
+      repeatedFailures: this.nextRepeatedFailures(run.state, sessionState.repeatedFailures),
       continuationDepth: Math.max(sessionState.continuationDepth, run.continuationChildren.length > 0 ? 1 : 0),
       lastRunId: run.runId,
       tokenSummary: this.runtime.getTokenTelemetrySummary(),
@@ -780,6 +932,8 @@ export class OrchestratorEngine {
         verifiedWorkers: run.workerResults.filter((worker) => worker.verified).length,
       },
     });
+
+    this.updateCircuitState(run.state);
     
     // Self-Learning Skill Loop: Analyze the run outcome and promote/derive skills
     this.skillLearner.analyzeRun(ledger, instructionPacket);
@@ -1124,6 +1278,7 @@ export class OrchestratorEngine {
   private classifyIntent(task: string): AutonomyIntent {
     const intents: Record<string, string[]> = {
       release: ['release', 'publish', 'tag', 'version', 'deploy', 'bump'],
+      feature: ['feature', 'add', 'implement', 'build', 'create', 'new', 'develop', 'support', 'enable', 'introduce', 'extend', 'enhance'],
       review: ['review', 'audit', 'check', 'linter', 'vet', 'inspect'],
       research: ['research', 'explore', 'discover', 'spike', 'feasibility', 'investigate', 'analyze', 'evaluate'],
       refactor: ['refactor', 'rewrite', 'restructure', 'clean', 'tech debt', 'extract', 'reorganize'],
@@ -1946,9 +2101,16 @@ export class OrchestratorEngine {
       
       fs.writeFileSync(planPath, content, 'utf-8');
       
-      // Auto-enhance standard Antigravity/Cursor implementation plans if they exist
+      // Auto-enhance standard Antigravity/Cursor implementation plans if explicitly enabled
       const igPlanPath = path.join(this.repoRoot, 'implementation_plan.md');
-      if (fs.existsSync(igPlanPath)) {
+      const annotateImplementationPlan = process.env.NEXUS_ANNOTATE_IMPL_PLAN === 'true';
+      if (!annotateImplementationPlan && fs.existsSync(igPlanPath)) {
+          console.warn(
+            '[orchestrator] Implicit implementation_plan.md mutation is disabled. ' +
+            'Set NEXUS_ANNOTATE_IMPL_PLAN=true to re-enable the deprecated behavior.'
+          );
+      }
+      if (annotateImplementationPlan && fs.existsSync(igPlanPath)) {
           let igPlan = fs.readFileSync(igPlanPath, 'utf8');
           if (!igPlan.includes('## Swarm Orchestration Details')) {
               igPlan += `\n\n## Swarm Orchestration Details\n*Nexus Prime has intercepted this plan and is enforcing multi-agent swarming.* See \`.nexus-prime/orchestration_plan.md\` for the parallel topology.\n`;

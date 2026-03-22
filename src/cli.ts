@@ -19,6 +19,8 @@ import { fileURLToPath } from 'url';
 import { PODNetwork } from './engines/pod-network.js';
 import { InstructionGateway, type ClientBootstrapArtifact } from './engines/instruction-gateway.js';
 import { ensureBootstrap, collectBootstrapManifest, validateTargetPath } from './engines/client-bootstrap.js';
+import { nexusEventBus } from './engines/event-bus.js';
+import { buildRuntimeSetupCommand } from './cli-setup.js';
 
 
 const tokenEngine = new TokenSupremacyEngine();
@@ -430,13 +432,21 @@ program
     console.log('✅ Nexus Prime running on port 3000');
     console.log('Press Ctrl+C to stop');
 
-    // Keep running
-    process.on('SIGINT', async () => {
+    const asyncShutdown = async (signal: string) => {
+      nexusEventBus.emit('nexus.shutdown', { signal });
+      nexus?.getOrchestrator().dispose();
       if (nexus) {
         await nexus.stop();
       }
       process.exit(0);
-    });
+    };
+    const syncExitFallback = () => {
+      nexus?.flushMemory();
+    };
+
+    process.on('SIGINT', () => void asyncShutdown('SIGINT'));
+    process.on('SIGTERM', () => void asyncShutdown('SIGTERM'));
+    process.once('exit', syncExitFallback);
   });
 
 program
@@ -540,16 +550,22 @@ program
     console.error('Memory persistence: active (~/.nexus-prime/memory.db)');
 
     // Graceful shutdown: flush memory to SQLite before exit
-    const shutdown = async () => {
+    const shutdown = async (signal: string) => {
+      nexusEventBus.emit('nexus.shutdown', { signal });
+      nexus?.getOrchestrator().dispose();
       console.error('Flushing memory to disk...');
       nexus?.flushMemory();
       if (nexus) await nexus.stop();
       PODNetwork.instance?.destroy();
       process.exit(0);
     };
+    const syncExitFallback = () => {
+      nexus?.flushMemory();
+    };
 
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', () => void shutdown('SIGINT'));
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
+    process.once('exit', syncExitFallback);
   });
 
 program
@@ -909,6 +925,7 @@ program
 program
   .command('setup')
   .description('Install MCP config plus client-native Nexus Prime instructions')
+  .addCommand(buildRuntimeSetupCommand())
   .addCommand(
     new Command('codex')
       .description('Integrate with Codex by creating or updating a managed AGENTS.md block')

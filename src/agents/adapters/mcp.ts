@@ -44,13 +44,15 @@ import {
 } from '../../engines/index.js';
 import { FederationEngine, type TraceEntry } from '../../engines/federation.js';
 import { TokenAnalyticsEngine } from '../../engines/token-analytics.js';
+import { synapseToolDefinitions, handleSynapseToolCall } from '../../synapse/index.js';
+import { architectsToolDefinitions, handleArchitectsToolCall } from '../../architects/index.js';
 
 const tokenEngine = new TokenSupremacyEngine();
 const guardrailEngine = new GuardrailEngine();
-const darwinLoop = new DarwinLoop();
 const casEngine = new ContinuousAttentionStream();
 const kvBridge = createKVBridge({ agents: 3 });
 const orchestrator = new OrchestratorEngine();
+const darwinLoop = new DarwinLoop(orchestrator.getMemoryEngine());
 const federation = new FederationEngine();
 const fallbackRuntime = createSubAgentRuntime({ repoRoot: process.cwd() });
 
@@ -1443,6 +1445,8 @@ export class MCPAdapter implements Adapter {
                         required: ['taskId', 'goal', 'findings'],
                     },
                 },
+                ...synapseToolDefinitions,
+                ...architectsToolDefinitions,
             ];
     }
 
@@ -1574,6 +1578,16 @@ export class MCPAdapter implements Adapter {
         if (goal && goal.length > 50 && !['nexus_execute_nxl', 'nexus_session_bootstrap', 'nexus_plan_execution'].includes(request.params.name)) {
             const swarm = await this.getOrchestrator().induce(goal);
             nexusEventBus.emit('nexusnet.sync', { newItemsCount: swarm.length });
+        }
+
+        const synapseResponse = await handleSynapseToolCall(toolName, args, this.nexusRef.getSynapse?.() ?? null);
+        if (synapseResponse) {
+            return synapseResponse as { content: Array<{ type: string; text: string }> };
+        }
+
+        const architectsResponse = await handleArchitectsToolCall(toolName, args, this.nexusRef.getArchitects?.() ?? null);
+        if (architectsResponse) {
+            return architectsResponse as { content: Array<{ type: string; text: string }> };
         }
 
         switch (request.params.name) {

@@ -1,0 +1,10 @@
+{
+  "rawMarkdown": "# Aider Integration\n\nAll 61 Agency agents are consolidated into a single `CONVENTIONS.md` file.\nAider reads this file automatically when it's present in your project root.\n\n## Install\n\n```bash\n# Run from your project root\ncd /your/project\n/path/to/agency-agents/scripts/install.sh --tool aider\n```\n\n## Activate an Agent\n\nIn your Aider session, reference the agent by name:\n\n```\nUse the Frontend Developer agent to refactor this component.\n```\n\n```\nApply the Reality Checker agent to verify this is production-ready.\n```\n\n## Manual Usage\n\nYou can also pass the conventions file directly:\n\n```bash\naider --read CONVENTIONS.md\n```\n\n## Regenerate\n\n```bash\n./scripts/convert.sh --tool aider\n```\n",
+  "sections": {
+    "overview": "# Aider Integration\n\nAll 61 Agency agents are consolidated into a single `CONVENTIONS.md` file.\nAider reads this file automatically when it's present in your project root.",
+    "install": "```bash\n# Run from your project root\ncd /your/project\n/path/to/agency-agents/scripts/install.sh --tool aider\n```",
+    "activate an agent": "In your Aider session, reference the agent by name:\n\n```\nUse the Frontend Developer agent to refactor this component.\n```\n\n```\nApply the Reality Checker agent to verify this is production-ready.\n```",
+    "manual usage": "You can also pass the conventions file directly:\n\n```bash\naider --read CONVENTIONS.md\n```",
+    "regenerate": "```bash\n./scripts/convert.sh --tool aider\n```"
+  }
+}

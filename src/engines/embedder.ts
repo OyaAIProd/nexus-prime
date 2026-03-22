@@ -9,6 +9,7 @@
  * Output: fixed 128-dim float32 vectors (TF-IDF), 768-dim (Ollama), 384-dim (HF), or 1536-dim (API)
  */
 
+import type Database from 'better-sqlite3';
 import * as path from 'path';
 import * as os from 'os';
 
@@ -59,18 +60,11 @@ export const HyperbolicMath = {
      * Mobius addition: u ⊕ v
      * Used to translate points in hyperbolic space while staying in the unit ball.
      */
-    mobiusAdd(u: number[], v: number[]): number {
-        const dotUV = u.reduce((sum, ui, i) => sum + ui * (v[i] || 0), 0);
-        const normU2 = u.reduce((sum, ui) => sum + ui * ui, 0);
-        const normV2 = v.reduce((sum, vi) => sum + vi * vi, 0);
-
-        const den = 1 + 2 * dotUV + normU2 * normV2;
-        const num1 = (1 + 2 * dotUV + normV2);
-        const num2 = (1 - normU2);
-
-        // Resulting vector is scaled combination of u and v
-        // In practice for simple hierarchy shifts, we just normalize the final result back to unit ball
-        return 0; // Placeholder for simplified logic below
+    mobiusAdd(_u: number[], _v: number[]): never {
+        throw new Error(
+            'HyperbolicMath.mobiusAdd() is not implemented. ' +
+            'Do not call this method until a full Möbius addition is written and tested.'
+        );
     },
 
     /** Ensure vector is within unit ball (norm < 1) */
@@ -90,6 +84,7 @@ export class Embedder {
     private vocabulary: Map<string, number> = new Map(); // word → index (0..127)
     private idf: Map<string, number> = new Map();        // word → IDF weight
     private docCount: number = 0;
+    private vocabularyDb?: Database.Database;
     
     private embedMode: 'local' | 'api' | 'ollama' | 'huggingface';
     private apiUrl: string;
@@ -101,8 +96,9 @@ export class Embedder {
     private hfApiKey: string;
     private hfModel: string;
 
-    constructor() {
+    constructor(vocabularyDb?: Database.Database) {
         this.embedMode = (process.env.NEXUS_EMBED_MODE as 'local' | 'api' | 'ollama' | 'huggingface') ?? 'local';
+        this.vocabularyDb = vocabularyDb;
         
         // OpenAI API config
         this.apiUrl = process.env.NEXUS_EMBED_URL ?? 'https://api.openai.com/v1/embeddings';
@@ -117,6 +113,11 @@ export class Embedder {
         this.hfEndpoint = 'https://api-inference.huggingface.co/pipeline/feature-extraction';
         this.hfApiKey = process.env.NEXUS_HF_API_KEY ?? '';
         this.hfModel = process.env.NEXUS_HF_MODEL ?? 'sentence-transformers/all-MiniLM-L6-v2';
+
+        if (this.vocabularyDb) {
+            this.initVocabularyTables();
+            this.rebuildPersistentVocabulary();
+        }
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -179,6 +180,13 @@ export class Embedder {
 
     /** Update vocabulary with new documents (call as you store memories) */
     fitVocabulary(docs: string[]): void {
+        if (docs.length === 0) return;
+        if (this.vocabularyDb) {
+            this.upsertPersistentVocabularyStats(docs);
+            this.rebuildPersistentVocabulary();
+            return;
+        }
+
         // Count document frequency for each term
         const dfCount: Map<string, number> = new Map();
 
@@ -199,6 +207,28 @@ export class Embedder {
             const idx = this.vocabulary.size;
             this.vocabulary.set(term, idx);
             // IDF = log((N + 1) / (df + 1)) + 1  (smoothed)
+            this.idf.set(term, Math.log((this.docCount + 1) / (df + 1)) + 1);
+        }
+    }
+
+    public rebuildPersistentVocabulary(): void {
+        if (!this.vocabularyDb) return;
+        this.initVocabularyTables();
+        const docCountRow = this.vocabularyDb.prepare(
+            `SELECT value FROM vocabulary_meta WHERE key = 'doc_count'`
+        ).get() as { value?: string } | undefined;
+        const docCount = Number.parseInt(docCountRow?.value ?? '0', 10);
+        this.docCount = Number.isFinite(docCount) ? docCount : 0;
+
+        const rows = this.vocabularyDb.prepare(
+            `SELECT term, df FROM vocabulary_stats ORDER BY df DESC, term ASC LIMIT ?`
+        ).all(VECTOR_DIM) as Array<{ term: string; df: number }>;
+
+        this.vocabulary.clear();
+        this.idf.clear();
+        for (const { term, df } of rows) {
+            const idx = this.vocabulary.size;
+            this.vocabulary.set(term, idx);
             this.idf.set(term, Math.log((this.docCount + 1) / (df + 1)) + 1);
         }
     }
@@ -343,6 +373,55 @@ export class Embedder {
             h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
         }
         return h;
+    }
+
+    private initVocabularyTables(): void {
+        if (!this.vocabularyDb) return;
+        this.vocabularyDb.exec(`
+            CREATE TABLE IF NOT EXISTS vocabulary_stats (
+                term TEXT PRIMARY KEY,
+                df INTEGER NOT NULL DEFAULT 1,
+                last_seen INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS vocabulary_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO vocabulary_meta(key, value) VALUES('doc_count', '0');
+        `);
+    }
+
+    private upsertPersistentVocabularyStats(docs: string[]): void {
+        if (!this.vocabularyDb) return;
+        this.initVocabularyTables();
+        const dfCount = new Map<string, number>();
+
+        for (const doc of docs) {
+            const terms = new Set(this.tokenize(doc));
+            for (const term of terms) {
+                dfCount.set(term, (dfCount.get(term) ?? 0) + 1);
+            }
+        }
+
+        const upsert = this.vocabularyDb.prepare(`
+            INSERT INTO vocabulary_stats(term, df, last_seen) VALUES(?, ?, ?)
+            ON CONFLICT(term) DO UPDATE SET
+                df = df + excluded.df,
+                last_seen = excluded.last_seen
+        `);
+        const updateDocCount = this.vocabularyDb.prepare(`
+            UPDATE vocabulary_meta
+            SET value = CAST(CAST(value AS INTEGER) + ? AS TEXT)
+            WHERE key = 'doc_count'
+        `);
+        const txn = this.vocabularyDb.transaction((entries: Array<[string, number]>, batchSize: number) => {
+            const now = Date.now();
+            for (const [term, df] of entries) {
+                upsert.run(term, df, now);
+            }
+            updateDocCount.run(batchSize);
+        });
+        txn([...dfCount.entries()], docs.length);
     }
 }
 

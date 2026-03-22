@@ -9,6 +9,8 @@
 
 import * as path from 'path';
 import { DarwinJournal, type DarwinCycle } from './darwin-journal.js';
+import type { MemoryEngine } from './memory.js';
+import { nexusEventBus } from './event-bus.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Bounded Improvement Space Config
@@ -33,9 +35,11 @@ const FORBIDDEN_PATHS = [
 
 export class DarwinLoop {
     public journal: DarwinJournal;
+    private memory?: MemoryEngine;
 
-    constructor() {
+    constructor(memory?: MemoryEngine) {
         this.journal = new DarwinJournal();
+        this.memory = memory;
     }
 
     /**
@@ -119,6 +123,41 @@ export class DarwinLoop {
             outcome: outcomeMap[action],
             learnings
         });
+
+        if (updated && (updated.outcome === 'applied' || updated.outcome === 'rejected')) {
+            const fitnessDelta = (updated.metricsAfter?.fitness ?? 0) - (updated.metricsBefore?.fitness ?? 0);
+            const content = [
+                `Darwin cycle ${updated.id}: hypothesis "${updated.hypothesis}"`,
+                `Target: ${updated.targetFile}. Outcome: ${updated.outcome}.`,
+                `Build: ${updated.buildPassed ? 'PASS' : 'FAIL'}, Tests: ${updated.testsPassed ? 'PASS' : 'FAIL'}.`,
+                `Fitness delta: ${fitnessDelta}.`,
+                updated.learnings.length ? `Learnings: ${updated.learnings.join('; ')}` : '',
+            ].filter(Boolean).join(' ');
+
+            this.memory?.store(
+                content,
+                0.5,
+                ['#darwin', `#darwin:${updated.outcome}`, `#target:${updated.targetFile}`],
+                undefined,
+                0,
+                {
+                    tier: 'cortex',
+                    state: 'active',
+                    trust: updated.outcome === 'applied' ? 0.9 : 0.6,
+                    source: 'system',
+                    provenance: {
+                        source: 'runtime',
+                        summary: 'Darwin cycle outcome',
+                        tags: ['#darwin'],
+                    },
+                },
+            );
+            nexusEventBus.emit('darwin.cycle.complete', {
+                id: updated.id,
+                outcome: updated.outcome,
+                targetFile: updated.targetFile,
+            });
+        }
 
         return updated!;
     }

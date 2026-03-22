@@ -1704,6 +1704,12 @@
                 <span id="primary-client-label">Primary client · n/a</span>
             </div>
             <div class="mini-pill">
+                <span id="synapse-label">Synapse · loading</span>
+            </div>
+            <div class="mini-pill">
+                <span id="architects-label">Architects · loading</span>
+            </div>
+            <div class="mini-pill">
                 <span class="mono" id="header-version">v?</span>
             </div>
         </div>
@@ -2067,7 +2073,7 @@
 
     <script>
         const DASHBOARD_API_VERSION = '3';
-        const REQUIRED_CAPABILITIES = ['runs', 'memory', 'pod', 'clients', 'events', 'stream', 'specialists', 'crews', 'planner', 'hooks', 'automations', 'federation', 'orchestration', 'tokens', 'tokenSources', 'clientPrimary', 'instructionPacket', 'orchestrationLedger', 'knowledgeFabric', 'ragCollections', 'patterns', 'modelTiers', 'workerPlan', 'artifactOutcomes', 'memoryTrace', 'memoryShared', 'worktreeHealth', 'featureRegistry'];
+        const REQUIRED_CAPABILITIES = ['runs', 'memory', 'pod', 'clients', 'events', 'stream', 'specialists', 'crews', 'planner', 'hooks', 'automations', 'federation', 'orchestration', 'tokens', 'tokenSources', 'clientPrimary', 'instructionPacket', 'orchestrationLedger', 'knowledgeFabric', 'ragCollections', 'patterns', 'modelTiers', 'workerPlan', 'artifactOutcomes', 'memoryTrace', 'memoryShared', 'worktreeHealth', 'featureRegistry', 'synapse', 'architects'];
 
         function createResourceState() {
             return { status: 'idle', error: '' };
@@ -2094,6 +2100,11 @@
             hooks: [],
             automations: [],
             featureRegistry: null,
+            synapseTeams: [],
+            synapseHealth: [],
+            synapseApprovals: [],
+            architectsDispatch: { throttled: false, active: 0, queueDepth: 0, limit: -1 },
+            architectsEscalations: [],
             ragCollections: [],
             patterns: [],
             modelTiers: { policy: null, trace: [] },
@@ -2151,6 +2162,11 @@
                 hooks: createResourceState(),
                 automations: createResourceState(),
                 featureRegistry: createResourceState(),
+                synapseTeams: createResourceState(),
+                synapseHealth: createResourceState(),
+                synapseApprovals: createResourceState(),
+                architectsDispatch: createResourceState(),
+                architectsEscalations: createResourceState(),
                 ragCollections: createResourceState(),
                 patterns: createResourceState(),
                 modelTiers: createResourceState(),
@@ -2285,6 +2301,43 @@
                 url: '/api/feature-registry',
                 assign(value) {
                     state.featureRegistry = value || null;
+                },
+            },
+            synapseTeams: {
+                url: '/api/synapse/teams',
+                dynamic: true,
+                assign(value) {
+                    state.synapseTeams = Array.isArray(value) ? value : [];
+                },
+            },
+            synapseHealth: {
+                url: '/api/synapse/health',
+                dynamic: true,
+                assign(value) {
+                    state.synapseHealth = Array.isArray(value) ? value : [];
+                },
+            },
+            synapseApprovals: {
+                url: '/api/synapse/approvals',
+                dynamic: true,
+                assign(value) {
+                    state.synapseApprovals = Array.isArray(value) ? value : [];
+                },
+            },
+            architectsDispatch: {
+                url: '/api/architects/dispatch',
+                dynamic: true,
+                assign(value) {
+                    state.architectsDispatch = value && typeof value === 'object'
+                        ? value
+                        : { throttled: false, active: 0, queueDepth: 0, limit: -1 };
+                },
+            },
+            architectsEscalations: {
+                url: '/api/architects/escalations',
+                dynamic: true,
+                assign(value) {
+                    state.architectsEscalations = Array.isArray(value) ? value : [];
                 },
             },
             ragCollections: {
@@ -2427,7 +2480,7 @@
             automations: ['automations'],
             shield: ['memoryAudit', 'memoryQuarantine'],
             federation: ['federation'],
-            system: ['health'],
+            system: ['health', 'synapseTeams', 'synapseHealth', 'synapseApprovals', 'architectsDispatch', 'architectsEscalations'],
         };
 
         const graphModes = {
@@ -3312,6 +3365,13 @@
             $('primary-client-label').textContent = state.primaryClient?.displayName
                 ? `Primary client · ${state.primaryClient.displayName}`
                 : 'Primary client · awaiting runtime';
+            const synapseAttentionCount = state.synapseHealth.filter((operative) => ['BLOCKED', 'STALLED', 'ZOMBIE'].includes(operative.healthState)).length;
+            $('synapse-label').textContent = resourceFailed('synapseTeams') && !state.synapseTeams.length
+                ? 'Synapse · unavailable'
+                : `Synapse · ${state.synapseTeams.length} team${state.synapseTeams.length === 1 ? '' : 's'} · ${synapseAttentionCount} attention`;
+            $('architects-label').textContent = resourceFailed('architectsDispatch') && !state.architectsDispatch
+                ? 'Architects · unavailable'
+                : `Architects · q${Number(state.architectsDispatch?.queueDepth ?? 0)} · ${state.architectsEscalations.length} escalations`;
             const pill = $('sync-pill');
             const failedResources = countFailedResources();
             pill.classList.toggle('live', state.streamConnected && failedResources === 0);

@@ -14,6 +14,7 @@ export class CompactionSentinel {
   private startTime: number;
   private lastStoreCount: number = 0;
   private currentStoreCount: number = 0;
+  private unsubscribeStore?: () => void;
 
   constructor(options: CompactionSentinelOptions = {}) {
     this.budgetTokens = options.budgetTokens ?? 100000;
@@ -23,8 +24,9 @@ export class CompactionSentinel {
 
   public start(): void {
     if (this.timer) return;
-    
-    nexusEventBus.on('memory.store', () => {
+
+    this.startTime = Date.now();
+    this.unsubscribeStore = nexusEventBus.on('memory.store', () => {
       this.currentStoreCount++;
     });
 
@@ -39,6 +41,10 @@ export class CompactionSentinel {
       clearInterval(this.timer);
       this.timer = undefined;
     }
+    this.unsubscribeStore?.();
+    this.unsubscribeStore = undefined;
+    this.currentStoreCount = 0;
+    this.lastStoreCount = 0;
   }
 
   public updateTokens(tokens: number): void {

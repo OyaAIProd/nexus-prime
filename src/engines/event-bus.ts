@@ -12,6 +12,8 @@ export type NexusEventType =
     | 'planner.stage'
     | 'memory.store'
     | 'memory.recall'
+    | 'memory.flushed'
+    | 'memory.health.tick'
     | 'pod.signal'
     | 'tokens.optimized'
     | 'phantom.worker.start'
@@ -21,7 +23,10 @@ export type NexusEventType =
     | 'guardrail.check'
     | 'ghost.pass'
     | 'graph.query'
+    | 'graph.sync.failed'
+    | 'graph.coverage.low'
     | 'darwin.cycle'
+    | 'darwin.cycle.complete'
     | 'session.dna'
     | 'skill.register'
     | 'skill.deploy'
@@ -41,6 +46,8 @@ export type NexusEventType =
     | 'client.inferred'
     | 'client.status'
     | 'dashboard.action'
+    | 'nexus.shutdown'
+    | 'orchestrator.disposed'
     | 'nexusnet.publish'
     | 'nexusnet.sync'
     | 'mcp.call.start'
@@ -60,13 +67,62 @@ export type NexusEventType =
     // Phase 9C: AdaptiveKV Bridge
     | 'kv.merge'
     | 'kv.adapt'
-    | 'kv.consensus';
+    | 'kv.consensus'
+    // Synapse
+    | 'synapse.ready'
+    | 'synapse.operative.hired'
+    | 'synapse.operative.retired'
+    | 'synapse.operative.health.changed'
+    | 'synapse.striketeam.deployed'
+    | 'synapse.striketeam.completed'
+    | 'synapse.mission.assigned'
+    | 'synapse.mission.completed'
+    | 'synapse.sortie.started'
+    | 'synapse.sortie.completed'
+    | 'synapse.sortie.failed'
+    | 'synapse.fieldreport.submitted'
+    | 'synapse.echo.fired'
+    | 'synapse.budget.warning'
+    | 'synapse.budget.exceeded'
+    | 'synapse.approval.requested'
+    | 'synapse.approval.resolved'
+    | 'synapse.compaction.standdown'
+    | 'synapse.compaction.resumed'
+    | 'synapse.watchdog.stall'
+    | 'synapse.watchdog.zombie'
+    // Architects
+    | 'architects.ready'
+    | 'architects.blueprint.instantiated'
+    | 'architects.worklist.created'
+    | 'architects.workitem.claimed'
+    | 'architects.workitem.completed'
+    | 'architects.workitem.blocked'
+    | 'architects.constructionlock.acquired'
+    | 'architects.constructionlock.released'
+    | 'architects.constructionlock.contested'
+    | 'architects.relay.sent'
+    | 'architects.relay.read'
+    | 'architects.sentinel.patrol'
+    | 'architects.sentinel.stall'
+    | 'architects.sentinel.zombie'
+    | 'architects.ward.patrol'
+    | 'architects.ward.escalation'
+    | 'architects.convergence.started'
+    | 'architects.convergence.merged'
+    | 'architects.convergence.failed'
+    | 'architects.dispatch.go'
+    | 'architects.dispatch.queued'
+    | 'ledger.duplicate-prevented'
+    | 'nexus.circuit-open'
+    | 'nexus.circuit-tripped';
 
 export interface NexusEventPayloads {
     'system.boot': { version: string; toolsCount: number };
     'planner.stage': { runId?: string; stage: string; status: string; owner: string; assets: number };
     'memory.store': { id: string; priority: number; tags: string[]; tier: string };
     'memory.recall': { query: string; count: number };
+    'memory.flushed': { count: number; reason: string; ts: number };
+    'memory.health.tick': { counts: Array<{ state: string; c: number }>; ts: number };
     'pod.signal': { workerId: string; type: string; content: string; confidence?: number; tags?: string[] };
     'tokens.optimized': {
         savings: number;
@@ -87,7 +143,10 @@ export interface NexusEventPayloads {
     'guardrail.check': { action: string; passed: boolean; score: number };
     'ghost.pass': { task: string; risks: number; workers: number };
     'graph.query': { query: string; resultsCount: number };
+    'graph.sync.failed': { reason: string; memoryId?: string; ts: number };
+    'graph.coverage.low': { memCount: number; graphEntities: number };
     'darwin.cycle': { hypothesis: string; outcome: string };
+    'darwin.cycle.complete': { id: string; outcome: string; targetFile: string };
     'session.dna': { sessionId: string; action: 'generated' | 'loaded' };
     'skill.register': { name: string; id: string };
     'skill.deploy': { skillId: string; scope: string; status: string };
@@ -107,6 +166,8 @@ export interface NexusEventPayloads {
     'client.inferred': { clientId: string; displayName: string; source: string; state: string; evidence: string[] };
     'client.status': { clientId: string; displayName: string; previous: string; next: string; source: string };
     'dashboard.action': { action: string; status: string; target?: string };
+    'nexus.shutdown': { signal: string };
+    'orchestrator.disposed': { ts: number };
     'nexusnet.publish': { type: string; byteSize: number };
     'nexusnet.sync': { newItemsCount: number };
     'mcp.call.start': { callId: string; serverName: string; toolName: string; args: any };
@@ -127,6 +188,53 @@ export interface NexusEventPayloads {
     'kv.merge': { layerPair: string; compressionRatio: number };
     'kv.adapt': { taskType: string; shots: number; adaptationTime: number };
     'kv.consensus': { agents: number; syncOverhead: number; conflicts: number };
+    // Synapse
+    'synapse.ready': { version: string };
+    'synapse.operative.hired': { operativeId: string; name: string; skillId: string | null; strikeTeamId: string };
+    'synapse.operative.retired': { operativeId: string };
+    'synapse.operative.health.changed': { operativeId: string; healthState: string };
+    'synapse.striketeam.deployed': { strikeTeamId: string; operativeCount: number; missionCount: number };
+    'synapse.striketeam.completed': { strikeTeamId: string };
+    'synapse.mission.assigned': { operativeId: string; missionId: string; title: string };
+    'synapse.mission.completed': { missionId: string };
+    'synapse.sortie.started': { sortieId: string; operativeId: string; missionId: string | null };
+    'synapse.sortie.completed': { sortieId: string; operativeId: string; missionId: string | null; workItemId: string | null; status: string; tokensUsed: number };
+    'synapse.sortie.failed': { sortieId: string; operativeId: string; error: string };
+    'synapse.fieldreport.submitted': { fieldReportId: string; operativeId: string; status: string };
+    'synapse.echo.fired': { operativeId: string; predecessorCount: number };
+    'synapse.budget.warning': { operativeId: string; spentUsd: number; capUsd: number; pct: number };
+    'synapse.budget.exceeded': { operativeId: string; spentUsd: number; capUsd: number };
+    'synapse.approval.requested': { approvalId: string; operativeId: string; action: string };
+    'synapse.approval.resolved': { approvalId: string; decision: string };
+    'synapse.compaction.standdown': { operativesPaused: number };
+    'synapse.compaction.resumed': { operativesResumed: number };
+    'synapse.watchdog.stall': { operativeId: string };
+    'synapse.watchdog.zombie': { operativeId: string };
+    // Architects
+    'architects.ready': { version: string };
+    'architects.blueprint.instantiated': { blueprintId: string; worklistId: string; workItemCount: number };
+    'architects.worklist.created': { worklistId: string; blueprintId: string };
+    'architects.workitem.claimed': { workItemId: string; operativeId: string };
+    'architects.workitem.completed': { workItemId: string; operativeId: string; status: string };
+    'architects.workitem.blocked': { workItemId: string; operativeId: string; reason: string };
+    'architects.constructionlock.acquired': { lockId: string; workItemId: string; operativeId: string };
+    'architects.constructionlock.released': { lockId: string; workItemId: string; finalStatus: string };
+    'architects.constructionlock.contested': { workItemId: string; byOperativeId: string; requestedBy: string };
+    'architects.relay.sent': { messageId: string; from: string; target: string; toId: string; subject: string };
+    'architects.relay.read': { messageId: string; byOperativeId: string };
+    'architects.sentinel.patrol': { strikeTeamId: string; operativeReports: Array<Record<string, unknown>>; overallHealth: string; stalledCount: number; zombieCount: number; generatedAt: string };
+    'architects.sentinel.stall': { operativeId: string; strikeTeamId: string };
+    'architects.sentinel.zombie': { operativeId: string; strikeTeamId: string };
+    'architects.ward.patrol': { teamsChecked: number };
+    'architects.ward.escalation': { strikeTeamId: string; consecutiveCriticalPatrols: number; message: string; report?: unknown };
+    'architects.convergence.started': { runId: string; worklistId: string; itemCount: number };
+    'architects.convergence.merged': { runId: string; worklistId: string };
+    'architects.convergence.failed': { runId: string; worklistId: string; error: string };
+    'architects.dispatch.go': { operativeId: string; workItemId: string };
+    'architects.dispatch.queued': { operativeId: string; workItemId: string; depth: number };
+    'ledger.duplicate-prevented': { fingerprint: string; existingId: string };
+    'nexus.circuit-open': { remainingMs: number; consecutiveFailures: number };
+    'nexus.circuit-tripped': { consecutiveFailures: number };
 }
 
 export interface NexusEvent<T extends NexusEventType = NexusEventType> {

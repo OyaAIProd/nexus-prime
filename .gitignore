@@ -54,6 +54,11 @@ dev-orchestrator.mjs
 # Agent internal config
 .agent/
 
+# nexus-prime:v5-runtime:start
+.synapse/*.db
+.architects/*.db
+# nexus-prime:v5-runtime:end
+
 # Experimental scratch files
 test-nexusnet.ts
 test-ux.cjs
