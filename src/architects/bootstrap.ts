@@ -117,6 +117,7 @@ export function initArchitects(options: InitArchitectsOptions): ArchitectsRuntim
       worklist: getWorklist(db, worklistId),
       items: getWorkItemsForWorklist(db, worklistId),
     }),
+    getWorklistForStrikeTeam: (strikeTeamId: string) => implicitWorklistByTeam.get(strikeTeamId) ?? `implicit-worklist:${strikeTeamId}`,
     claimWorkItem: async (workItemId, operativeId) => {
       dispatchGovernor.dispatch(operativeId, workItemId);
       return acquireConstructionLock(operativeId, workItemId, db, providers);

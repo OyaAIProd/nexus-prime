@@ -33,6 +33,20 @@ test('OrchestratorEngine classifyIntent recognizes feature work', async () => {
   equal(intent.taskType, 'feature');
 });
 
+test('OrchestratorEngine classifyIntent keeps broad control-plane audits on engineering lanes', async () => {
+  prepareEnvironment('nexus-orchestrator-control-plane');
+  const OrchestratorEngine = await loadOrchestratorEngine();
+  const orchestrator = Object.create(OrchestratorEngine.prototype) as any;
+  orchestrator.decomposeTask = (task: string) => task.split(/\band\b/i).filter(Boolean);
+
+  const intent = orchestrator.classifyIntent('Review the dashboard UI/UX, frontend/backend API bindings, Synapse and Architects coordination, and fix lag across the control plane');
+
+  equal(intent.taskType, 'backend');
+  ok(intent.secondaryType === 'review' || intent.secondaryType === 'frontend', 'technical audit should retain review or frontend as a meaningful secondary signal');
+  ok((intent.intentScores?.backend ?? 0) > (intent.intentScores?.pm ?? 0), 'backend routing should outrank PM planning for technical audits');
+  ok((intent.intentScores?.frontend ?? 0) > (intent.intentScores?.data ?? 0), 'dashboard review should not collapse into data analytics routing');
+});
+
 test('OrchestratorEngine nextRepeatedFailures only increments on failed runs', async () => {
   prepareEnvironment('nexus-orchestrator-failures');
   const OrchestratorEngine = await loadOrchestratorEngine();

@@ -12,7 +12,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { ContextAssembler, type AssemblyResult, type BudgetConfig } from './context-assembler.js';
 import { type ContextTier } from './tiered-context.js';
-import { ContinuousAttentionStream } from './index.js';
+import { ContinuousAttentionStream } from './attention-stream.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types

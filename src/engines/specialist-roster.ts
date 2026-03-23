@@ -433,6 +433,8 @@ function buildCrewTemplates(specialists: SpecialistProfile[]): CrewTemplate[] {
 
 function selectCrew(goal: string, matchedDomains: string[], requestedCrews: string[]): SelectedCrew {
     const requestSet = new Set(requestedCrews.map((value) => value.toLowerCase()));
+    const lowerGoal = goal.toLowerCase();
+    const technicalAudit = /(dashboard|frontend|backend|api|runtime|control plane|orchestrat|synapse|architect|pod|integration|performance|lag|bug|review|audit|cto)/.test(lowerGoal);
     const ranked = CREWS
         .map((crew) => {
             let score = 0.1;
@@ -451,6 +453,18 @@ function selectCrew(goal: string, matchedDomains: string[], requestedCrews: stri
                     score += 0.15;
                     reasons.push('Includes DevOps shipping gate.');
                 }
+            }
+            if (technicalAudit && crew.crewId === 'crew_implementation') {
+                score += 0.35;
+                reasons.push('Technical control-plane audit prefers implementation crew.');
+            }
+            if (technicalAudit && crew.domains.some((domain) => ['backend', 'frontend', 'api', 'orchestration'].includes(domain))) {
+                score += 0.12;
+                reasons.push('Crew covers engineering/control-plane domains.');
+            }
+            if (technicalAudit && ['crew_pdlc', 'crew_gtm', 'crew_research'].includes(crew.crewId) && !crew.domains.some((domain) => ['backend', 'frontend', 'api', 'orchestration'].includes(domain))) {
+                score -= 0.12;
+                reasons.push('Broad planning/marketing crews are deprioritized for technical audits.');
             }
             return { crew, confidence: { score: Math.min(score, 0.99), reasons } };
         })

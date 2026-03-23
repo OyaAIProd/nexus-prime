@@ -2,7 +2,6 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { nexusEventBus, type NexusEvent, type NexusEventType } from '../engines/event-bus.js';
 import type { Adapter } from '../core/types.js';
@@ -13,6 +12,7 @@ import type { SubAgentRuntime } from '../phantom/runtime.js';
 import { RuntimeRegistry } from '../engines/runtime-registry.js';
 import type { OrchestratorEngine } from '../engines/orchestrator.js';
 import { buildFeatureRegistry } from '../engines/feature-registry.js';
+import { RepoTreeGenerator } from '../engines/repo-tree.js';
 import type { SynapseRuntime } from '../synapse/index.js';
 import type { ArchitectsRuntime } from '../architects/index.js';
 
@@ -56,29 +56,6 @@ const REQUIRED_CAPABILITIES = {
     synapse: true,
     architects: true,
 } as const;
-
-const DEFAULT_SKILLS: Array<{ name: string; instructions: string; riskClass: 'read' | 'orchestrate' | 'mutate'; scope: 'session' | 'worker' | 'global' }> = [
-    { name: 'code-review-playbook', instructions: 'Guide structured code review: check for bugs, security issues, performance problems, readability concerns. Produce a checklist with severity ratings.', riskClass: 'read', scope: 'global' },
-    { name: 'token-budget-guardian', instructions: 'Monitor token usage during sessions. Warn when context exceeds 70k tokens. Suggest pruning strategies and memory offloading when approaching limits.', riskClass: 'read', scope: 'global' },
-    { name: 'session-handover', instructions: 'At session end, generate a comprehensive summary: files modified, decisions made, open questions, recommended next steps. Store as session-summary memory.', riskClass: 'orchestrate', scope: 'global' },
-    { name: 'memory-hygiene', instructions: 'Review stored memories for staleness, duplicates, and contradictions. Suggest pruning candidates and consolidation opportunities. Never auto-delete.', riskClass: 'read', scope: 'global' },
-    { name: 'test-first-guard', instructions: 'Before implementing features, ensure test files exist or are planned. Prompt for test strategy if missing. Verify tests pass after implementation.', riskClass: 'orchestrate', scope: 'session' },
-    { name: 'commit-message-crafter', instructions: 'Generate concise, semantic commit messages following conventional commits format. Analyze staged changes to infer the correct type (feat/fix/chore/refactor).', riskClass: 'read', scope: 'global' },
-    { name: 'session-start-research', instructions: 'At session start, recall relevant memories (nexus_recall_memory), check memory stats (nexus_memory_stats), and build a context map of prior work. Present a concise briefing of what is known about the current task domain before diving in.', riskClass: 'read', scope: 'global' },
-    { name: 'prompt-architect', instructions: 'Help craft effective prompts for LLM interactions. Analyze prompt structure, suggest improvements for clarity, add constraints and examples, optimize for the target model. Apply prompt engineering best practices: chain-of-thought, few-shot examples, role-playing, and structured output formatting.', riskClass: 'read', scope: 'global' },
-    { name: 'architecture-scout', instructions: 'Before modifying code, analyze the architecture: identify patterns, conventions, dependency flow, and potential impact zones. Use nexus_ghost_pass for risk analysis. Document findings as architecture memories for future sessions.', riskClass: 'read', scope: 'global' },
-    { name: 'debug-forensics', instructions: 'When debugging, systematically isolate the root cause: reproduce the issue, trace the execution path, identify the failing component, verify the fix, and store the bug pattern as a memory for future reference.', riskClass: 'orchestrate', scope: 'global' },
-    { name: 'refactor-guardian', instructions: 'Guide safe refactoring: ensure tests pass before changes, make incremental modifications, verify behavior preservation after each step, and flag any breaking changes. Use ghost pass for risk assessment on large refactors.', riskClass: 'orchestrate', scope: 'session' },
-    { name: 'documentation-writer', instructions: 'Generate and maintain documentation: README sections, API docs, inline comments for complex logic, and architecture decision records. Match the existing documentation style and format of the project.', riskClass: 'orchestrate', scope: 'global' },
-    { name: 'dependency-auditor', instructions: 'Audit project dependencies for security vulnerabilities, outdated packages, unused dependencies, and license compliance. Recommend updates and alternatives where appropriate.', riskClass: 'read', scope: 'global' },
-    { name: 'performance-profiler', instructions: 'Identify performance bottlenecks in code: analyze algorithmic complexity, find N+1 query patterns, detect memory leaks, spot unnecessary re-renders, and suggest optimizations with benchmarks.', riskClass: 'read', scope: 'global' },
-];
-
-const DEFAULT_WORKFLOWS: Array<{ name: string; description: string; domain?: string }> = [
-    { name: 'full-audit-loop', description: 'Complete audit cycle: Ghost Pass risk analysis, parallel worker exploration, verification, merge consensus.', domain: 'workflows' },
-    { name: 'research-and-implement', description: 'Research domain with memory recall, plan implementation, write code, run tests, store learnings.', domain: 'workflows' },
-    { name: 'release-pipeline', description: 'Version bump, build verification, test suite, changelog update, git tag and push.', domain: 'workflows' },
-];
 
 interface DashboardServerOptions {
     runtimeProvider?: () => SubAgentRuntime | undefined;
@@ -130,6 +107,12 @@ interface DashboardHealthResponse {
     ci: unknown;
 }
 
+interface CachedResponse<T> {
+    expiresAt: number;
+    value?: T;
+    refresh?: Promise<T>;
+}
+
 export class DashboardServer {
     private server: http.Server;
     private cachedDashboardHtml: string | null = null;
@@ -149,6 +132,9 @@ export class DashboardServer {
     private activePort: number | null = null;
     private started = false;
     private initializePromise: Promise<void> | null = null;
+    private endpointCache = new Map<string, CachedResponse<unknown>>();
+    private repoTreeGenerator: RepoTreeGenerator;
+    private gitUser: string;
 
     constructor(options: DashboardServerOptions = {}) {
         this.runtimeProvider = options.runtimeProvider;
@@ -160,6 +146,8 @@ export class DashboardServer {
         this.architectsProvider = options.architectsProvider;
         this.repoRoot = options.repoRoot ?? process.cwd();
         this.runtimeRegistry = new RuntimeRegistry();
+        this.repoTreeGenerator = new RepoTreeGenerator(this.repoRoot);
+        this.gitUser = process.env.GIT_AUTHOR_NAME || process.env.GIT_COMMITTER_NAME || '';
         this.server = http.createServer((req, res) => {
             void this.requestHandler(req, res);
         });
@@ -364,7 +352,7 @@ export class DashboardServer {
         }
 
         if (req.method === 'GET' && url.pathname === '/api/feature-registry') {
-            this.respondJson(res, buildFeatureRegistry(this.repoRoot));
+            this.respondJson(res, await this.getCachedValue('feature-registry', 30_000, () => Promise.resolve(buildFeatureRegistry(this.repoRoot))));
             return;
         }
 
@@ -527,7 +515,7 @@ export class DashboardServer {
         }
 
         if (req.method === 'GET' && url.pathname === '/api/health') {
-            this.respondJson(res, this.collectHealth());
+            this.respondJson(res, await this.getCachedValue('health', 15_000, () => this.collectHealth()));
             return;
         }
 
@@ -654,15 +642,7 @@ export class DashboardServer {
         }
 
         if (req.method === 'GET' && url.pathname === '/api/repo-tree') {
-            try {
-                const { RepoTreeGenerator } = await import('../engines/repo-tree.js');
-                const orchestrator = this.getOrchestrator();
-                // Access private repoRoot via cast if needed, or use cwd
-                const repoRoot = (orchestrator as any)?.repoRoot || process.cwd();
-                this.respondJson(res, new RepoTreeGenerator(repoRoot).generate());
-            } catch (err) {
-                this.respondJson(res, { error: 'Failed to generate repo tree' }, 500);
-            }
+            this.respondJson(res, await this.getCachedValue('repo-tree', 45_000, () => Promise.resolve(this.repoTreeGenerator.generate())));
             return;
         }
 
@@ -817,34 +797,17 @@ export class DashboardServer {
                 this.respondJson(res, { error: 'runtime-unavailable' }, 503);
                 return;
             }
-            const results: Array<{ name: string; status: string; id?: string }> = [];
-            for (const skill of DEFAULT_SKILLS) {
-                try {
-                    const existing = runtime.listSkills().find((s: any) => s.name === skill.name);
-                    if (!existing) {
-                        const registered = runtime.generateSkill(skill);
-                        results.push({ name: skill.name, status: 'created', id: registered.skillId });
-                    } else {
-                        results.push({ name: skill.name, status: 'exists', id: existing.skillId });
-                    }
-                } catch {
-                    results.push({ name: skill.name, status: 'failed' });
-                }
-            }
-            for (const wf of DEFAULT_WORKFLOWS) {
-                try {
-                    const existing = runtime.listWorkflows().find((w: any) => w.name === wf.name);
-                    if (!existing) {
-                        const created = runtime.generateWorkflow(wf);
-                        results.push({ name: wf.name, status: 'created', id: created.workflowId });
-                    } else {
-                        results.push({ name: wf.name, status: 'exists', id: existing.workflowId });
-                    }
-                } catch {
-                    results.push({ name: wf.name, status: 'failed' });
-                }
-            }
-            this.respondJson(res, { seeded: results });
+            this.respondJson(res, {
+                mode: 'canonical-runtime',
+                message: 'Bundled runtime assets are already loaded; dashboard-local seeding is disabled.',
+                seeded: [],
+                summary: {
+                    skills: runtime.listSkills().length,
+                    workflows: runtime.listWorkflows().length,
+                    hooks: runtime.listHooks().length,
+                    automations: runtime.listAutomations().length,
+                },
+            });
             return;
         }
 
@@ -1228,7 +1191,61 @@ export class DashboardServer {
         };
     }
 
-    private collectHealth(): DashboardHealthResponse {
+    private async getCachedValue<T>(key: string, ttlMs: number, producer: () => Promise<T>): Promise<T> {
+        const now = Date.now();
+        const cached = this.endpointCache.get(key) as CachedResponse<T> | undefined;
+        if (cached?.value !== undefined && cached.expiresAt > now) {
+            return cached.value;
+        }
+        if (cached?.refresh) {
+            return cached.value !== undefined ? cached.value : cached.refresh;
+        }
+
+        const refresh = producer()
+            .then((value) => {
+                this.endpointCache.set(key, {
+                    value,
+                    expiresAt: Date.now() + ttlMs,
+                });
+                return value;
+            })
+            .finally(() => {
+                const latest = this.endpointCache.get(key) as CachedResponse<T> | undefined;
+                if (latest?.refresh) {
+                    this.endpointCache.set(key, {
+                        value: latest.value,
+                        expiresAt: latest.expiresAt,
+                    });
+                }
+            });
+
+        this.endpointCache.set(key, {
+            value: cached?.value,
+            expiresAt: cached?.expiresAt ?? 0,
+            refresh,
+        });
+        return cached?.value !== undefined ? cached.value : refresh;
+    }
+
+    private async readJsonIfExists(target: string): Promise<Record<string, unknown> | null> {
+        try {
+            const raw = await fs.promises.readFile(target, 'utf8');
+            return JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+            return null;
+        }
+    }
+
+    private async fileExists(target: string): Promise<boolean> {
+        try {
+            await fs.promises.access(target);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    private async collectHealth(): Promise<DashboardHealthResponse> {
         const packageJsonPath = path.join(this.repoRoot, 'package.json');
         const workflowPath = path.join(this.repoRoot, '.github', 'workflows', 'pages.yml');
         const docsDir = path.join(this.repoRoot, 'docs');
@@ -1239,32 +1256,42 @@ export class DashboardServer {
         const runtimes = this.runtimeRegistry.list();
 
         let packageVersion = 'unknown';
-        // Try nexus-prime's own package.json first (works when installed as npm package)
         const ownPkgPath = path.join(__dirname, '..', 'package.json');
         const ownPkgPath2 = path.join(__dirname, '..', '..', 'package.json');
-        for (const p of [ownPkgPath, ownPkgPath2, packageJsonPath]) {
+        for (const candidate of [ownPkgPath, ownPkgPath2, packageJsonPath]) {
             if (packageVersion !== 'unknown') break;
-            if (fs.existsSync(p)) {
-                try {
-                    const v = JSON.parse(fs.readFileSync(p, 'utf-8')).version;
-                    if (v) packageVersion = v;
-                } catch { /* continue */ }
+            const pkg = await this.readJsonIfExists(candidate);
+            const version = typeof pkg?.version === 'string' ? pkg.version : '';
+            if (version) {
+                packageVersion = version;
             }
         }
 
-        let gitUser = '';
-        try {
-            gitUser = execSync('git config user.name', { timeout: 2000, encoding: 'utf-8' }).trim();
-        } catch { /* ignore */ }
+        if (!this.gitUser) {
+            const gitConfigPath = path.join(this.repoRoot, '.git', 'config');
+            if (await this.fileExists(gitConfigPath)) {
+                try {
+                    const gitConfig = await fs.promises.readFile(gitConfigPath, 'utf8');
+                    const match = gitConfig.match(/name\s*=\s*(.+)/);
+                    this.gitUser = match?.[1]?.trim() || '';
+                } catch {
+                    this.gitUser = '';
+                }
+            }
+        }
 
         let pagesWorkflowValid = false;
-        if (fs.existsSync(workflowPath)) {
-            const raw = fs.readFileSync(workflowPath, 'utf-8');
+        try {
+            const raw = await fs.promises.readFile(workflowPath, 'utf8');
             pagesWorkflowValid = raw.includes('steps.deployment.outputs.page_url');
+        } catch {
+            // Keep the workflow flag false when the file is missing or unreadable.
         }
 
         const clients = clientRegistry?.listClients(this.getAdapters()) ?? [];
         const primaryClient = clientRegistry?.getPrimaryClient(this.getAdapters());
+        const docsPresent = await this.fileExists(docsDir);
+        const packagePresent = await this.fileExists(packageJsonPath);
 
         return {
             dashboardApiVersion: DASHBOARD_API_VERSION,
@@ -1299,14 +1326,14 @@ export class DashboardServer {
             },
             release: {
                 packageVersion,
-                gitUser,
+                gitUser: this.gitUser,
             },
             docs: {
-                present: fs.existsSync(docsDir),
+                present: docsPresent,
                 pagesWorkflowValid,
             },
             ci: {
-                lintScriptPresent: fs.existsSync(packageJsonPath),
+                lintScriptPresent: packagePresent,
                 eventHistory: nexusEventBus.getHistory().length,
             },
         };

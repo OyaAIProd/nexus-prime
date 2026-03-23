@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import type { MemoryEngine } from '../engines/memory.js';
 import { MergeOracle } from './merge-oracle.js';
 export { MergeOracle };
-import { entanglementEngine } from '../engines/index.js';
+import { entanglementEngine } from '../engines/entanglement.js';
 import {
     WorktreeDoctorError,
     doctorGitWorktrees,

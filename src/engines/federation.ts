@@ -60,24 +60,39 @@ const FEDERATION_PATH = path.join(process.env.NEXUS_STATE_DIR
     : path.join(os.homedir(), '.nexus-prime'), 'federation.json');
 
 export class FederationEngine {
-    private memory: MemoryEngine;
+    private memory?: MemoryEngine;
     private state: FederationState;
+    private discoveryPromise?: Promise<void>;
 
     constructor(memory?: MemoryEngine) {
-        this.memory = memory || new MemoryEngine();
+        this.memory = memory;
         this.state = this.loadState();
-        this.discover().catch(() => {});
     }
 
     async discover(): Promise<void> {
-        const peers = await detectAllPeers();
-        for (const peer of peers) {
-            this.heartbeat(peer.id, {
-                displayName: `${peer.id.charAt(0).toUpperCase() + peer.id.slice(1)} (Auto-detected)`,
-                source: 'local',
-                capabilities: peer.capabilities,
-                trust: 'high'
-            });
+        if (this.discoveryPromise) {
+            return this.discoveryPromise;
+        }
+
+        const discovery = (async () => {
+            const peers = await detectAllPeers();
+            for (const peer of peers) {
+                this.heartbeat(peer.id, {
+                    displayName: `${peer.id.charAt(0).toUpperCase() + peer.id.slice(1)} (Auto-detected)`,
+                    source: 'local',
+                    capabilities: peer.capabilities,
+                    trust: 'high'
+                });
+            }
+        })();
+
+        this.discoveryPromise = discovery;
+
+        try {
+            await discovery;
+        } catch (error) {
+            this.discoveryPromise = undefined;
+            throw error;
         }
     }
 
@@ -122,6 +137,7 @@ export class FederationEngine {
     }
 
     publishTrace(trace: TraceEntry): { id: string; url: string } {
+        this.ensureDiscoveryStarted();
         const traceId = `trace_${randomUUID().slice(0, 10)}`;
         this.state.traces.unshift(trace);
         this.state.traces = this.state.traces.slice(0, 100);
@@ -132,7 +148,7 @@ export class FederationEngine {
             byteSize: JSON.stringify(trace).length,
         });
 
-        this.memory.store(
+        this.ensureMemory().store(
             `Federated trace published for task ${trace.taskId} on local federation node ${this.state.localNode.nodeId}.`,
             0.78,
             ['#federation', '#trace', '#local-federation']
@@ -142,6 +158,7 @@ export class FederationEngine {
     }
 
     sync(): number {
+        this.ensureDiscoveryStarted();
         this.agePeers();
         this.persist();
         nexusEventBus.emit('nexusnet.sync', { newItemsCount: this.state.learnings.length });
@@ -163,6 +180,7 @@ export class FederationEngine {
     }
 
     getSnapshot(): FederationSnapshot {
+        this.ensureDiscoveryStarted();
         this.agePeers();
         return {
             localNode: this.state.localNode,
@@ -215,10 +233,40 @@ export class FederationEngine {
         fs.mkdirSync(path.dirname(FEDERATION_PATH), { recursive: true });
         fs.writeFileSync(FEDERATION_PATH, JSON.stringify(this.state, null, 2), 'utf8');
     }
+
+    private ensureMemory(): MemoryEngine {
+        if (!this.memory) {
+            this.memory = new MemoryEngine();
+        }
+        return this.memory;
+    }
+
+    private ensureDiscoveryStarted(): void {
+        void this.discover().catch(() => {});
+    }
 }
 
 function dedupeStrings(values: string[]): string[] {
     return [...new Set(values.filter(Boolean))];
 }
 
-export const federation = new FederationEngine();
+let defaultFederation: FederationEngine | undefined;
+
+export function getDefaultFederation(): FederationEngine {
+    if (!defaultFederation) {
+        defaultFederation = new FederationEngine();
+    }
+    return defaultFederation;
+}
+
+export const federation: FederationEngine = new Proxy({} as FederationEngine, {
+    get(_target, prop) {
+        const instance = getDefaultFederation() as unknown as Record<PropertyKey, unknown>;
+        const value = Reflect.get(instance, prop, instance);
+        return typeof value === 'function' ? value.bind(instance) : value;
+    },
+    set(_target, prop, value) {
+        Reflect.set(getDefaultFederation() as unknown as object, prop, value);
+        return true;
+    },
+}) as FederationEngine;

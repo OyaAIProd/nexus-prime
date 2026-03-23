@@ -414,6 +414,12 @@ async function test() {
     const federation = await federationRes.json();
     const events = await eventsRes.json();
     const streamChunk = await fetchStreamChunk(`${primaryAddress}/stream`);
+    const cachedHealthAgain = await fetchJson(`${primaryAddress}/api/health`);
+    const seedResponse = await fetch(`${primaryAddress}/api/skills/seed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }).then((response) => response.json());
 
     assert.ok(html.includes('Memory Explorer'), 'dashboard HTML should render the memory explorer shell');
     assert.ok(html.includes('Connected Ecosystem'), 'dashboard HTML should render restored ecosystem rail');
@@ -467,6 +473,9 @@ async function test() {
     assert.match(html, /runtime:\s*\['runs', 'pod', 'usage', 'orchestrationSession', 'orchestrationLedger', 'instructionPacket', 'tokensSummary', 'tokensTimeline', 'tokensBySource'\]/, 'runtime-category refresh should include token resources');
     assert.match(html, /knowledge:\s*\['knowledgeFabricSession', 'knowledgeProvenance', 'ragCollections', 'patterns', 'tokensSummary', 'tokensTimeline', 'tokensBySource', 'modelTiers', 'memoryShared', 'usage'\]/, 'knowledge-category refresh should include token resources');
     assert.match(html, /refreshAll\(\['ragCollections', 'knowledgeFabricSession', 'knowledgeProvenance', 'usage', 'tokensSummary', 'tokensTimeline', 'tokensBySource', 'orchestrationSession', 'orchestrationLedger'\]\)/, 'RAG actions should refresh token telemetry alongside knowledge surfaces');
+    assert.ok(html.includes('skipWhenStreamHealthy: true'), 'dashboard client should skip events refetch while SSE is healthy');
+    assert.ok(html.includes('renderForTargets('), 'dashboard client should support lightweight section renders');
+    assert.ok(html.includes('ttlMs: 15000'), 'dashboard client should assign TTLs to hot resources');
     assert.ok(html.includes("state.workspaceViews[state.surfaceMode] = button.dataset.libraryMode"), 'workspace-specific tabs should update the active workspace view');
     assert.ok(html.includes('height: 100vh;'), 'dashboard CSS should bind the shell to the viewport');
     assert.ok(html.includes('height: clamp(280px, 38vh, 420px);'), 'graph stage should have an explicit bounded height');
@@ -475,6 +484,8 @@ async function test() {
     assert.ok(!html.includes('margin-top: 1rem; min-height:'), 'memory-snapshots should not carry an inline margin-top that fights surface overrides');
     assert.ok(!html.includes('Auto-seed skills and workflows on first load'), 'dashboard bootstrap should not mutate runtime state on load');
     assert.ok(!html.includes("if (state.skills.length === 0)"), 'dashboard bootstrap should not auto-seed when skills are empty');
+    assert.ok(html.includes('Refresh Catalog'), 'dashboard should demote dashboard-local seeding in favor of canonical runtime catalog refresh');
+    assert.ok(!html.includes('Seed Defaults'), 'dashboard should not present shadow default seeding as the primary operator action');
     assert.ok(Array.isArray(runs) && runs.length > 0, 'runs API should return recorded runs');
     assert.ok(Array.isArray(skills) && skills.length > 0, 'skills API should return artifacts');
     assert.ok(Array.isArray(workflows) && workflows.length > 0, 'workflows API should return artifacts');
@@ -534,8 +545,10 @@ async function test() {
     assert.ok(Array.isArray(patterns) && patterns.length > 0, 'pattern search API should return bounded pattern cards');
     assert.ok(backends.memory && backends.compression && backends.dsl, 'backends API should return grouped catalogs');
     assertHealthContract(health, primaryAddress);
+    assertHealthContract(cachedHealthAgain, primaryAddress);
     assert.ok((health.runtime?.runtimeCount || 0) >= 2, 'health API should include runtime registry count');
     assert.strictEqual(health.docs.pagesWorkflowValid, true, 'health API should report fixed Pages workflow syntax');
+    assert.strictEqual(cachedHealthAgain.release.packageVersion, health.release.packageVersion, 'health endpoint should return the same cached release metadata within the TTL window');
     assert.ok(Array.isArray(memories) && memories.length >= 2, 'memory API should return snapshots');
     assert.ok(typeof memoryHealth.total === 'number', 'memory health API should expose aggregate counts');
     assert.strictEqual(memoryTrace.id, rootMemoryId, 'memory trace API should resolve the requested memory');
@@ -557,6 +570,8 @@ async function test() {
     assert.ok(events.some((event: any) => event.type === 'dashboard.action' && String(event.summary).includes('rehydrated-prestart')), 'events API should rehydrate recent persisted events on dashboard start');
     assert.ok(events.every((event: any) => event.title && event.category && typeof event.time === 'number'), 'events API should normalize event cards');
     assert.ok(streamChunk.includes('retry: 3000') || streamChunk.includes('event: bootstrap'), 'stream endpoint should emit SSE prelude');
+    assert.strictEqual(seedResponse.mode, 'canonical-runtime', 'seed endpoint should report canonical runtime catalog mode');
+    assert.deepStrictEqual(seedResponse.seeded, [], 'seed endpoint should avoid dashboard-local artifact mutation');
 
     const deploySkill = await fetch(`${primaryAddress}/api/skills/deploy`, {
       method: 'POST',

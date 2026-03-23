@@ -25,6 +25,7 @@ import { SessionDNAManager } from './engines/session-dna.js';
 import { DashboardServer } from './dashboard/server.js';
 import { nexusEventBus } from './engines/event-bus.js';
 import { ClientRegistry } from './engines/client-registry.js';
+import { podNetwork } from './engines/pod-network.js';
 import {
   createSubAgentRuntime,
   summarizeExecution,
@@ -33,7 +34,7 @@ import {
   type SubAgentRuntime
 } from './phantom/index.js';
 import { ensureBootstrap } from './engines/client-bootstrap.js';
-import { initSynapse, type SynapseRuntime } from './synapse/index.js';
+import { initSynapse, type SynapseCoordinationBridge, type SynapseRuntime } from './synapse/index.js';
 import { initArchitects, type ArchitectsRuntime } from './architects/index.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -160,21 +161,17 @@ export class NexusPrime {
       await this.addAdapter(adapterType as AdapterType);
     }
 
+    this.architects = initArchitects({
+      repoRoot: process.cwd(),
+    });
+    const coordination = this.createSynapseCoordinationBridge();
     this.synapse = initSynapse({
       repoRoot: process.cwd(),
       orchestrator: this.orchestrator,
       memory: this.memoryEngine,
       sessionDNA: this.sessionDNA,
+      coordination,
     });
-    this.architects = initArchitects({
-      repoRoot: process.cwd(),
-    });
-    if (this.synapse && this.architects) {
-      this.synapse.providers.claimWorkItem = async (workItemId, operativeId) =>
-        this.architects?.claimWorkItem(workItemId, operativeId) ?? null;
-      this.synapse.providers.completeWorkItem = async (workItemId, operativeId, status) =>
-        this.architects?.completeWorkItem(workItemId, operativeId, status) ?? null;
-    }
 
     this.dashboardServer.start();
     nexusEventBus.emit('system.boot', { version: '5.0.0', toolsCount: 55 });
@@ -522,6 +519,33 @@ export class NexusPrime {
 
   getArchitects(): ArchitectsRuntime | null {
     return this.architects;
+  }
+
+  private createSynapseCoordinationBridge(): SynapseCoordinationBridge | undefined {
+    if (!this.architects) return undefined;
+    return {
+      claimWorkItem: (workItemId, operativeId) => this.architects!.claimWorkItem(workItemId, operativeId),
+      completeWorkItem: (workItemId, operativeId, status) => this.architects!.completeWorkItem(workItemId, operativeId, status).then(() => undefined),
+      getWorklistId: (strikeTeamId) => this.architects?.getWorklistForStrikeTeam(strikeTeamId) ?? null,
+      publish: (signal) => {
+        const tags = [
+          '#coordination',
+          signal.phase ? `#phase:${signal.phase}` : null,
+          signal.status ? `#status:${signal.status}` : null,
+          signal.strikeTeamId ? `#team:${signal.strikeTeamId}` : null,
+          signal.worklistId ? `#worklist:${signal.worklistId}` : null,
+          signal.workItemId ? `#workitem:${signal.workItemId}` : null,
+          signal.runId ? `#run:${signal.runId}` : null,
+          signal.correlationId ? `#corr:${signal.correlationId}` : null,
+        ].filter(Boolean) as string[];
+        podNetwork.publish(
+          signal.operativeId ? `synapse:${signal.operativeId}` : 'control-plane',
+          signal.summary,
+          signal.status === 'failed' || signal.status === 'blocked' ? 0.58 : 0.86,
+          tags,
+        );
+      },
+    };
   }
 
   evolve(): void {

@@ -123,7 +123,7 @@ export interface NexusEventPayloads {
     'memory.recall': { query: string; count: number };
     'memory.flushed': { count: number; reason: string; ts: number };
     'memory.health.tick': { counts: Array<{ state: string; c: number }>; ts: number };
-    'pod.signal': { workerId: string; type: string; content: string; confidence?: number; tags?: string[] };
+    'pod.signal': { workerId: string; type: string; content: string; confidence?: number; tags?: string[]; runId?: string | null; workItemId?: string | null; correlationId?: string | null };
     'tokens.optimized': {
         savings: number;
         pct: number;
@@ -193,14 +193,14 @@ export interface NexusEventPayloads {
     'synapse.operative.hired': { operativeId: string; name: string; skillId: string | null; strikeTeamId: string };
     'synapse.operative.retired': { operativeId: string };
     'synapse.operative.health.changed': { operativeId: string; healthState: string };
-    'synapse.striketeam.deployed': { strikeTeamId: string; operativeCount: number; missionCount: number };
-    'synapse.striketeam.completed': { strikeTeamId: string };
-    'synapse.mission.assigned': { operativeId: string; missionId: string; title: string };
+    'synapse.striketeam.deployed': { strikeTeamId: string; operativeCount: number; missionCount: number; worklistId?: string | null; correlationId?: string | null };
+    'synapse.striketeam.completed': { strikeTeamId: string; worklistId?: string | null; correlationId?: string | null };
+    'synapse.mission.assigned': { operativeId: string; missionId: string; title: string; strikeTeamId?: string | null; worklistId?: string | null; correlationId?: string | null };
     'synapse.mission.completed': { missionId: string };
-    'synapse.sortie.started': { sortieId: string; operativeId: string; missionId: string | null };
-    'synapse.sortie.completed': { sortieId: string; operativeId: string; missionId: string | null; workItemId: string | null; status: string; tokensUsed: number };
-    'synapse.sortie.failed': { sortieId: string; operativeId: string; error: string };
-    'synapse.fieldreport.submitted': { fieldReportId: string; operativeId: string; status: string };
+    'synapse.sortie.started': { sortieId: string; operativeId: string; missionId: string | null; workItemId?: string | null; strikeTeamId?: string | null; worklistId?: string | null; correlationId?: string | null };
+    'synapse.sortie.completed': { sortieId: string; operativeId: string; missionId: string | null; workItemId: string | null; strikeTeamId?: string | null; worklistId?: string | null; correlationId?: string | null; runId?: string | null; status: string; tokensUsed: number };
+    'synapse.sortie.failed': { sortieId: string; operativeId: string; missionId?: string | null; workItemId?: string | null; strikeTeamId?: string | null; worklistId?: string | null; correlationId?: string | null; error: string };
+    'synapse.fieldreport.submitted': { fieldReportId: string; operativeId: string; status: string; missionId?: string | null; strikeTeamId?: string | null; worklistId?: string | null; correlationId?: string | null; runId?: string | null };
     'synapse.echo.fired': { operativeId: string; predecessorCount: number };
     'synapse.budget.warning': { operativeId: string; spentUsd: number; capUsd: number; pct: number };
     'synapse.budget.exceeded': { operativeId: string; spentUsd: number; capUsd: number };

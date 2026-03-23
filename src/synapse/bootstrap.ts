@@ -14,13 +14,14 @@ import { getAllOperatives, getOperative } from './operatives/crud.js';
 import { queryEcho } from './echo/query.js';
 import { runSortieByOperativeId } from './sorties/runner.js';
 import { startSortieScheduler } from './sorties/scheduler.js';
-import type { FieldReport, SynapseProviders, SynapseRuntime } from './types.js';
+import type { FieldReport, SynapseCoordinationBridge, SynapseProviders, SynapseRuntime } from './types.js';
 
 interface InitSynapseOptions {
   repoRoot: string;
   orchestrator: SynapseProviders['orchestrator'];
   memory: SynapseProviders['memory'];
   sessionDNA: SynapseProviders['sessionDNA'];
+  coordination?: SynapseCoordinationBridge;
 }
 
 function createProviders(options: InitSynapseOptions): SynapseProviders {
@@ -31,6 +32,13 @@ function createProviders(options: InitSynapseOptions): SynapseProviders {
     sessionDNA: options.sessionDNA,
     skillRuntime: createSkillRuntime(undefined, undefined, options.repoRoot),
     knowledgeFabric: new KnowledgeFabricEngine({ repoRoot: options.repoRoot, memory: options.memory }),
+    coordination: options.coordination,
+    claimWorkItem: options.coordination
+      ? (workItemId, operativeId) => options.coordination!.claimWorkItem(workItemId, operativeId)
+      : undefined,
+    completeWorkItem: options.coordination
+      ? (workItemId, operativeId, status) => options.coordination!.completeWorkItem(workItemId, operativeId, status)
+      : undefined,
   };
 }
 
@@ -47,6 +55,8 @@ export function initSynapse(options: InitSynapseOptions): SynapseRuntime | null 
 
   const blockedListener = (payload: { operativeId?: string; reason?: string }) => {
     if (payload.operativeId) {
+      db.prepare('UPDATE synapse_operatives SET health_state=\'BLOCKED\', state=\'SUSPENDED\', suspend_reason=\'manual\' WHERE id=?').run(payload.operativeId);
+      nexusEventBus.emit('synapse.operative.health.changed', { operativeId: payload.operativeId, healthState: 'BLOCKED' });
       providers.memory.store(`[Architects:Blocked] ${payload.operativeId} ${payload.reason ?? ''}`.trim(), 0.82, ['#synapse', '#blocked']);
     }
   };
@@ -54,10 +64,12 @@ export function initSynapse(options: InitSynapseOptions): SynapseRuntime | null 
     const operative = getOperative(db, operativeId);
     if (operative) {
       db.prepare('UPDATE synapse_operatives SET health_state=\'STALLED\' WHERE id=?').run(operativeId);
+      nexusEventBus.emit('synapse.operative.health.changed', { operativeId, healthState: 'STALLED' });
     }
   };
   const zombieListener = ({ operativeId }: { operativeId: string }) => {
     db.prepare('UPDATE synapse_operatives SET health_state=\'ZOMBIE\', state=\'SUSPENDED\', suspend_reason=\'manual\' WHERE id=?').run(operativeId);
+    nexusEventBus.emit('synapse.operative.health.changed', { operativeId, healthState: 'ZOMBIE' });
   };
   const failedConvergenceListener = ({ worklistId, error }: { worklistId: string; error?: string }) => {
     providers.memory.store(`[Architects:ConvergenceFailed] ${worklistId} ${error ?? ''}`.trim(), 0.8, ['#synapse', '#architects', '#convergence']);

@@ -112,6 +112,26 @@ export interface MandateSignals {
   subGoalHints: string[];
 }
 
+export interface SynapseCoordinationSignal {
+  phase: 'mandate' | 'worklist' | 'sortie' | 'field-report' | 'convergence';
+  summary: string;
+  strikeTeamId?: string | null;
+  worklistId?: string | null;
+  workItemId?: string | null;
+  operativeId?: string | null;
+  sortieId?: string | null;
+  runId?: string | null;
+  correlationId?: string | null;
+  status?: string | null;
+}
+
+export interface SynapseCoordinationBridge {
+  claimWorkItem(workItemId: string, operativeId: string): Promise<unknown | null>;
+  completeWorkItem(workItemId: string, operativeId: string, status: 'done' | 'failed' | 'blocked'): Promise<unknown>;
+  getWorklistId(strikeTeamId: string): string | null;
+  publish(signal: SynapseCoordinationSignal): void;
+}
+
 export interface SynapseProviders {
   repoRoot: string;
   orchestrator: OrchestratorEngine;
@@ -119,6 +139,7 @@ export interface SynapseProviders {
   sessionDNA: SessionDNAManager;
   skillRuntime: SkillRuntime;
   knowledgeFabric: KnowledgeFabricEngine;
+  coordination?: SynapseCoordinationBridge;
   claimWorkItem?: (workItemId: string, operativeId: string) => Promise<unknown | null>;
   completeWorkItem?: (workItemId: string, operativeId: string, status: 'done' | 'failed' | 'blocked') => Promise<unknown>;
 }

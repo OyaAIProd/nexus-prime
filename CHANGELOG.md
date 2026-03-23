@@ -2,9 +2,29 @@
 
 All notable changes to Nexus Prime are documented here.
 
-Release Index: [v4.0.0](#v400--2026-03-22) · [v3.18.0](#v3180--2026-03-21) · [v3.17.0](#v3170--2026-03-20) · [v3.16.0](#v3160--2026-03-20) · [v3.15.0](#v3150--2026-03-16) · [v3.14.0](#v3140--2026-03-16)
+Release Index: [v4.1.0](#v410--2026-03-23) · [v4.0.0](#v400--2026-03-22) · [v3.18.0](#v3180--2026-03-21) · [v3.17.0](#v3170--2026-03-20) · [v3.16.0](#v3160--2026-03-20) · [v3.15.0](#v3150--2026-03-16)
 
 <details open>
+<summary><b>v4.1.0</b> · 2026-03-23 · Control-plane hardening, dashboard truth, and coordinated execution</summary>
+
+### Added
+- **Explicit coordination bridge**: Synapse now bootstraps against a typed coordination bridge that owns Architects work-item claim/complete handoffs and carries shared correlation IDs through missions, sorties, field reports, and POD telemetry.
+- **Bootstrap-path integration coverage**: Added end-to-end mandate → worklist → sortie → convergence coverage so the normal Nexus Prime startup path verifies real Synapse/Architects coordination instead of relying on isolated wiring assumptions.
+- **Routing and dashboard regressions**: Added tests covering engineering-lane routing for broad technical audits, stream-aware dashboard refresh suppression, and canonical runtime catalog refresh behavior.
+
+### Changed
+- **Dashboard hot paths**: `/api/health`, `/api/feature-registry`, and `/api/repo-tree` now use bounded caching, the client dedupes in-flight resource fetches, and routine refreshes update only affected surfaces instead of broad rerenders.
+- **Catalog truth**: Dashboard-local skill/workflow seed defaults are no longer the primary path; catalog refresh now reports canonical runtime mode and reflects the real runtime registries.
+- **Intent routing**: `classifyIntent()` and Synapse mandate parsing now treat control-plane audits as weighted multi-label engineering work, preserving meaningful frontend/review signals while keeping feature prompts on the feature lane.
+
+### Fixed
+- **Control-plane misrouting**: Broad technical review prompts no longer collapse into blocked PM, marketing, or data review gates before engineering execution can begin.
+- **Bootstrap-path work-item assertions**: Integration coverage now verifies completion against the operative's actual mission work item rather than assuming the first Architects row is the one that ran.
+- **Release lint break**: Dashboard health collection no longer uses an empty catch block that fails the release lint gate.
+
+</details>
+
+<details>
 <summary><b>v4.0.0</b> · 2026-03-22 · Engine stabilization, release hardening, and roster light-loading</summary>
 
 ### Added

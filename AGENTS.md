@@ -69,3 +69,22 @@ IF ARCHITECTS_OPERATIVE_ID is set:
 6. Use `nexus_architects_relay_send(...)` for operative-to-operative messages
 7. Escalate 2+ sortie blockers to ward via relay instead of waiting silently
 <!-- nexus-prime:architects:end -->
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

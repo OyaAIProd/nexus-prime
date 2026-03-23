@@ -97,6 +97,8 @@ async function runTests() {
     let passed = 0;
     let failed = 0;
     const errors: string[] = [];
+    let ghostPassVerified = false;
+    let workerLifecycleVerified = false;
 
     const assert = (condition: boolean, name: string, detail?: string) => {
         if (condition) {
@@ -115,9 +117,7 @@ async function runTests() {
     assert(gitAvailable, 'Is a git repository');
 
     if (!gitAvailable) {
-        console.log('\n  ⚠️  Skipping git-dependent tests (not a git repo)\n');
-        console.log(`  Passed: ${passed}  Failed: ${failed}\n`);
-        return;
+        throw new Error('Fixture repository is not a git repository');
     }
 
     const branch = currentBranch(REPO_ROOT);
@@ -135,9 +135,9 @@ async function runTests() {
         doctorGitWorktrees = worktreeHealth.doctorGitWorktrees;
         assert(true, 'phantom/index.ts imports cleanly');
     } catch (e: any) {
-        assert(false, 'phantom/index.ts imports cleanly', e.message);
-        console.log('\n  ⚠️  Cannot continue without phantom imports\n');
-        return;
+        const message = e instanceof Error ? e.message : String(e);
+        assert(false, 'phantom/index.ts imports cleanly', message);
+        throw new Error(`phantom/index.ts failed to import: ${message}`);
     }
 
     // ── Ghost Pass ───────────────────────────────────────────────────────────
@@ -155,6 +155,7 @@ async function runTests() {
     assert(ghostReport.workerAssignments.length > 0, 'GhostPass generates worker assignments');
     assert(ghostReport.readingPlan !== undefined, 'GhostPass produces a reading plan');
     assert(ghostReport.totalEstimatedTokens > 0, 'GhostPass estimates token cost');
+    ghostPassVerified = true;
     console.log(`  📊 Risk areas: ${ghostReport.riskAreas.join(', ') || 'none'}`);
     console.log(`  🔀 Worker approaches: ${ghostReport.workerAssignments.map((w: any) => w.approach).join(', ')}`);
 
@@ -218,12 +219,13 @@ async function runTests() {
         ]);
         assert(true, 'Both workers spawned and ran in parallel');
     } catch (e: any) {
-        assert(false, 'Both workers spawned and ran in parallel', e.message);
+        const message = e instanceof Error ? e.message : String(e);
+        assert(false, 'Both workers spawned and ran in parallel', message);
         console.log('  ⚠️  Worker spawn failed — checking worktrees post-failure:');
         const leftovers = await PhantomWorker.getWorktreeList(REPO_ROOT);
         console.log(`  Leftovers: ${leftovers.length}`);
         await PhantomWorker.purgeOrphanedWorktrees(REPO_ROOT);
-        return;
+        throw new Error(`Worker spawn failed: ${message}`);
     }
 
     assert(result1.workerId !== result2.workerId, 'Workers have unique IDs');
@@ -235,6 +237,7 @@ async function runTests() {
     // Verify cleanup
     const worktreesAfter = await PhantomWorker.getWorktreeList(REPO_ROOT);
     assert(worktreesAfter.length === 0, 'All worktrees cleaned up after workers complete');
+    workerLifecycleVerified = true;
 
     // ── MergeOracle ──────────────────────────────────────────────────────────
     console.log('\n🔮 MergeOracle (Byzantine consensus)');
@@ -267,6 +270,8 @@ async function runTests() {
     console.log('\n🧠 Memory integration');
     const storedCount = memory.items?.length ?? 0;
     assert(storedCount > 0, `Oracle stored ${storedCount} learnings in memory`);
+    assert(ghostPassVerified, 'GhostPass verification completed');
+    assert(workerLifecycleVerified, 'Worker lifecycle verification completed');
 
     // ── Summary ──────────────────────────────────────────────────────────────
     console.log('\n' + '─'.repeat(50));

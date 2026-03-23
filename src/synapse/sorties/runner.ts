@@ -96,9 +96,21 @@ export async function runSortie(db: SynapseDb, operative: Operative, providers: 
     ? await queryEcho(db, mission.id, mission.title, operative.id, providers.memory)
     : { found: false, summary: '', predecessorSortieIds: [], priorBlockers: [] };
   const goal = echo.found ? `${echo.summary}\n\nCURRENT MISSION: ${mission.title}` : mission.title;
+  const worklistId = mission.strikeTeamId ? providers.coordination?.getWorklistId(mission.strikeTeamId) ?? null : null;
+  const correlationId = mission.id;
   if (providers.claimWorkItem) {
     const lock = await providers.claimWorkItem(mission.id, operative.id);
     if (!lock) {
+      providers.coordination?.publish({
+        phase: 'worklist',
+        summary: `Work item ${mission.id} is already claimed`,
+        strikeTeamId: mission.strikeTeamId,
+        worklistId,
+        workItemId: mission.id,
+        operativeId: operative.id,
+        correlationId,
+        status: 'deferred',
+      });
       return createSyntheticSortie(db, operative, mission, 'deferred');
     }
     transitionOperative(db, operative.id, 'CHECKOUT');
@@ -115,6 +127,21 @@ export async function runSortie(db: SynapseDb, operative: Operative, providers: 
     sortieId: sortie.id,
     operativeId: operative.id,
     missionId: mission.id,
+    workItemId: mission.id,
+    strikeTeamId: mission.strikeTeamId,
+    worklistId,
+    correlationId,
+  });
+  providers.coordination?.publish({
+    phase: 'sortie',
+    summary: `Sortie started for ${mission.title}`,
+    strikeTeamId: mission.strikeTeamId,
+    worklistId,
+    workItemId: mission.id,
+    operativeId: operative.id,
+    sortieId: sortie.id,
+    correlationId,
+    status: 'running',
   });
   if (echo.found) {
     nexusEventBus.emit('synapse.echo.fired', {
@@ -168,14 +195,39 @@ export async function runSortie(db: SynapseDb, operative: Operative, providers: 
         updateStrikeTeamStatus(db, mission.strikeTeamId, 'active');
       }
     }
-    nexusEventBus.emit('synapse.fieldreport.submitted', { fieldReportId: report.id, operativeId: operative.id, status: report.status });
+    nexusEventBus.emit('synapse.fieldreport.submitted', {
+      fieldReportId: report.id,
+      operativeId: operative.id,
+      status: report.status,
+      missionId: mission.id,
+      strikeTeamId: mission.strikeTeamId,
+      worklistId,
+      correlationId,
+      runId: execution.runId,
+    });
     nexusEventBus.emit('synapse.sortie.completed', {
       sortieId: sortie.id,
       operativeId: operative.id,
       missionId: mission.id,
       workItemId: mission.id,
+      strikeTeamId: mission.strikeTeamId,
+      worklistId,
+      correlationId,
+      runId: execution.runId,
       status: report.status,
       tokensUsed: report.tokensUsed,
+    });
+    providers.coordination?.publish({
+      phase: 'field-report',
+      summary: `Sortie ${sortie.id} finished with ${report.status}`,
+      strikeTeamId: mission.strikeTeamId,
+      worklistId,
+      workItemId: mission.id,
+      operativeId: operative.id,
+      sortieId: sortie.id,
+      runId: execution.runId,
+      correlationId,
+      status: report.status,
     });
     return getSortie(db, sortie.id)!;
   } catch (error: any) {
@@ -188,7 +240,23 @@ export async function runSortie(db: SynapseDb, operative: Operative, providers: 
     nexusEventBus.emit('synapse.sortie.failed', {
       sortieId: sortie.id,
       operativeId: operative.id,
+      missionId: mission.id,
+      workItemId: mission.id,
+      strikeTeamId: mission.strikeTeamId,
+      worklistId,
+      correlationId,
       error: String(error?.message ?? error),
+    });
+    providers.coordination?.publish({
+      phase: 'field-report',
+      summary: `Sortie ${sortie.id} failed for ${mission.title}`,
+      strikeTeamId: mission.strikeTeamId,
+      worklistId,
+      workItemId: mission.id,
+      operativeId: operative.id,
+      sortieId: sortie.id,
+      correlationId,
+      status: 'failed',
     });
     throw error;
   }

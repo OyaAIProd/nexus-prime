@@ -78,6 +78,7 @@ export async function executeMandatePipeline(
 
   const team = db.transaction(() => {
     const teamId = randomUUID();
+    const worklistId = providers.coordination?.getWorklistId(teamId) ?? null;
     const operativeIds = Array.from({ length: maxOps }, (_, index) => {
       const skill = matched.skills[index] ?? matched.skills[0];
       const specialist = matched.specialists[index] ?? matched.specialists[0] ?? null;
@@ -115,6 +116,19 @@ export async function executeMandatePipeline(
         operativeId,
         missionId: mission.id,
         title: mission.title,
+        strikeTeamId: teamId,
+        worklistId,
+        correlationId: mission.id,
+      });
+      providers.coordination?.publish({
+        phase: 'mandate',
+        summary: `Mission assigned: ${mission.title}`,
+        strikeTeamId: teamId,
+        worklistId,
+        workItemId: mission.id,
+        operativeId,
+        correlationId: mission.id,
+        status: 'assigned',
       });
       return mission.id;
     });
@@ -132,6 +146,16 @@ export async function executeMandatePipeline(
       strikeTeamId: teamId,
       operativeCount: operativeIds.length,
       missionCount: missionIds.length,
+      worklistId,
+      correlationId: teamId,
+    });
+    providers.coordination?.publish({
+      phase: 'mandate',
+      summary: `Strike team deployed for mandate: ${mandateText.slice(0, 120)}`,
+      strikeTeamId: teamId,
+      worklistId,
+      correlationId: teamId,
+      status: 'deployed',
     });
     providers.memory.store(`[Synapse:Mandate] ${mandateText}`, 0.85, ['#synapse', '#mandate', `#team:${teamId}`]);
     return getStrikeTeam(db, teamId)!;

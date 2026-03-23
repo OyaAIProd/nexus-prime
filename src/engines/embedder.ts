@@ -17,6 +17,20 @@ import type Database from 'better-sqlite3';
 
 const VECTOR_DIM = 128; // local TF-IDF dimension
 
+export interface PersistentVocabularyStatus {
+    docCount: number;
+    termCount: number;
+    reset: boolean;
+    needsRecovery: boolean;
+}
+
+export function isSqliteCorruptionError(error: unknown): error is { code?: string; message?: string } {
+    if (!error || typeof error !== 'object') return false;
+    const code = 'code' in error ? String((error as { code?: unknown }).code ?? '') : '';
+    const message = 'message' in error ? String((error as { message?: unknown }).message ?? '') : '';
+    return code === 'SQLITE_CORRUPT' || /database disk image is malformed/i.test(message);
+}
+
 /** Stop words — excluded from TF-IDF vocabulary */
 const STOP_WORDS = new Set([
     'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
@@ -116,7 +130,6 @@ export class Embedder {
 
         if (this.vocabularyDb) {
             this.initVocabularyTables();
-            this.rebuildPersistentVocabulary();
         }
     }
 
@@ -179,12 +192,14 @@ export class Embedder {
     }
 
     /** Update vocabulary with new documents (call as you store memories) */
-    fitVocabulary(docs: string[]): void {
-        if (docs.length === 0) return;
+    fitVocabulary(docs: string[]): PersistentVocabularyStatus {
+        if (docs.length === 0) return this.currentPersistentVocabularyStatus();
         if (this.vocabularyDb) {
-            this.upsertPersistentVocabularyStats(docs);
-            this.rebuildPersistentVocabulary();
-            return;
+            const initStatus = this.initVocabularyTables();
+            if (initStatus.needsRecovery) return initStatus;
+            const updateStatus = this.upsertPersistentVocabularyStats(docs);
+            if (updateStatus.needsRecovery) return updateStatus;
+            return this.rebuildPersistentVocabulary();
         }
 
         // Count document frequency for each term
@@ -209,27 +224,34 @@ export class Embedder {
             // IDF = log((N + 1) / (df + 1)) + 1  (smoothed)
             this.idf.set(term, Math.log((this.docCount + 1) / (df + 1)) + 1);
         }
+        return this.currentPersistentVocabularyStatus();
     }
 
-    public rebuildPersistentVocabulary(): void {
-        if (!this.vocabularyDb) return;
-        this.initVocabularyTables();
-        const docCountRow = this.vocabularyDb.prepare(
-            `SELECT value FROM vocabulary_meta WHERE key = 'doc_count'`
-        ).get() as { value?: string } | undefined;
-        const docCount = Number.parseInt(docCountRow?.value ?? '0', 10);
-        this.docCount = Number.isFinite(docCount) ? docCount : 0;
+    public rebuildPersistentVocabulary(): PersistentVocabularyStatus {
+        if (!this.vocabularyDb) return this.currentPersistentVocabularyStatus();
+        const initStatus = this.initVocabularyTables();
+        if (initStatus.needsRecovery) return initStatus;
+        try {
+            const docCountRow = this.vocabularyDb.prepare(
+                `SELECT value FROM vocabulary_meta WHERE key = 'doc_count'`
+            ).get() as { value?: string } | undefined;
+            const docCount = Number.parseInt(docCountRow?.value ?? '0', 10);
+            this.docCount = Number.isFinite(docCount) ? docCount : 0;
 
-        const rows = this.vocabularyDb.prepare(
-            `SELECT term, df FROM vocabulary_stats ORDER BY df DESC, term ASC LIMIT ?`
-        ).all(VECTOR_DIM) as Array<{ term: string; df: number }>;
+            const rows = this.vocabularyDb.prepare(
+                `SELECT term, df FROM vocabulary_stats ORDER BY df DESC, term ASC LIMIT ?`
+            ).all(VECTOR_DIM) as Array<{ term: string; df: number }>;
 
-        this.vocabulary.clear();
-        this.idf.clear();
-        for (const { term, df } of rows) {
-            const idx = this.vocabulary.size;
-            this.vocabulary.set(term, idx);
-            this.idf.set(term, Math.log((this.docCount + 1) / (df + 1)) + 1);
+            this.vocabulary.clear();
+            this.idf.clear();
+            for (const { term, df } of rows) {
+                const idx = this.vocabulary.size;
+                this.vocabulary.set(term, idx);
+                this.idf.set(term, Math.log((this.docCount + 1) / (df + 1)) + 1);
+            }
+            return this.currentPersistentVocabularyStatus();
+        } catch (error) {
+            return this.handlePersistentVocabularyFailure(error);
         }
     }
 
@@ -375,25 +397,29 @@ export class Embedder {
         return h;
     }
 
-    private initVocabularyTables(): void {
-        if (!this.vocabularyDb) return;
-        this.vocabularyDb.exec(`
-            CREATE TABLE IF NOT EXISTS vocabulary_stats (
-                term TEXT PRIMARY KEY,
-                df INTEGER NOT NULL DEFAULT 1,
-                last_seen INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS vocabulary_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            INSERT OR IGNORE INTO vocabulary_meta(key, value) VALUES('doc_count', '0');
-        `);
+    private initVocabularyTables(): PersistentVocabularyStatus {
+        if (!this.vocabularyDb) return this.currentPersistentVocabularyStatus();
+        try {
+            this.vocabularyDb.exec(`
+                CREATE TABLE IF NOT EXISTS vocabulary_stats (
+                    term TEXT PRIMARY KEY,
+                    df INTEGER NOT NULL DEFAULT 1,
+                    last_seen INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS vocabulary_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                INSERT OR IGNORE INTO vocabulary_meta(key, value) VALUES('doc_count', '0');
+            `);
+            return this.currentPersistentVocabularyStatus();
+        } catch (error) {
+            return this.handlePersistentVocabularyFailure(error);
+        }
     }
 
-    private upsertPersistentVocabularyStats(docs: string[]): void {
-        if (!this.vocabularyDb) return;
-        this.initVocabularyTables();
+    private upsertPersistentVocabularyStats(docs: string[]): PersistentVocabularyStatus {
+        if (!this.vocabularyDb) return this.currentPersistentVocabularyStatus();
         const dfCount = new Map<string, number>();
 
         for (const doc of docs) {
@@ -403,25 +429,53 @@ export class Embedder {
             }
         }
 
-        const upsert = this.vocabularyDb.prepare(`
-            INSERT INTO vocabulary_stats(term, df, last_seen) VALUES(?, ?, ?)
-            ON CONFLICT(term) DO UPDATE SET
-                df = df + excluded.df,
-                last_seen = excluded.last_seen
-        `);
-        const updateDocCount = this.vocabularyDb.prepare(`
-            UPDATE vocabulary_meta
-            SET value = CAST(CAST(value AS INTEGER) + ? AS TEXT)
-            WHERE key = 'doc_count'
-        `);
-        const txn = this.vocabularyDb.transaction((entries: Array<[string, number]>, batchSize: number) => {
-            const now = Date.now();
-            for (const [term, df] of entries) {
-                upsert.run(term, df, now);
-            }
-            updateDocCount.run(batchSize);
-        });
-        txn([...dfCount.entries()], docs.length);
+        try {
+            const upsert = this.vocabularyDb.prepare(`
+                INSERT INTO vocabulary_stats(term, df, last_seen) VALUES(?, ?, ?)
+                ON CONFLICT(term) DO UPDATE SET
+                    df = df + excluded.df,
+                    last_seen = excluded.last_seen
+            `);
+            const updateDocCount = this.vocabularyDb.prepare(`
+                UPDATE vocabulary_meta
+                SET value = CAST(CAST(value AS INTEGER) + ? AS TEXT)
+                WHERE key = 'doc_count'
+            `);
+            const txn = this.vocabularyDb.transaction((entries: Array<[string, number]>, batchSize: number) => {
+                const now = Date.now();
+                for (const [term, df] of entries) {
+                    upsert.run(term, df, now);
+                }
+                updateDocCount.run(batchSize);
+            });
+            txn([...dfCount.entries()], docs.length);
+            return this.currentPersistentVocabularyStatus();
+        } catch (error) {
+            return this.handlePersistentVocabularyFailure(error);
+        }
+    }
+
+    private clearPersistentVocabulary(): void {
+        this.vocabulary.clear();
+        this.idf.clear();
+        this.docCount = 0;
+    }
+
+    private currentPersistentVocabularyStatus(reset: boolean = false, needsRecovery: boolean = false): PersistentVocabularyStatus {
+        return {
+            docCount: this.docCount,
+            termCount: this.vocabulary.size,
+            reset,
+            needsRecovery,
+        };
+    }
+
+    private handlePersistentVocabularyFailure(error: unknown): PersistentVocabularyStatus {
+        if (!isSqliteCorruptionError(error)) {
+            throw error;
+        }
+        this.clearPersistentVocabulary();
+        return this.currentPersistentVocabularyStatus(true, true);
     }
 }
 

@@ -50,7 +50,7 @@ import {
     type ShieldDecision,
     type ShieldPolicyMode,
 } from '../engines/security-shield.js';
-import { FederationEngine, federation as defaultFederation } from '../engines/federation.js';
+import { FederationEngine, getDefaultFederation } from '../engines/federation.js';
 import { ByzantineConsensus } from '../engines/byzantine-consensus.js';
 import { podNetwork } from '../engines/pod-network.js';
 import {
@@ -700,7 +700,7 @@ export class SubAgentRuntime {
         this.hookRuntime = options.hookRuntime ?? createHookRuntime(undefined, this.repoRoot);
         this.automationRuntime = options.automationRuntime ?? createAutomationRuntime(undefined, this.repoRoot);
         this.securityShield = options.securityShield ?? createSecurityShield();
-        this.federation = options.federation ?? defaultFederation;
+        this.federation = options.federation ?? getDefaultFederation();
         this.artifactsRoot = options.artifactsRoot;
         this.runtimeRegistry = new RuntimeRegistry();
         this.instructionGateway = new InstructionGateway(this.repoRoot);

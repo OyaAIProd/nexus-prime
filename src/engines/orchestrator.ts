@@ -1274,41 +1274,67 @@ export class OrchestratorEngine {
   }
 
   private classifyIntent(task: string): AutonomyIntent {
-    const intents: Record<string, string[]> = {
-      release: ['release', 'publish', 'tag', 'version', 'deploy', 'bump'],
-      feature: ['feature', 'add', 'implement', 'build', 'create', 'new', 'develop', 'support', 'enable', 'introduce', 'extend', 'enhance'],
-      review: ['review', 'audit', 'check', 'linter', 'vet', 'inspect'],
-      research: ['research', 'explore', 'discover', 'spike', 'feasibility', 'investigate', 'analyze', 'evaluate'],
-      refactor: ['refactor', 'rewrite', 'restructure', 'clean', 'tech debt', 'extract', 'reorganize'],
-      bugfix: ['fix', 'bug', 'broken', 'issue', 'error', 'crash', 'exception', 'patch', 'resolve'],
-      ops: ['deploy', 'monitor', 'ops', 'infra', 'devops', 'docker', 'kubernetes', 'ci/cd', 'pipeline', 'workflow'],
-      pm: ['pm', 'roadmap', 'requirements', 'scope', 'prd', 'user story', 'plan', 'spec', 'ticket', 'epic'],
-      test: ['test', 'coverage', 'jest', 'cypress', 'e2e', 'unit', 'integration', 'spec', 'qa', 'validate'],
-      frontend: ['frontend', 'ui', 'react', 'css', 'styling', 'components', 'layout', 'design', 'view', 'html', 'page'],
-      backend: ['backend', 'api', 'server', 'database', 'sql', 'endpoints', 'model', 'controller', 'service', 'db'],
-      ai: ['ai', 'ml', 'llm', 'rag', 'embedding', 'model', 'prompt', 'inference', 'agent', 'bot'],
-      marketing: ['marketing', 'seo', 'copywriting', 'campaign', 'blog', 'content', 'growth', 'social', 'email'],
-      sales: ['sales', 'pitch', 'lead', 'prospecting', 'outreach', 'crm', 'deal', 'quote'],
-      data: ['analysis', 'data', 'metrics', 'dashboard', 'query', 'analytics', 'report', 'etl', 'bi'],
+    const lowerTask = task.toLowerCase();
+    const taskTokens = new Set(
+      lowerTask.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((word) => word.length > 2)
+    );
+    const intents: Record<AutonomyIntent['taskType'], { keywords: string[]; phrases?: string[]; weight?: number }> = {
+      release: { keywords: ['release', 'publish', 'tag', 'version', 'deploy', 'bump'], phrases: ['release readiness', 'ship it'] },
+      feature: { keywords: ['feature', 'add', 'implement', 'build', 'create', 'develop', 'enable', 'introduce', 'extend', 'enhance'], weight: 0.95 },
+      review: { keywords: ['review', 'audit', 'check', 'inspect', 'assess', 'verify', 'readiness', 'cto'], phrases: ['lead review', 'production ready', 'world class'] },
+      research: { keywords: ['research', 'explore', 'discover', 'spike', 'feasibility', 'investigate', 'analyze', 'evaluate'], weight: 0.9 },
+      refactor: { keywords: ['refactor', 'rewrite', 'restructure', 'clean', 'extract', 'reorganize', 'harden'], phrases: ['tech debt'] },
+      bugfix: { keywords: ['fix', 'bug', 'broken', 'issue', 'error', 'crash', 'exception', 'patch', 'resolve', 'lag', 'slow'], phrases: ['not working', 'super buggy'] },
+      ops: { keywords: ['deploy', 'monitor', 'ops', 'infra', 'devops', 'docker', 'kubernetes', 'pipeline', 'workflow'], phrases: ['ci/cd'] },
+      pm: { keywords: ['pm', 'roadmap', 'requirements', 'scope', 'prd', 'story', 'plan', 'spec', 'ticket', 'epic'], phrases: ['user story', 'product requirement'], weight: 0.8 },
+      test: { keywords: ['test', 'coverage', 'jest', 'cypress', 'e2e', 'unit', 'integration', 'qa', 'validate', 'regression'], weight: 0.92 },
+      frontend: { keywords: ['frontend', 'ui', 'ux', 'react', 'css', 'styling', 'components', 'layout', 'design', 'html', 'page', 'dashboard'], phrases: ['user experience', 'design system'], weight: 1.05 },
+      backend: { keywords: ['backend', 'api', 'server', 'database', 'sql', 'endpoint', 'controller', 'service', 'binding', 'runtime', 'synapse', 'architects', 'orchestration', 'pod'], phrases: ['control plane', 'multi agent', 'multiagent'], weight: 1.08 },
+      ai: { keywords: ['ai', 'ml', 'llm', 'rag', 'embedding', 'prompt', 'inference', 'agent', 'model'], weight: 0.95 },
+      marketing: { keywords: ['marketing', 'seo', 'copywriting', 'campaign', 'blog', 'content', 'growth', 'social', 'email'], weight: 0.65 },
+      sales: { keywords: ['sales', 'pitch', 'lead', 'prospecting', 'outreach', 'crm', 'deal', 'quote'], weight: 0.65 },
+      data: { keywords: ['analysis', 'data', 'metrics', 'query', 'analytics', 'report', 'etl', 'bi'], phrases: ['data warehouse'], weight: 0.72 },
     };
 
-    const taskTokens = new Set(
-        task.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2)
-    );
+    const scoreKeyword = (keyword: string): number => {
+      if (taskTokens.has(keyword)) return 1;
+      if (lowerTask.includes(keyword)) return keyword.includes(' ') ? 1.15 : 0.55;
+      return 0;
+    };
 
     const intentScores: Record<string, number> = {};
+    for (const [type, config] of Object.entries(intents)) {
+      let score = 0;
+      for (const keyword of config.keywords) {
+        score += scoreKeyword(keyword);
+      }
+      for (const phrase of config.phrases ?? []) {
+        if (lowerTask.includes(phrase)) score += 1.35;
+      }
+      intentScores[type] = score * (config.weight ?? 1);
+    }
 
-    for (const [type, keywords] of Object.entries(intents)) {
-        let score = 0;
-        for (const kw of keywords) {
-            if (taskTokens.has(kw)) {
-                score += 1.0;
-            } else if (task.toLowerCase().includes(kw)) {
-                score += 0.5;
-            }
-        }
-        // TF-IDF style fallback: Normalize by log(keywords.length + 1)
-        intentScores[type] = score > 0 ? score / Math.log(keywords.length + 1) : 0;
+    const hasTechnicalScope = /(dashboard|frontend|backend|api|runtime|control plane|synapse|architect|pod|integration|binding|coordination)/.test(lowerTask);
+    const hasAuditPressure = /(review|audit|cto|lag|slow|bug|fix|broken|performance|harden|readiness|not working)/.test(lowerTask);
+    const isTechnicalAudit = hasTechnicalScope && hasAuditPressure;
+    if (isTechnicalAudit) {
+      intentScores.review += 1.2;
+      intentScores.backend += 1.35;
+      intentScores.frontend += 0.95;
+      intentScores.bugfix += 0.75;
+      intentScores.pm *= 0.45;
+      intentScores.marketing *= 0.2;
+      intentScores.sales *= 0.2;
+      if (/(dashboard|ui|ux)/.test(lowerTask) && /(lag|slow|bug|performance|frontend|binding|api)/.test(lowerTask)) {
+        intentScores.data *= 0.25;
+      }
+    }
+
+    if (/(dashboard|metrics|analytics)/.test(lowerTask) && !/(ui|ux|frontend|lag|performance|bug|control plane|runtime)/.test(lowerTask)) {
+      intentScores.data += 0.8;
+    }
+    if (/(build|create|implement|add|new|enhance|extend|develop)/.test(lowerTask) && !/(review|audit|fix|bug|lag|broken|readiness)/.test(lowerTask)) {
+      intentScores.feature += 1.65;
     }
 
     // Sort by score descending to find primary and potential secondary intent
@@ -1316,7 +1342,8 @@ export class OrchestratorEngine {
     const bestIntent = sorted[0]?.[1] > 0 ? sorted[0][0] : 'feature';
     const bestScore = sorted[0]?.[1] ?? 0;
     // Secondary intent: if 2nd place score >= 80% of 1st place, it's a meaningful secondary signal
-    const secondaryType = sorted[1]?.[1] > 0 && bestScore > 0 && sorted[1][1] >= bestScore * 0.8
+    const secondaryThreshold = isTechnicalAudit ? 0.45 : 0.8;
+    const secondaryType = sorted[1]?.[1] > 0 && bestScore > 0 && sorted[1][1] >= bestScore * secondaryThreshold
         ? sorted[1][0]
         : undefined;
 

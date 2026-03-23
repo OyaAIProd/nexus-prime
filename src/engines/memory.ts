@@ -14,7 +14,12 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
-import { Embedder, HyperbolicMath } from './embedder.js';
+import {
+  Embedder,
+  HyperbolicMath,
+  isSqliteCorruptionError,
+  type PersistentVocabularyStatus,
+} from './embedder.js';
 import { GraphMemoryEngine } from './graph-memory.js';
 import { podNetwork } from './pod-network.js';
 import { nexusEventBus } from './event-bus.js';
@@ -230,12 +235,66 @@ export interface TokenTelemetryEntry {
   usdValueSaved: number;
 }
 
+interface MemoryRow {
+  id: string;
+  content: string;
+  priority: number;
+  timestamp: number;
+  tags: string;
+  tier: MemoryItem['tier'];
+  scope?: MemoryItem['scope'];
+  state?: MemoryItem['state'];
+  source?: MemoryItem['source'];
+  session_id?: string;
+  access_count: number;
+  parent_id?: string;
+  depth?: number;
+  entropy?: number;
+  mass?: number;
+  trust?: number;
+  qmd_recency?: number | null;
+  qmd_frequency?: number | null;
+  qmd_relevance?: number | null;
+  provenance_json?: string;
+  expires_at?: number | null;
+  supersedes?: string | null;
+  superseded_by?: string | null;
+}
+
+interface MemoryLinkRow {
+  from_id: string;
+  to_id: string;
+  weight: number;
+  type: string;
+}
+
+interface TokenLedgerRow {
+  id: string;
+  session_id: string;
+  timestamp: number;
+  task: string;
+  model: string;
+  tokens_optimized: number;
+  tokens_saved: number;
+  tokens_forwarded: number;
+  compression_ratio: number;
+  file_count: number;
+  usd_value_saved: number;
+}
+
+interface MemoryDbSnapshot {
+  memories: MemoryRow[];
+  memoryLinks: MemoryLinkRow[];
+  tokenLedger: TokenLedgerRow[];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MemoryEngine
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class MemoryEngine {
   public db: Database.Database;
+  private dbPath: string;
   private graphMirror?: GraphMemoryEngine;
   private sessionId: string;
   private vaultDir: string;
@@ -248,8 +307,8 @@ export class MemoryEngine {
   private lastReconciliationSummary: MemoryReconciliationSummary = createEmptyReconciliationSummary();
 
   private config: Required<MemoryConfig>;
-  private readonly incrementAccessStmt: Database.Statement;
-  private readonly incrementAccessTxn: (ids: string[]) => void;
+  private incrementAccessStmt!: Database.Statement;
+  private incrementAccessTxn!: (ids: string[]) => void;
   private vaultDirty = new Set<string>();
   private vaultFlushTimer?: NodeJS.Timeout;
   private vaultNeedsFullSync = false;
@@ -278,14 +337,14 @@ export class MemoryEngine {
     fs.mkdirSync(dbDir, { recursive: true });
 
     const resolvedPath = dbPath ?? path.join(dbDir, 'memory.db');
-    this.db = new Database(resolvedPath);
+    this.dbPath = resolvedPath;
+    this.db = new Database(this.dbPath);
     try {
-      this.graphMirror = new GraphMemoryEngine(path.join(path.dirname(resolvedPath), 'graph.db'));
+      this.graphMirror = new GraphMemoryEngine(path.join(path.dirname(this.dbPath), 'graph.db'));
     } catch {
       this.graphMirror = undefined;
     }
     this.sessionId = randomUUID();
-    this.embedder = new Embedder(this.db);
     this.vaultDir = path.join(dbDir, 'memory-vault');
     this.vaultItemsDir = path.join(this.vaultDir, 'items');
     this.vaultExportsDir = path.join(this.vaultDir, 'exports');
@@ -301,14 +360,8 @@ export class MemoryEngine {
     fs.mkdirSync(this.vaultSessionNotesDir, { recursive: true });
 
     this.initSchema();
-    this.incrementAccessStmt = this.db.prepare(
-      'UPDATE memories SET access_count = access_count + 1 WHERE id = ?'
-    );
-    this.incrementAccessTxn = this.db.transaction((ids: string[]) => {
-      for (const id of ids) {
-        this.incrementAccessStmt.run(id);
-      }
-    });
+    this.embedder = new Embedder(this.db);
+    this.prepareStatements();
     this.load();
   }
 
@@ -324,6 +377,17 @@ export class MemoryEngine {
     this.db.pragma('temp_store = MEMORY');
 
     this.runMigrations();
+  }
+
+  private prepareStatements(): void {
+    this.incrementAccessStmt = this.db.prepare(
+      'UPDATE memories SET access_count = access_count + 1 WHERE id = ?'
+    );
+    this.incrementAccessTxn = this.db.transaction((ids: string[]) => {
+      for (const id of ids) {
+        this.incrementAccessStmt.run(id);
+      }
+    });
   }
 
   private runMigrations(): void {
@@ -478,7 +542,6 @@ export class MemoryEngine {
         'INSERT OR IGNORE INTO schema_version(version, applied_at, description) VALUES (?, ?, ?)'
       ).run(3, Date.now(), 'vocabulary-stats');
     }
-    this.rebuildPersistentVocabularyStatsIfNeeded();
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -506,11 +569,16 @@ export class MemoryEngine {
 
   /** Restore hippocampus + cortex from DB on startup */
   load(): void {
-    const rows = this.db.prepare(
-      `SELECT * FROM memories ORDER BY priority DESC, timestamp DESC LIMIT 500`
-    ).all() as any[];
+    let rows: MemoryRow[];
+    try {
+      rows = this.db.prepare(
+        `SELECT * FROM memories ORDER BY priority DESC, timestamp DESC LIMIT 500`
+      ).all() as MemoryRow[];
+    } catch (error) {
+      throw this.createMemoryDbLoadError(error);
+    }
 
-    this.embedder.rebuildPersistentVocabulary();
+    this.ensurePersistentVocabulary(rows);
 
     for (const row of rows) {
       const item: MemoryItem = {
@@ -546,6 +614,188 @@ export class MemoryEngine {
     this.primeGraphMirror(rows);
     this.syncVault(true);
     this.checkGraphCoverage();
+  }
+
+  private ensurePersistentVocabulary(rows: MemoryRow[]): void {
+    let repaired = false;
+    let status = this.embedder.rebuildPersistentVocabulary();
+
+    if (status.needsRecovery) {
+      this.repairCorruptedVocabularyPersistence();
+      repaired = true;
+      status = this.embedder.rebuildPersistentVocabulary();
+    }
+
+    if (rows.length > 0 && (status.docCount === 0 || status.termCount === 0)) {
+      status = this.fitVocabularyWithRecovery(rows.map((row) => String(row.content ?? '')));
+      repaired = repaired || status.reset;
+    }
+
+    if (repaired) {
+      console.warn(
+        `[MemoryEngine] Repaired derived vocabulary state in ${this.dbPath} after SQLite corruption.`,
+      );
+    }
+  }
+
+  private fitVocabularyWithRecovery(docs: string[]): PersistentVocabularyStatus {
+    let status = this.embedder.fitVocabulary(docs);
+    if (!status.needsRecovery) {
+      return status;
+    }
+
+    const snapshot = this.captureMemoryDbSnapshot();
+    this.repairCorruptedVocabularyPersistence(snapshot.memories);
+    status = this.embedder.fitVocabulary(docs);
+    if (status.needsRecovery) {
+      throw new Error(
+        `[MemoryEngine] Failed to rebuild derived vocabulary state in ${this.dbPath}. ${this.manualRecoveryHint()}`,
+      );
+    }
+    return {
+      ...status,
+      reset: true,
+    };
+  }
+
+  private repairCorruptedVocabularyPersistence(memoryRows?: MemoryRow[]): void {
+    const snapshot = this.captureMemoryDbSnapshot(memoryRows);
+    this.rotateCorruptedMemoryFiles();
+    this.reopenMemoryDatabase();
+    this.restoreMemoryDbSnapshot(snapshot);
+  }
+
+  private captureMemoryDbSnapshot(memoryRows?: MemoryRow[]): MemoryDbSnapshot {
+    const memories = memoryRows ?? this.captureMemoryRowsForRepair();
+    let memoryLinks: MemoryLinkRow[] = [];
+    let tokenLedger: TokenLedgerRow[] = [];
+    try {
+      memoryLinks = this.db.prepare(
+        'SELECT from_id, to_id, weight, type FROM memory_links ORDER BY from_id, to_id'
+      ).all() as MemoryLinkRow[];
+      tokenLedger = this.db.prepare(
+        `SELECT id, session_id, timestamp, task, model, tokens_optimized, tokens_saved,
+                tokens_forwarded, compression_ratio, file_count, usd_value_saved
+         FROM token_ledger ORDER BY timestamp ASC`
+      ).all() as TokenLedgerRow[];
+    } catch (error) {
+      throw this.createMemoryDbLoadError(error);
+    }
+    return { memories, memoryLinks, tokenLedger };
+  }
+
+  private captureMemoryRowsForRepair(): MemoryRow[] {
+    try {
+      return this.db.prepare(
+        `SELECT * FROM memories ORDER BY priority DESC, timestamp DESC`
+      ).all() as MemoryRow[];
+    } catch (error) {
+      throw this.createMemoryDbLoadError(error);
+    }
+  }
+
+  private rotateCorruptedMemoryFiles(): void {
+    const backupDir = path.join(
+      path.dirname(this.dbPath),
+      `memory-db-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`,
+    );
+
+    this.db.close();
+    fs.mkdirSync(backupDir, { recursive: true });
+    for (const filePath of [this.dbPath, `${this.dbPath}-wal`, `${this.dbPath}-shm`]) {
+      if (!fs.existsSync(filePath)) continue;
+      fs.renameSync(filePath, path.join(backupDir, path.basename(filePath)));
+    }
+  }
+
+  private reopenMemoryDatabase(): void {
+    this.db = new Database(this.dbPath);
+    this.initSchema();
+    this.embedder = new Embedder(this.db);
+    this.prepareStatements();
+  }
+
+  private restoreMemoryDbSnapshot(snapshot: MemoryDbSnapshot): void {
+    const insertMemory = this.db.prepare(`
+      INSERT INTO memories(
+        id, content, priority, timestamp, tags, tier, scope, state, source,
+        session_id, access_count, parent_id, depth, entropy, mass, trust,
+        qmd_recency, qmd_frequency, qmd_relevance, provenance_json, expires_at,
+        supersedes, superseded_by
+      ) VALUES (
+        @id, @content, @priority, @timestamp, @tags, @tier, @scope, @state, @source,
+        @session_id, @access_count, @parent_id, @depth, @entropy, @mass, @trust,
+        @qmd_recency, @qmd_frequency, @qmd_relevance, @provenance_json, @expires_at,
+        @supersedes, @superseded_by
+      )
+    `);
+    const insertLink = this.db.prepare(`
+      INSERT INTO memory_links(from_id, to_id, weight, type)
+      VALUES(@from_id, @to_id, @weight, @type)
+    `);
+    const insertTokenLedger = this.db.prepare(`
+      INSERT INTO token_ledger(
+        id, session_id, timestamp, task, model, tokens_optimized, tokens_saved,
+        tokens_forwarded, compression_ratio, file_count, usd_value_saved
+      ) VALUES (
+        @id, @session_id, @timestamp, @task, @model, @tokens_optimized, @tokens_saved,
+        @tokens_forwarded, @compression_ratio, @file_count, @usd_value_saved
+      )
+    `);
+
+    const restore = this.db.transaction(() => {
+      for (const row of snapshot.memories) {
+        insertMemory.run({
+          id: row.id,
+          content: row.content,
+          priority: row.priority,
+          timestamp: row.timestamp,
+          tags: row.tags,
+          tier: row.tier,
+          scope: row.scope ?? 'session',
+          state: row.state ?? 'active',
+          source: row.source ?? 'runtime',
+          session_id: row.session_id ?? null,
+          access_count: row.access_count ?? 0,
+          parent_id: row.parent_id ?? null,
+          depth: row.depth ?? 0,
+          entropy: row.entropy ?? 0,
+          mass: row.mass ?? 1,
+          trust: row.trust ?? 0.6,
+          qmd_recency: row.qmd_recency ?? null,
+          qmd_frequency: row.qmd_frequency ?? null,
+          qmd_relevance: row.qmd_relevance ?? null,
+          provenance_json: row.provenance_json ?? '{}',
+          expires_at: row.expires_at ?? null,
+          supersedes: row.supersedes ?? null,
+          superseded_by: row.superseded_by ?? null,
+        });
+      }
+
+      for (const row of snapshot.memoryLinks) {
+        insertLink.run(row);
+      }
+
+      for (const row of snapshot.tokenLedger) {
+        insertTokenLedger.run(row);
+      }
+    });
+
+    restore();
+  }
+
+  private createMemoryDbLoadError(error: unknown): Error {
+    if (!isSqliteCorruptionError(error)) {
+      return error instanceof Error ? error : new Error(String(error));
+    }
+    return new Error(
+      `[MemoryEngine] Failed to load memories from ${this.dbPath}. Corruption extends beyond derived vocabulary tables. ${this.manualRecoveryHint()}`,
+      { cause: error instanceof Error ? error : undefined },
+    );
+  }
+
+  private manualRecoveryHint(): string {
+    return `Move ${this.dbPath}, ${this.dbPath}-wal, and ${this.dbPath}-shm aside and rerun nexus-prime init.`;
   }
 
   /** Flush prefrontal to DB (called on MCP shutdown) */
@@ -728,7 +978,7 @@ export class MemoryEngine {
     }
 
     // Update vocabulary and add to vector index
-    this.embedder.fitVocabulary([content]);
+    this.fitVocabularyWithRecovery([content]);
     this.indexMemory(id, content);
 
     // Auto-link to semantically similar recent memories

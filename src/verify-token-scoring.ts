@@ -39,4 +39,7 @@ async function verify() {
     }
 }
 
-verify().catch(console.error);
+verify().catch((error) => {
+    console.error(error);
+    process.exit(1);
+});

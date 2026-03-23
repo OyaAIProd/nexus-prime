@@ -2076,7 +2076,7 @@
         const REQUIRED_CAPABILITIES = ['runs', 'memory', 'pod', 'clients', 'events', 'stream', 'specialists', 'crews', 'planner', 'hooks', 'automations', 'federation', 'orchestration', 'tokens', 'tokenSources', 'clientPrimary', 'instructionPacket', 'orchestrationLedger', 'knowledgeFabric', 'ragCollections', 'patterns', 'modelTiers', 'workerPlan', 'artifactOutcomes', 'memoryTrace', 'memoryShared', 'worktreeHealth', 'featureRegistry', 'synapse', 'architects'];
 
         function createResourceState() {
-            return { status: 'idle', error: '' };
+            return { status: 'idle', error: '', fetchedAt: 0, lastSource: 'idle' };
         }
 
         const state = {
@@ -2299,6 +2299,7 @@
             },
             featureRegistry: {
                 url: '/api/feature-registry',
+                ttlMs: 30000,
                 assign(value) {
                     state.featureRegistry = value || null;
                 },
@@ -2361,12 +2362,14 @@
             },
             backends: {
                 url: '/api/backends',
+                ttlMs: 30000,
                 assign(value) {
                     state.backends = value || state.backends;
                 },
             },
             health: {
                 url: '/api/health',
+                ttlMs: 15000,
                 assign(value) {
                     state.health = value || state.health;
                 },
@@ -2411,6 +2414,7 @@
             },
             repoTree: {
                 url: '/api/repo-tree',
+                ttlMs: 45000,
                 assign(value) {
                     state.repoTree = value || null;
                 },
@@ -2437,6 +2441,7 @@
             },
             federation: {
                 url: '/api/federation',
+                ttlMs: 15000,
                 assign(value) {
                     state.federation = value || state.federation;
                 },
@@ -2453,6 +2458,7 @@
             },
             events: {
                 url: '/api/events?limit=80',
+                skipWhenStreamHealthy: true,
                 assign(value) {
                     if (!Array.isArray(value)) return;
                     const seen = new Set();
@@ -2735,8 +2741,14 @@
                 .filter(Boolean);
         }
 
-        function setResourceStatus(name, status, error = '') {
-            state.resources[name] = { status, error };
+        function setResourceStatus(name, status, error = '', meta = {}) {
+            const previous = state.resources[name] || createResourceState();
+            state.resources[name] = {
+                status,
+                error,
+                fetchedAt: meta.fetchedAt ?? ((status === 'ready' || status === 'stale') ? Date.now() : previous.fetchedAt || 0),
+                lastSource: meta.source || previous.lastSource || 'idle',
+            };
         }
 
         function getResourceStatus(name) {
@@ -2796,7 +2808,7 @@
         }
 
         function resourcesForEventCategory(category) {
-            return CATEGORY_RESOURCE_MAP[category] || [];
+            return (CATEGORY_RESOURCE_MAP[category] || []).filter((name) => !(name === 'events' && state.streamConnected));
         }
 
         function normalizeLegacyCategory(type) {
@@ -3028,43 +3040,27 @@
             }
         }
 
-        async function refreshAll(resourceNames = null) {
+        async function refreshAll(resourceNames = null, options = {}) {
             const bar = $('refresh-bar');
             bar.classList.remove('done');
             bar.classList.add('active');
             const targets = resourceNames?.length
                 ? resourceNames.filter((name, index, list) => RESOURCE_LOADERS[name] && list.indexOf(name) === index)
                 : Object.keys(RESOURCE_LOADERS);
-            const staticTargets = [
-                ...targets.filter((name) => name === 'runtimes'),
-                ...targets.filter((name) => name !== 'runtimes' && !RESOURCE_LOADERS[name].dynamic),
-            ];
-            const dynamicTargets = targets.filter((name) => RESOURCE_LOADERS[name].dynamic);
-            const resources = staticTargets.map((name) => [name, RESOURCE_LOADERS[name]]);
-            const results = await Promise.allSettled(resources.map(([name, config]) => fetchJson(buildLoaderUrl(name, config))));
-            let refreshed = false;
+            const force = Boolean(options.force);
+            const refreshedTargets = [];
 
-            results.forEach((result, index) => {
-                const [name, config] = resources[index];
-                if (result.status === 'fulfilled') {
-                    config.assign(result.value);
-                    setResourceStatus(name, 'ready');
-                    refreshed = true;
-                } else {
-                    setResourceStatus(name, 'error', normalizeError(result.reason));
-                }
-            });
-
-            for (const name of dynamicTargets) {
-                try {
-                    const value = await fetchJson(buildLoaderUrl(name, RESOURCE_LOADERS[name]));
-                    RESOURCE_LOADERS[name].assign(value);
-                    setResourceStatus(name, 'ready');
-                    refreshed = true;
-                } catch (error) {
-                    setResourceStatus(name, 'error', normalizeError(error));
-                }
+            if (targets.includes('runtimes')) {
+                const runtimesResult = await fetchResource('runtimes', force);
+                if (runtimesResult?.refreshed) refreshedTargets.push('runtimes');
             }
+
+            const remainingTargets = targets.filter((name) => name !== 'runtimes');
+            const results = await Promise.all(remainingTargets.map((name) => fetchResource(name, force)));
+            results.forEach((result) => {
+                if (result?.refreshed) refreshedTargets.push(result.name);
+            });
+            const refreshed = refreshedTargets.length > 0;
 
             if (refreshed) {
                 state.lastRefreshAt = Date.now();
@@ -3095,7 +3091,7 @@
             bar.classList.remove('active');
             bar.classList.add('done');
             setTimeout(() => bar.classList.remove('done'), 600);
-            render();
+            renderForTargets(targets);
         }
 
         function buildLoaderUrl(name, config) {
@@ -3111,6 +3107,81 @@
         let _memoryNetworkLoading = false;
         let _lastGraphModel = null;
         let _pendingRefreshTargets = new Set();
+        const _resourceRequests = new Map();
+
+        function shouldFetchResource(name, force = false) {
+            const config = RESOURCE_LOADERS[name];
+            if (!config) return false;
+            if (force) return true;
+            if (config.skipWhenStreamHealthy && state.streamConnected && state.events.length > 0) {
+                setResourceStatus(name, 'stale', 'Live stream is the active source for this resource.', { source: 'stream' });
+                return false;
+            }
+            if (_resourceRequests.has(name)) return false;
+            const resource = getResourceStatus(name);
+            const ttlMs = Number(config.ttlMs || 0);
+            if (ttlMs > 0 && resource.fetchedAt && Date.now() - resource.fetchedAt < ttlMs) {
+                return false;
+            }
+            return true;
+        }
+
+        async function fetchResource(name, force = false) {
+            if (!shouldFetchResource(name, force)) {
+                return { name, refreshed: false, skipped: true };
+            }
+            if (_resourceRequests.has(name)) {
+                return _resourceRequests.get(name);
+            }
+            const promise = (async () => {
+                try {
+                    const value = await fetchJson(buildLoaderUrl(name, RESOURCE_LOADERS[name]));
+                    RESOURCE_LOADERS[name].assign(value);
+                    setResourceStatus(name, 'ready', '', { source: 'network' });
+                    return { name, refreshed: true };
+                } catch (error) {
+                    setResourceStatus(name, 'error', normalizeError(error), { source: 'network' });
+                    return { name, refreshed: false, error };
+                } finally {
+                    _resourceRequests.delete(name);
+                }
+            })();
+            _resourceRequests.set(name, promise);
+            return promise;
+        }
+
+        function shouldLightweightRender(targets) {
+            if (!targets?.length) return false;
+            const lightweightTargets = new Set(['events', 'health', 'clients', 'primaryClient', 'synapseTeams', 'synapseHealth', 'synapseApprovals', 'architectsDispatch', 'architectsEscalations']);
+            return targets.every((name) => lightweightTargets.has(name));
+        }
+
+        function selectedResourceAffected(targets) {
+            if (!state.selected) return false;
+            const selectedMap = {
+                event: ['events'],
+                client: ['clients', 'primaryClient'],
+                'token-summary': ['tokensSummary', 'tokensTimeline', 'tokensBySource', 'orchestrationSession', 'orchestrationLedger', 'instructionPacket', 'knowledgeFabricSession', 'modelTiers'],
+            };
+            return (selectedMap[state.selected.kind] || []).some((name) => targets.includes(name));
+        }
+
+        function renderForTargets(targets = []) {
+            if (!shouldLightweightRender(targets)) {
+                render();
+                return;
+            }
+            renderBanner();
+            renderHeader();
+            if (targets.includes('events')) {
+                renderEvents();
+            }
+            if (selectedResourceAffected(targets)) {
+                renderDrawer();
+            }
+            updateFocusChrome();
+            syncFocusButtons();
+        }
 
         function scheduleRefresh(resourceNames = null) {
             const targets = resourceNames?.length ? resourceNames : Object.keys(RESOURCE_LOADERS);
@@ -3129,7 +3200,7 @@
                 _pendingRefreshTargets.clear();
                 try { await refreshAll(pending.length ? pending : null); } catch {}
                 _refreshInFlight = false;
-            }, 2000);
+            }, 350);
         }
 
         async function refreshMemorySelection(memoryId, openDrawer = true) {
@@ -3311,12 +3382,12 @@
             if (seedBtn) {
                 seedBtn.addEventListener('click', async () => {
                     try {
-                        $('skill-create-status').textContent = 'Seeding default skills...';
-                        await fetchJson('/api/skills/seed', postJson({}));
-                        $('skill-create-status').textContent = 'Default skills installed.';
-                        await refreshAll();
+                        $('skill-create-status').textContent = 'Refreshing canonical runtime catalog...';
+                        const response = await fetchJson('/api/skills/seed', postJson({}));
+                        $('skill-create-status').textContent = response?.message || 'Runtime catalog is bundled and already loaded.';
+                        await refreshAll(['skills', 'workflows', 'hooks', 'automations', 'specialists', 'crews'], { force: true });
                     } catch (err) {
-                        $('skill-create-status').textContent = `Seed failed: ${err.message}`;
+                        $('skill-create-status').textContent = `Catalog refresh failed: ${err.message}`;
                     }
                 });
             }
@@ -3374,15 +3445,20 @@
                 : `Architects · q${Number(state.architectsDispatch?.queueDepth ?? 0)} · ${state.architectsEscalations.length} escalations`;
             const pill = $('sync-pill');
             const failedResources = countFailedResources();
+            const staleResources = Object.values(state.resources).filter((resource) => resource.status === 'stale').length;
             pill.classList.toggle('live', state.streamConnected && failedResources === 0);
             pill.classList.toggle('warn', !state.streamConnected || failedResources > 0);
             $('sync-label').textContent = state.streamConnected
                 ? failedResources
                     ? `Degraded · ${failedResources} surfaces unavailable`
-                    : `Synchronized · ${formatAgo(state.lastRefreshAt)}`
+                    : staleResources
+                        ? `Partial · ${staleResources} surfaces served from cache`
+                        : `Synchronized · ${formatAgo(state.lastRefreshAt)}`
                 : failedResources
                     ? `REST degraded · ${failedResources} unavailable`
-                    : 'Stream reconnecting';
+                    : staleResources
+                        ? `REST partial · ${staleResources} cached`
+                        : 'Stream reconnecting';
         }
 
         function renderLeftRail() {
@@ -4319,7 +4395,7 @@
                             </div>
                             <div class="action-bar">
                                 <button type="submit" class="primary-button">Register Skill</button>
-                                <button type="button" id="seed-skills-btn" class="ghost-button">Seed Defaults</button>
+                                <button type="button" id="seed-skills-btn" class="ghost-button">Refresh Catalog</button>
                             </div>
                             <div id="skill-create-status" class="meta"></div>
                         </form>
@@ -4342,7 +4418,7 @@
                             </div>
                         </div>
                     `).join('')
-                    : emptyState('No skills loaded. Click "Seed Defaults" to install starter skills.');
+                    : emptyState('No skills loaded. Bundled runtime assets should appear automatically when the runtime is healthy.');
                 container.innerHTML = skillForm + skillList;
                 bindSkillFormHandlers();
             } else if (state.libraryMode === 'specialists') {
@@ -6027,14 +6103,16 @@
                     if (raw?.connected) return;
                     const payload = normalizeEventCard(raw);
                     if (!payload) return;
+                    const isHeartbeat = payload.type === 'client.heartbeat';
                     if (!state.events.some((e) => e.id === payload.id)) {
                         state.events.unshift(payload);
                     }
                     state.events = state.events.slice(0, 120);
-                    setResourceStatus('events', 'ready');
-                    renderEvents();
+                    setResourceStatus('events', 'ready', '', { source: 'stream' });
+                    if (!isHeartbeat) {
+                        renderEvents();
+                    }
                     renderHeader();
-                    const isHeartbeat = payload.type === 'client.heartbeat';
                     if (isHeartbeat) {
                         const now = Date.now();
                         if (now - _lastHeartbeatDisplayTime < 30000) return;
@@ -6086,7 +6164,7 @@
                 : 'Dashboard actions stay local and route through the runtime.';
             connectStream();
             setInterval(() => {
-                scheduleRefresh();
+                scheduleRefresh(Object.keys(RESOURCE_LOADERS).filter((name) => !(name === 'events' && state.streamConnected)));
             }, 20000);
         }
 

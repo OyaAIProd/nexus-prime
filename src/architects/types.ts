@@ -99,6 +99,7 @@ export interface ArchitectsRuntime {
   providers: ArchitectsProviders;
   instantiateBlueprint(input: { title: string; workflowId: string; variables?: Record<string, string>; strikeTeamId?: string | null }): { blueprint: Blueprint; worklist: Worklist; items: WorkItem[] };
   getWorklist(worklistId: string): { worklist: Worklist | null; items: WorkItem[] };
+  getWorklistForStrikeTeam(strikeTeamId: string): string | null;
   claimWorkItem(workItemId: string, operativeId: string): Promise<ConstructionLock | null>;
   completeWorkItem(workItemId: string, operativeId: string, status: WorkItemStatus, branch?: string | null): Promise<WorkItem | null>;
   sendRelay(input: { fromOperativeId: string; toId: string; target: 'operative' | 'striketeam' | 'ward'; subject: string; body: string; priority?: 'normal' | 'urgent' }): Promise<RelayMessage>;

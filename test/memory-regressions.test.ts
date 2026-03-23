@@ -3,6 +3,7 @@ import { deepEqual, equal, ok } from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import Database from 'better-sqlite3';
 import { MemoryEngine } from '../src/engines/memory.js';
 import { nexusEventBus } from '../src/engines/event-bus.js';
 
@@ -20,6 +21,24 @@ function createSandbox(prefix: string) {
       fs.rmSync(root, { recursive: true, force: true });
     },
   };
+}
+
+function corruptTableRootPage(dbPath: string, tableName: string): void {
+  const db = new Database(dbPath);
+  const pageSize = Number(db.pragma('page_size', { simple: true }));
+  const row = db.prepare(
+    "SELECT rootpage FROM sqlite_master WHERE type = 'table' AND name = ?",
+  ).get(tableName) as { rootpage?: number } | undefined;
+  db.close();
+
+  if (!row?.rootpage) {
+    throw new Error(`Unable to find root page for ${tableName}`);
+  }
+
+  const bytes = fs.readFileSync(dbPath);
+  const start = (row.rootpage - 1) * pageSize;
+  bytes.fill(0xff, start, start + pageSize);
+  fs.writeFileSync(dbPath, bytes);
 }
 
 test('MemoryEngine parameterizes access-count updates', () => {
@@ -169,4 +188,42 @@ test('MemoryEngine emits low graph coverage and forces a re-prime', () => {
   unsubscribe();
   memory.close();
   sandbox.cleanup();
+});
+
+test('MemoryEngine repairs corrupted vocabulary tables during startup', () => {
+  const sandbox = createSandbox('nexus-memory-vocabulary-repair');
+  const memory = new MemoryEngine(sandbox.dbPath);
+  const id = memory.store('Vocabulary repair survivor', 0.92, ['#vocabulary-repair']);
+  memory.close();
+
+  corruptTableRootPage(sandbox.dbPath, 'vocabulary_stats');
+
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map((value) => String(value)).join(' '));
+  };
+
+  let repaired: MemoryEngine | undefined;
+  try {
+    repaired = new MemoryEngine(sandbox.dbPath);
+    const items = repaired.queryByTags(['#vocabulary-repair']);
+    ok(items.some((item) => item.id === id), 'expected stored memory to survive vocabulary repair');
+
+    const integrity = (repaired as any).db.pragma('integrity_check', { simple: true });
+    equal(integrity, 'ok');
+
+    const stats = (repaired as any).db.prepare(
+      'SELECT COUNT(*) as c FROM vocabulary_stats',
+    ).get() as { c: number };
+    ok(stats.c > 0, 'expected vocabulary stats to be rebuilt after repair');
+    ok(
+      warnings.some((warning) => warning.includes('Repaired derived vocabulary state')),
+      'expected a repair warning that mentions the repaired vocabulary state',
+    );
+  } finally {
+    console.warn = originalWarn;
+    repaired?.close();
+    sandbox.cleanup();
+  }
 });

@@ -632,6 +632,17 @@ Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 
 ## 📜 Release History
 
 <details open>
+<summary><b>v4.1.0</b> · 2026-03-23 · Control-plane hardening, dashboard truth, and coordinated execution</summary>
+
+- **Dashboard responsiveness and truth**: Hot endpoints now use bounded caching, the client avoids broad refresh fan-out while SSE is healthy, catalog refresh stays canonical to runtime assets, and degraded states surface as explicit partial/stale conditions instead of silent fallback.
+- **Engineering-first routing**: Broad dashboard/control-plane reviews now stay on engineering lanes with meaningful frontend/review secondary intent instead of drifting into blocked PM, marketing, or data routes.
+- **Explicit Synapse ↔ Architects coordination**: Work-item claim/complete handoffs are now bootstrapped through a typed bridge with shared correlation IDs across missions, sorties, field reports, dashboard entities, and POD telemetry.
+- **Bootstrap-path regression coverage**: Added end-to-end mandate → worklist → sortie → convergence coverage plus dashboard and routing regressions to keep control-plane behavior release-safe.
+
+Full notes: [releases/v4.1.0.md](./releases/v4.1.0.md) · Full history: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
 <summary><b>v4.0.0</b> · 2026-03-22 · Engine stabilization, release hardening, and roster light-loading</summary>
 
 - **Memory vault hardening**: SQLite pragmas, access-count parameterization, entropy clamping, graph failure telemetry, debounced vault writes, and recursive-CTE lineage now stabilize memory behavior under real runtime load.
