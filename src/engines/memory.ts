@@ -26,6 +26,7 @@ import { NgramIndex } from './ngram-index.js';
 import { podNetwork } from './pod-network.js';
 import { nexusEventBus } from './event-bus.js';
 import { SECRET_PATTERNS } from './security-shield.js';
+import { resolveNexusStateDir } from './runtime-registry.js';
 import {
   createEmptyReconciliationSummary,
   createMemoryProvenance,
@@ -350,12 +351,12 @@ interface MemoryDbSnapshot {
 }
 
 function resolvePreferredStateRoot(): string {
-  return process.env.NEXUS_STATE_DIR?.trim() || path.join(os.homedir(), '.nexus-prime');
+  return process.env.NEXUS_STATE_DIR?.trim() || resolveNexusStateDir();
 }
 
 function isWritableStorageError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error || '');
-  return ['readonly', 'EACCES', 'EROFS', 'permission denied', 'SQLITE_CANTOPEN']
+  return ['readonly', 'EACCES', 'EROFS', 'ENOENT', 'permission denied', 'SQLITE_CANTOPEN']
     .some((fragment) => message.includes(fragment));
 }
 

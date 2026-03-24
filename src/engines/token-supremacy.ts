@@ -7,9 +7,9 @@
  * Built for AntiGravity to reduce token waste by 50-70%.
  */
 
-import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
+import { resolveNexusStateDir } from './runtime-registry.js';
 import { ContextAssembler, type AssemblyResult, type BudgetConfig } from './context-assembler.js';
 import { type ContextTier } from './tiered-context.js';
 import { ContinuousAttentionStream } from './attention-stream.js';
@@ -88,8 +88,9 @@ export class TokenSupremacyEngine {
 
     constructor(sessionBudget: number = 200_000) {
         this.sessionBudget = sessionBudget;
-        this.sessionPath = path.join(os.homedir(), '.nexus-prime', 'sessions');
-        this.relevanceCachePath = path.join(os.homedir(), '.nexus-prime', 'relevance.json');
+        const stateDir = resolveNexusStateDir();
+        this.sessionPath = path.join(stateDir, 'sessions');
+        this.relevanceCachePath = path.join(stateDir, 'relevance.json');
         this.contextAssembler = new ContextAssembler();
         this.casEngine = new ContinuousAttentionStream();
 

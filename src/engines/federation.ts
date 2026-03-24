@@ -55,9 +55,13 @@ interface FederationState {
     traces: TraceEntry[];
 }
 
-const FEDERATION_PATH = path.join(process.env.NEXUS_STATE_DIR
-    ? path.resolve(process.env.NEXUS_STATE_DIR)
-    : path.join(os.homedir(), '.nexus-prime'), 'federation.json');
+let _federationPath: string | undefined;
+function getFederationPath(): string {
+    if (!_federationPath) {
+        _federationPath = path.join(resolveNexusStateDir(), 'federation.json');
+    }
+    return _federationPath;
+}
 
 export class FederationEngine {
     private memory?: MemoryEngine;
@@ -194,8 +198,8 @@ export class FederationEngine {
 
     private loadState(): FederationState {
         try {
-            if (fs.existsSync(FEDERATION_PATH)) {
-                const raw = JSON.parse(fs.readFileSync(FEDERATION_PATH, 'utf8')) as FederationState;
+            if (fs.existsSync(getFederationPath())) {
+                const raw = JSON.parse(fs.readFileSync(getFederationPath(), 'utf8')) as FederationState;
                 return {
                     localNode: raw.localNode,
                     peers: raw.peers ?? [],
@@ -230,8 +234,8 @@ export class FederationEngine {
 
     private persist(): void {
         fs.mkdirSync(resolveNexusStateDir(), { recursive: true });
-        fs.mkdirSync(path.dirname(FEDERATION_PATH), { recursive: true });
-        fs.writeFileSync(FEDERATION_PATH, JSON.stringify(this.state, null, 2), 'utf8');
+        fs.mkdirSync(path.dirname(getFederationPath()), { recursive: true });
+        fs.writeFileSync(getFederationPath(), JSON.stringify(this.state, null, 2), 'utf8');
     }
 
     private ensureMemory(): MemoryEngine {

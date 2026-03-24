@@ -6,9 +6,9 @@
  * 6 rules from packages/mindkit/src/guardrails.ts.
  */
 
-import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
+import { resolveNexusStateDir } from './runtime-registry.js';
 
 export type GuardrailSeverity = 'error' | 'warn' | 'info';
 
@@ -137,7 +137,13 @@ const RULES: Rule[] = [
 
 export class GuardrailEngine {
     private externalRules: Rule[] = [];
-    private static CACHE_PATH = path.join(os.homedir(), '.nexus-prime', 'mindkit-cache.json');
+    private static _cachePath: string | undefined;
+    private static get CACHE_PATH(): string {
+        if (!GuardrailEngine._cachePath) {
+            GuardrailEngine._cachePath = path.join(resolveNexusStateDir(), 'mindkit-cache.json');
+        }
+        return GuardrailEngine._cachePath;
+    }
 
     check(ctx: GuardrailContext): GuardrailResult {
         const allRules = [...RULES, ...this.externalRules];

@@ -380,11 +380,26 @@ export function createEmptyTokenSummary(): RuntimeTokenSummarySnapshot {
 }
 
 export function resolveNexusStateDir(): string {
-    const root = process.env.NEXUS_STATE_DIR
-        ? path.resolve(process.env.NEXUS_STATE_DIR)
-        : path.join(os.homedir(), '.nexus-prime');
-    fs.mkdirSync(root, { recursive: true });
-    return root;
+    const candidates = [
+        process.env.NEXUS_STATE_DIR?.trim(),
+        path.join(os.homedir(), '.nexus-prime'),
+        path.join(os.tmpdir(), 'nexus-prime-state'),
+    ].filter((c): c is string => Boolean(c) && !c.startsWith('/.'));
+
+    for (const candidate of candidates) {
+        try {
+            fs.mkdirSync(candidate, { recursive: true });
+            fs.accessSync(candidate, fs.constants.W_OK);
+            return candidate;
+        } catch {
+            // Try next candidate
+        }
+    }
+
+    // Last resort: tmpdir should always be writable
+    const fallback = path.join(os.tmpdir(), 'nexus-prime-state');
+    fs.mkdirSync(fallback, { recursive: true });
+    return fallback;
 }
 
 export class RuntimeRegistry {

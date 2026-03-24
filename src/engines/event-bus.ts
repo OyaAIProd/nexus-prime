@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { resolveNexusStateDir } from './runtime-registry.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types & Interfaces
@@ -250,7 +250,13 @@ export interface NexusEvent<T extends NexusEventType = NexusEventType> {
 // EventBus Singleton with Cross-Process JSONL Bridge
 // ─────────────────────────────────────────────────────────────────────────────
 
-const EVENTS_FILE = path.join(os.homedir(), '.nexus-prime', 'events.jsonl');
+let _eventsFile: string | undefined;
+function getEventsFile(): string {
+    if (!_eventsFile) {
+        _eventsFile = path.join(resolveNexusStateDir(), 'events.jsonl');
+    }
+    return _eventsFile;
+}
 const MAX_EVENT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_EVENT_ARCHIVES = 3;
 
@@ -266,7 +272,7 @@ class EventBusEngine {
         // Increase limit for many dashboard connections
         this.emitter.setMaxListeners(50);
         // Ensure directory exists
-        const dir = path.dirname(EVENTS_FILE);
+        const dir = path.dirname(getEventsFile());
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
@@ -292,7 +298,7 @@ class EventBusEngine {
         // Write to JSONL file for cross-process bridge
         try {
             this.rotateEventsFileIfNeeded();
-            fs.appendFileSync(EVENTS_FILE, JSON.stringify(event) + '\n');
+            fs.appendFileSync(getEventsFile(), JSON.stringify(event) + '\n');
         } catch { /* ignore write errors */ }
     }
 
@@ -305,15 +311,15 @@ class EventBusEngine {
 
         // Skip to end of file initially so we don't replay old events
         try {
-            if (fs.existsSync(EVENTS_FILE)) {
-                this.fileOffset = fs.statSync(EVENTS_FILE).size;
+            if (fs.existsSync(getEventsFile())) {
+                this.fileOffset = fs.statSync(getEventsFile()).size;
             }
         } catch { /* ignore */ }
 
         this.pollHandle = setInterval(() => {
             try {
-                if (!fs.existsSync(EVENTS_FILE)) return;
-                const stat = fs.statSync(EVENTS_FILE);
+                if (!fs.existsSync(getEventsFile())) return;
+                const stat = fs.statSync(getEventsFile());
                 if (stat.size <= this.fileOffset) {
                     // File was truncated or no new data
                     if (stat.size < this.fileOffset) this.fileOffset = 0;
@@ -321,7 +327,7 @@ class EventBusEngine {
                 }
 
                 // Read only new bytes
-                const fd = fs.openSync(EVENTS_FILE, 'r');
+                const fd = fs.openSync(getEventsFile(), 'r');
                 const buf = Buffer.alloc(stat.size - this.fileOffset);
                 fs.readSync(fd, buf, 0, buf.length, this.fileOffset);
                 fs.closeSync(fd);
@@ -416,8 +422,8 @@ class EventBusEngine {
 
     private rehydrateHistoryFromDisk(): void {
         const files = [
-            ...Array.from({ length: MAX_EVENT_ARCHIVES }, (_, index) => `${EVENTS_FILE}.${MAX_EVENT_ARCHIVES - index}`),
-            EVENTS_FILE,
+            ...Array.from({ length: MAX_EVENT_ARCHIVES }, (_, index) => `${getEventsFile()}.${MAX_EVENT_ARCHIVES - index}`),
+            getEventsFile(),
         ];
         for (const target of files) {
             if (!fs.existsSync(target)) continue;
@@ -443,22 +449,22 @@ class EventBusEngine {
 
     private rotateEventsFileIfNeeded(): void {
         try {
-            if (!fs.existsSync(EVENTS_FILE)) return;
-            const size = fs.statSync(EVENTS_FILE).size;
+            if (!fs.existsSync(getEventsFile())) return;
+            const size = fs.statSync(getEventsFile()).size;
             if (size < MAX_EVENT_FILE_BYTES) return;
 
-            const oldestArchive = `${EVENTS_FILE}.${MAX_EVENT_ARCHIVES}`;
+            const oldestArchive = `${getEventsFile()}.${MAX_EVENT_ARCHIVES}`;
             if (fs.existsSync(oldestArchive)) {
                 fs.unlinkSync(oldestArchive);
             }
             for (let index = MAX_EVENT_ARCHIVES - 1; index >= 1; index -= 1) {
-                const current = `${EVENTS_FILE}.${index}`;
-                const next = `${EVENTS_FILE}.${index + 1}`;
+                const current = `${getEventsFile()}.${index}`;
+                const next = `${getEventsFile()}.${index + 1}`;
                 if (fs.existsSync(current)) {
                     fs.renameSync(current, next);
                 }
             }
-            fs.renameSync(EVENTS_FILE, `${EVENTS_FILE}.1`);
+            fs.renameSync(getEventsFile(), `${getEventsFile()}.1`);
         } catch {
             // Ignore rotation failures and continue writing to the active event file.
         }

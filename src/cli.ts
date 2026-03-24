@@ -22,6 +22,7 @@ import { fileURLToPath } from 'url';
 import { PODNetwork } from './engines/pod-network.js';
 import { InstructionGateway, type ClientBootstrapArtifact } from './engines/instruction-gateway.js';
 import { ensureBootstrap, collectBootstrapManifest, validateTargetPath } from './engines/client-bootstrap.js';
+import { resolveNexusStateDir } from './engines/runtime-registry.js';
 import { SessionDNAManager } from './engines/session-dna.js';
 import { nexusEventBus } from './engines/event-bus.js';
 import { buildRuntimeSetupCommand } from './cli-setup.js';
@@ -1188,7 +1189,7 @@ program
 
     // 4. Compact memory vault
     try {
-      const vaultDir = path.join(os.homedir(), '.nexus-prime', 'memory-vault', 'items');
+      const vaultDir = path.join(resolveNexusStateDir(), 'memory-vault', 'items');
       if (fs.existsSync(vaultDir)) {
         const items = fs.readdirSync(vaultDir).filter(f => f.endsWith('.json'));
         if (items.length > 10) {
@@ -1201,7 +1202,7 @@ program
                 fs.unlinkSync(path.join(vaultDir, item));
               } catch { /* skip corrupted */ }
             }
-            const snapshotPath = path.join(os.homedir(), '.nexus-prime', 'memory-vault', `vault-snapshot-${Date.now()}.json`);
+            const snapshotPath = path.join(resolveNexusStateDir(), 'memory-vault', `vault-snapshot-${Date.now()}.json`);
             fs.writeFileSync(snapshotPath, JSON.stringify(consolidated, null, 2));
             console.log(`  Consolidated to: ${snapshotPath}`);
           }
@@ -1222,7 +1223,7 @@ program
     const ok: string[] = [];
 
     // 1. Check memory DB
-    const memoryDbPath = path.join(os.homedir(), '.nexus-prime', 'memory.db');
+    const memoryDbPath = path.join(resolveNexusStateDir(), 'memory.db');
     if (fs.existsSync(memoryDbPath)) {
       const size = fs.statSync(memoryDbPath).size;
       ok.push(`Memory DB: ${(size / 1024).toFixed(0)}KB`);
@@ -1234,7 +1235,7 @@ program
     }
 
     // 2. Check stale sessions
-    const sessionsDir = path.join(os.homedir(), '.nexus-prime', 'sessions');
+    const sessionsDir = path.join(resolveNexusStateDir(), 'sessions');
     if (fs.existsSync(sessionsDir)) {
       const locks = fs.readdirSync(sessionsDir).filter(f => f.endsWith('.lock'));
       const sessions = fs.readdirSync(sessionsDir).filter(f => f.endsWith('.json'));
@@ -1245,7 +1246,7 @@ program
     }
 
     // 3. Check vault sprawl
-    const vaultItemsDir = path.join(os.homedir(), '.nexus-prime', 'memory-vault', 'items');
+    const vaultItemsDir = path.join(resolveNexusStateDir(), 'memory-vault', 'items');
     if (fs.existsSync(vaultItemsDir)) {
       const itemCount = fs.readdirSync(vaultItemsDir).filter(f => f.endsWith('.json')).length;
       if (itemCount > 50) {

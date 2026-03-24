@@ -7,10 +7,10 @@
  * Phase: 8F (Darwin Loop)
  */
 
-import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
+import { resolveNexusStateDir } from './runtime-registry.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -47,8 +47,7 @@ export class DarwinJournal {
     private readonly journalPath: string;
 
     constructor() {
-        const nexusDir = path.join(os.homedir(), '.nexus-prime');
-        fs.mkdirSync(nexusDir, { recursive: true });
+        const nexusDir = resolveNexusStateDir();
         this.journalPath = path.join(nexusDir, 'darwin-journal.json');
 
         if (!fs.existsSync(this.journalPath)) {

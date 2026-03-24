@@ -36,6 +36,7 @@ import {
 import { ensureBootstrap } from './engines/client-bootstrap.js';
 import { initSynapse, type SynapseCoordinationBridge, type SynapseRuntime } from './synapse/index.js';
 import { initArchitects, type ArchitectsRuntime } from './architects/index.js';
+import { resolveNexusStateDir } from './engines/runtime-registry.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -161,12 +162,13 @@ export class NexusPrime {
       await this.addAdapter(adapterType as AdapterType);
     }
 
+    const stateDir = resolveNexusStateDir();
     this.architects = initArchitects({
-      repoRoot: process.cwd(),
+      repoRoot: stateDir,
     });
     const coordination = this.createSynapseCoordinationBridge();
     this.synapse = initSynapse({
-      repoRoot: process.cwd(),
+      repoRoot: stateDir,
       orchestrator: this.orchestrator,
       memory: this.memoryEngine,
       sessionDNA: this.sessionDNA,

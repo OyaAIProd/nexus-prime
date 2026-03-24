@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
-import * as os from 'os';
+import { resolveNexusStateDir } from './runtime-registry.js';
 
 export interface LedgerEntry {
     runId: string;
@@ -21,7 +21,7 @@ export class PersistentWorkLedger {
     private ledgerDir: string;
     
     constructor(baseDir?: string) {
-        this.ledgerDir = baseDir || path.join(os.homedir(), '.nexus-prime', 'ledger');
+        this.ledgerDir = baseDir || path.join(resolveNexusStateDir(), 'ledger');
         this.initGit();
     }
     

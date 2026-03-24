@@ -9,9 +9,9 @@
  */
 
 import Database from 'better-sqlite3';
-import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
+import { resolveNexusStateDir } from './runtime-registry.js';
 import { randomUUID } from 'crypto';
 import { EntityExtractor } from './entity-extractor.js';
 import { NgramIndex, getSharedNgramIndex } from './ngram-index.js';
@@ -66,8 +66,7 @@ export class GraphMemoryEngine implements IMemoryStore {
     private ngramIndex: NgramIndex | null = null;
 
     constructor(dbPath?: string) {
-        const dbDir = path.join(os.homedir(), '.nexus-prime');
-        fs.mkdirSync(dbDir, { recursive: true });
+        const dbDir = resolveNexusStateDir();
 
         const resolvedPath = dbPath ?? path.join(dbDir, 'graph.db');
         this.db = new Database(resolvedPath);

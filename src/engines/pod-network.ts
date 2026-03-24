@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { nexusEventBus } from './event-bus.js';
 import { ByzantineConsensus, type ConsensusResult } from './byzantine-consensus.js';
+import { resolveNexusStateDir } from './runtime-registry.js';
 
 export interface PodGroup {
     id: string;
@@ -283,15 +284,5 @@ function resolvePodPath(): string {
         return configured;
     }
 
-    const preferredRoot = process.env.NEXUS_STATE_DIR
-        ? path.resolve(process.env.NEXUS_STATE_DIR)
-        : path.join(os.homedir(), '.nexus-prime');
-    try {
-        fs.mkdirSync(preferredRoot, { recursive: true });
-        return path.join(preferredRoot, 'pod.json');
-    } catch {
-        const fallbackRoot = path.join(os.tmpdir(), 'nexus-prime-state');
-        fs.mkdirSync(fallbackRoot, { recursive: true });
-        return path.join(fallbackRoot, 'pod.json');
-    }
+    return path.join(resolveNexusStateDir(), 'pod.json');
 }

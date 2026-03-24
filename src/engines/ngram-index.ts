@@ -15,7 +15,7 @@
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
-import * as os from 'os';
+import { resolveNexusStateDir } from './runtime-registry.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -169,8 +169,7 @@ export class NgramIndex {
   private docExistsStmt!: Database.Statement;
 
   constructor(dbPath?: string) {
-    const stateDir = path.join(os.homedir(), '.nexus-prime');
-    fs.mkdirSync(stateDir, { recursive: true });
+    const stateDir = resolveNexusStateDir();
     this.dbPath = dbPath ?? path.join(stateDir, 'ngram-index.db');
     this.db = new Database(this.dbPath);
     this.initSchema();

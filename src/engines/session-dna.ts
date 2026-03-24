@@ -11,7 +11,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
+import { resolveNexusStateDir } from './runtime-registry.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -92,7 +92,7 @@ export class SessionDNAManager {
     constructor(sessionId: string, sessionsDir?: string) {
         this.sessionId = sessionId;
         this.startTime = Date.now();
-        this.sessionsDir = sessionsDir ?? path.join(os.homedir(), '.nexus-prime', 'sessions');
+        this.sessionsDir = sessionsDir ?? path.join(resolveNexusStateDir(), 'sessions');
         fs.mkdirSync(this.sessionsDir, { recursive: true });
         this.writeLock();
         this.cleanStaleSessions();
@@ -168,7 +168,7 @@ export class SessionDNAManager {
 
     /** Static cleanup for use from CLI commands */
     static cleanStale(sessionsDir?: string): number {
-        const dir = sessionsDir ?? path.join(os.homedir(), '.nexus-prime', 'sessions');
+        const dir = sessionsDir ?? path.join(resolveNexusStateDir(), 'sessions');
         if (!fs.existsSync(dir)) return 0;
         let cleaned = 0;
         const files = fs.readdirSync(dir);
@@ -329,7 +329,7 @@ export class SessionDNAManager {
 
     /** Load the most recent SessionDNA from disk */
     static loadLatest(sessionsDir?: string): SessionDNA | null {
-        const dir = sessionsDir ?? path.join(os.homedir(), '.nexus-prime', 'sessions');
+        const dir = sessionsDir ?? path.join(resolveNexusStateDir(), 'sessions');
         if (!fs.existsSync(dir)) return null;
 
         const files = fs.readdirSync(dir)
@@ -352,7 +352,7 @@ export class SessionDNAManager {
 
     /** Load a specific session by ID */
     static loadById(sessionId: string, sessionsDir?: string): SessionDNA | null {
-        const dir = sessionsDir ?? path.join(os.homedir(), '.nexus-prime', 'sessions');
+        const dir = sessionsDir ?? path.join(resolveNexusStateDir(), 'sessions');
         const filePath = path.join(dir, `${sessionId}.json`);
         if (!fs.existsSync(filePath)) return null;
 

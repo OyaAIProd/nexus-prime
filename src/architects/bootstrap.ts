@@ -5,7 +5,7 @@ import { createWorkflowRuntime } from '../engines/workflow-runtime.js';
 import { nexusNetRelay } from '../engines/nexusnet-relay.js';
 import { nexusEventBus } from '../engines/event-bus.js';
 import { ArchitectsConfig } from './config.js';
-import { openArchitectsDb } from './db/client.js';
+import { openArchitectsDb, resolveArchitectsPaths } from './db/client.js';
 import { instantiateBlueprint } from './blueprints/instantiate.js';
 import { acquireConstructionLock, releaseConstructionLock } from './construction-locks/manager.js';
 import { sendRelay } from './relay/messenger.js';
@@ -23,12 +23,19 @@ interface InitArchitectsOptions {
 
 export function initArchitects(options: InitArchitectsOptions): ArchitectsRuntime | null {
   if (!ArchitectsConfig.enabled) return null;
-  const db = openArchitectsDb(options.repoRoot);
+  let db: ReturnType<typeof openArchitectsDb>;
+  try {
+    db = openArchitectsDb(options.repoRoot);
+  } catch (err) {
+    console.error(`[Architects] Failed to open DB: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+  const { dir: architectsDir } = resolveArchitectsPaths(options.repoRoot);
   const providers: ArchitectsProviders = {
     repoRoot: options.repoRoot,
     workflowRuntime: createWorkflowRuntime(undefined, options.repoRoot),
     hookRuntime: createHookRuntime(undefined, options.repoRoot),
-    ledger: new PersistentWorkLedger(path.join(options.repoRoot, '.architects', 'ledger')),
+    ledger: new PersistentWorkLedger(path.join(architectsDir, 'ledger')),
     relay: nexusNetRelay,
   };
 

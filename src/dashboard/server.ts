@@ -9,7 +9,7 @@ import type { MemoryEngine } from '../engines/memory.js';
 import { podNetwork } from '../engines/pod-network.js';
 import { ClientRegistry } from '../engines/client-registry.js';
 import type { SubAgentRuntime } from '../phantom/runtime.js';
-import { RuntimeRegistry } from '../engines/runtime-registry.js';
+import { RuntimeRegistry, resolveNexusStateDir } from '../engines/runtime-registry.js';
 import type { OrchestratorEngine } from '../engines/orchestrator.js';
 import { buildFeatureRegistry } from '../engines/feature-registry.js';
 import { RepoTreeGenerator } from '../engines/repo-tree.js';
@@ -213,7 +213,7 @@ export class DashboardServer {
     }
 
     private migrateDashboardState(): void {
-        const statePath = path.join(os.homedir(), '.nexus-prime', 'dashboard-state.json');
+        const statePath = path.join(resolveNexusStateDir(), 'dashboard-state.json');
         if (!fs.existsSync(path.dirname(statePath))) {
             fs.mkdirSync(path.dirname(statePath), { recursive: true });
         }
