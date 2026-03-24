@@ -342,17 +342,21 @@ function ensureWritableDirectory(target: string): void {
   fs.accessSync(target, fs.constants.W_OK);
 }
 
-function resolveFallbackStateRoot(requestedStateRoot: string): string {
+function resolveFallbackStateRoot(preferredStateRoot: string): string {
   const candidates = [
+    preferredStateRoot,
     process.env.NEXUS_STATE_DIR?.trim(),
     path.join(os.tmpdir(), 'nexus-prime-state'),
     path.join(process.cwd(), '.nexus-prime-state'),
   ].filter((entry): entry is string => Boolean(entry));
 
+  const seen = new Set<string>();
   for (const candidate of candidates) {
-    if (path.resolve(candidate) === path.resolve(requestedStateRoot)) {
+    const normalized = path.resolve(candidate);
+    if (seen.has(normalized)) {
       continue;
     }
+    seen.add(normalized);
     try {
       ensureWritableDirectory(candidate);
       return candidate;
@@ -361,7 +365,7 @@ function resolveFallbackStateRoot(requestedStateRoot: string): string {
     }
   }
 
-  throw new Error(`No writable Nexus state root available outside ${requestedStateRoot}`);
+  throw new Error(`No writable Nexus state root available outside ${preferredStateRoot}`);
 }
 
 function openMemoryDatabase(requestedDbPath: string): {
@@ -371,13 +375,15 @@ function openMemoryDatabase(requestedDbPath: string): {
   fallbackApplied: boolean;
   fallbackReason?: string;
 } {
-  const requestedStateRoot = path.dirname(requestedDbPath);
+  const preferredStateRoot = resolvePreferredStateRoot();
+  const requestedDbRoot = path.dirname(requestedDbPath);
   try {
-    ensureWritableDirectory(requestedStateRoot);
+    ensureWritableDirectory(preferredStateRoot);
+    ensureWritableDirectory(requestedDbRoot);
     return {
       db: new Database(requestedDbPath),
       dbPath: requestedDbPath,
-      stateRoot: requestedStateRoot,
+      stateRoot: preferredStateRoot,
       fallbackApplied: false,
     };
   } catch (error) {
@@ -386,7 +392,7 @@ function openMemoryDatabase(requestedDbPath: string): {
     }
 
     const fallbackReason = error instanceof Error ? error.message : String(error || 'unwritable database path');
-    const fallbackStateRoot = resolveFallbackStateRoot(requestedStateRoot);
+    const fallbackStateRoot = resolveFallbackStateRoot(preferredStateRoot);
     const fallbackDbPath = path.join(fallbackStateRoot, path.basename(requestedDbPath) || 'memory.db');
     ensureWritableDirectory(fallbackStateRoot);
     console.error(`[MemoryEngine] Falling back from ${requestedDbPath} to ${fallbackDbPath}: ${fallbackReason}`);

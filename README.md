@@ -632,6 +632,17 @@ Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 
 ## 📜 Release History
 
 <details open>
+<summary><b>v4.2.0</b> · 2026-03-24 · Orchestration reliability, scoped memory, and investor-ready runtime truth</summary>
+
+- **Task-aware orchestration**: Review gates now apply per run and per gate, low-confidence cross-domain artifact picks are rejected, and bounded worker parallelism stays visible instead of hiding behind one blocked verification state.
+- **Scoped memory lanes**: Durable memory now preserves repo/workspace/project provenance, separates profile/workspace/shared/inbox lanes, and keeps low-signal chatter out of the primary working set.
+- **Operator-facing trust signals**: The dashboard now surfaces token optimization, gate reasoning, memory container counts, interpretation issues, selection audits, and pre-compaction backup status as first-class runtime truth.
+- **Investor-ready public release path**: README, changelog, landing-page changelog, and canonical release notes now describe the same reliability release without drifting between surfaces.
+
+Full notes: [releases/v4.2.0.md](./releases/v4.2.0.md) · Full history: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
 <summary><b>v4.1.0</b> · 2026-03-23 · Control-plane hardening, dashboard truth, and coordinated execution</summary>
 
 - **Dashboard responsiveness and truth**: Hot endpoints now use bounded caching, the client avoids broad refresh fan-out while SSE is healthy, catalog refresh stays canonical to runtime assets, and degraded states surface as explicit partial/stale conditions instead of silent fallback.

@@ -2,7 +2,28 @@
 
 All notable changes to Nexus Prime are documented here.
 
-Release Index: [v4.1.0](#v410--2026-03-23) · [v4.0.0](#v400--2026-03-22) · [v3.18.0](#v3180--2026-03-21) · [v3.17.0](#v3170--2026-03-20) · [v3.16.0](#v3160--2026-03-20) · [v3.15.0](#v3150--2026-03-16)
+Release Index: [v4.2.0](#v420--2026-03-24) · [v4.1.0](#v410--2026-03-23) · [v4.0.0](#v400--2026-03-22) · [v3.18.0](#v3180--2026-03-21) · [v3.17.0](#v3170--2026-03-20) · [v3.16.0](#v3160--2026-03-20)
+
+<details open>
+<summary><b>v4.2.0</b> · 2026-03-24 · Orchestration reliability, scoped memory, and investor-ready runtime truth</summary>
+
+### Added
+- **Nexus Layer domain seam**: Added an internal `nexus-layer.ts` adapter that summarizes knowledge, reflection, and workspace state without breaking the public MCP tool names or existing dashboard APIs.
+- **Release artifact**: Added `releases/v4.2.0.md` so the README, changelog, docs landing page, and GitHub release can all point to one canonical release note.
+
+### Changed
+- **Review gate semantics**: Review gates are now evaluated per gate with task-aware applicability, selection audit persistence, and bounded worker parallelism instead of collapsing every run behind one global verification state.
+- **Memory container model**: Durable memory now carries repo/workspace/project provenance, routes low-signal runtime chatter to inbox/quarantine lanes, and records pre-compaction backup metadata before summaries or flushes rewrite active context.
+- **Dashboard release truth**: Summary and surface payloads now expose token optimization, gate status, asset-selection reasoning, memory container counts, interpretation issues, and pre-compaction backup state as first-class operator signals.
+- **Public docs framing**: README and website changelog surfaces now present this release as the reliability pass for orchestration explainability, scoped memory, and investor-facing runtime proof.
+
+### Fixed
+- **Irrelevant review blockage**: Technical runs no longer fail simply because PM or marketing review gates were marked globally blocked.
+- **Repo/project memory loss**: Runtime memory writes no longer collapse into anonymous session/shared buckets and now preserve repo/project-aware scope on the main path.
+- **Memory noise promotion**: Noisy orchestration chatter, low-signal complaints, and transient status text are no longer promoted into primary durable memory by default.
+- **Invisible optimization/trust state**: Token optimization, trust signals, and backup status are now visible in the dashboard instead of remaining hidden in runtime snapshots.
+
+</details>
 
 <details open>
 <summary><b>v4.1.0</b> · 2026-03-23 · Control-plane hardening, dashboard truth, and coordinated execution</summary>

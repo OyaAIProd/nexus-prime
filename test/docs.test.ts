@@ -71,6 +71,7 @@ function test() {
   expectIncludes(readme, 'dashboard_cockpit_hero.png', 'README should reference the hero cockpit screenshot');
   expectIncludes(readme, 'dashboard_knowledge_trace.png', 'README should reference the updated knowledge screenshot');
   expectIncludes(readme, '## 📜 Release History', 'README should expose the release history section');
+  expectIncludes(readme, `v${packageJson.version}`, 'README should advertise the current package version in release history');
   expectIncludes(agents, 'nexus_orchestrate', 'AGENTS should document the orchestrator-first entrypoint');
   expectIncludes(agents, 'nexus_session_bootstrap', 'AGENTS should document the bootstrap-first entrypoint');
   expectIncludes(agents, 'nexus_list_skills', 'AGENTS should document skill discovery');
@@ -107,7 +108,7 @@ function test() {
   expectIncludes(indexHtml, 'dashboard_cockpit_hero.png', 'landing page should reference the cockpit hero screenshot');
   expectIncludes(indexHtml, 'dashboard_runtime_sequence.png', 'landing page should reference the runtime sequence screenshot');
   expectIncludes(indexHtml, 'dashboard_knowledge_trace.png', 'landing page should reference the knowledge trace screenshot');
-  expectIncludes(indexHtml, 'v4.0.0', 'landing page should advertise the current release in its changelog block');
+  expectIncludes(indexHtml, `v${packageJson.version}`, 'landing page should advertise the current release in its changelog block');
   expectIncludes(indexHtml, 'nexus-prime setup codex', 'landing page should document Codex setup');
   expectIncludes(indexHtml, 'auto-establish bootstrap artifacts', 'landing page should explain automatic bootstrap behavior');
   expectIncludes(knowledgeBaseHtml, 'rel="canonical"', 'knowledge base should declare a canonical URL');
