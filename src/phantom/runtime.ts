@@ -1,4 +1,5 @@
 import { exec as execCallback } from 'child_process';
+import { createHash } from 'crypto';
 import { promisify } from 'util';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -902,7 +903,8 @@ export class SubAgentRuntime {
                 files: fileRefs.map((file) => file.path),
             },
         });
-        const memoryMatches = await backends.memory.selected.recall(task.goal, 6);
+        const memoryRecallFilters = this.buildMemoryRecallFilters();
+        const memoryMatches = await backends.memory.selected.recall(task.goal, 6, memoryRecallFilters);
         this.markUsage('memories', {
             summary: `Recalled ${memoryMatches.length} memory match(es) for ${task.goal}`,
             count: memoryMatches.length,
@@ -926,7 +928,7 @@ export class SubAgentRuntime {
                 files: plan.files.map((entry) => ({ path: entry.file.path, action: entry.action })),
             },
         });
-        run.backendEvidence.memory = await (backends.memory.selected.shadowRecall?.(task.goal, 6) ?? Promise.resolve({ recalled: memoryMatches }));
+        run.backendEvidence.memory = await (backends.memory.selected.shadowRecall?.(task.goal, 6, memoryRecallFilters) ?? Promise.resolve({ recalled: memoryMatches }));
         run.backendEvidence.compression = await backends.compression.selected.shadow(task.goal, fileRefs);
         run.backendEvidence.notes.push(...planResult.notes);
         nexusEventBus.emit('tokens.optimized', {
@@ -1272,7 +1274,7 @@ export class SubAgentRuntime {
         run.plannerResult = run.plannerResult
             ? { ...run.plannerResult, reviewGates }
             : run.plannerResult;
-        const blockingGate = reviewGates.find((gate) => gate.status !== 'ready');
+        const blockingGate = reviewGates.find((gate) => gate.status === 'blocked');
 
         const applied = preApplyShield.blocked
             ? { applied: false, rolledBack: false, summary: preApplyShield.summary }
@@ -2040,19 +2042,42 @@ export class SubAgentRuntime {
     }> {
         const controlPlaneResult = this.memoryEngine?.storeWithControlPlane?.(content, priority, tags, parentId, depth, {
             sessionId: this.runtimeSnapshot.orchestration?.sessionId,
-            scope: tags.includes('#shared') || tags.includes('#worker-shared') ? 'shared' : 'session',
+            scope: this.resolveMemoryContainer(tags).scope,
             source: tags.includes('#worker') ? 'worker' : 'runtime',
             provenance: {
                 source: tags.includes('#worker') ? 'worker' : 'runtime',
                 sessionId: this.runtimeSnapshot.orchestration?.sessionId,
-                summary: 'Stored through runtime memory control plane.',
+                runId: this.runtimeSnapshot.latestRun?.runId,
+                repoId: this.resolveMemoryContainer(tags).repoId,
+                workspaceId: this.resolveMemoryContainer(tags).workspaceId,
+                projectId: this.resolveMemoryContainer(tags).projectId,
+                lane: this.resolveMemoryContainer(tags).lane,
+                containerTags: this.resolveMemoryContainer(tags).containerTags,
+                summary: 'Stored through runtime memory control plane with repo-aware provenance.',
                 references: [this.runtimeSnapshot.latestRun?.runId].filter(Boolean) as string[],
                 tags,
             },
         });
         const id = controlPlaneResult?.storedIds?.[0]
             ?? (this.memoryEngine
-                ? this.memoryEngine.store(content, priority, tags, parentId, depth)
+                ? this.memoryEngine.store(content, priority, tags, parentId, depth, {
+                    sessionId: this.runtimeSnapshot.orchestration?.sessionId,
+                    scope: this.resolveMemoryContainer(tags).scope,
+                    source: tags.includes('#worker') ? 'worker' : 'runtime',
+                    provenance: {
+                        source: tags.includes('#worker') ? 'worker' : 'runtime',
+                        sessionId: this.runtimeSnapshot.orchestration?.sessionId,
+                        runId: this.runtimeSnapshot.latestRun?.runId,
+                        repoId: this.resolveMemoryContainer(tags).repoId,
+                        workspaceId: this.resolveMemoryContainer(tags).workspaceId,
+                        projectId: this.resolveMemoryContainer(tags).projectId,
+                        lane: this.resolveMemoryContainer(tags).lane,
+                        containerTags: this.resolveMemoryContainer(tags).containerTags,
+                        summary: 'Stored directly through runtime memory path with repo-aware provenance.',
+                        references: [this.runtimeSnapshot.latestRun?.runId].filter(Boolean) as string[],
+                        tags,
+                    },
+                })
                 : String(this.defaultMemoryBackend.store(content, priority, tags, parentId, depth)));
         this.recordMemoryHealth(this.memoryEngine?.getHealthSummary?.());
         this.recordMemoryScopeUsage(this.memoryEngine?.getScopeUsageSummary?.(this.runtimeSnapshot.orchestration?.sessionId));
@@ -2835,7 +2860,7 @@ export class SubAgentRuntime {
     private evaluatePromotions(run: ExecutionRun, consensusPolicy: MultiTierConsensusPolicy): PromotionDecision[] {
         const verifiedWorkerIds = run.workerResults.filter((result) => result.verified).map((result) => result.workerId);
         const decisions: PromotionDecision[] = [];
-        const reviewGateBlocked = (run.plannerState?.reviewGates ?? []).some((gate) => gate.status !== 'ready');
+        const reviewGateBlocked = (run.plannerState?.reviewGates ?? []).some((gate) => gate.status === 'blocked');
 
         if (reviewGateBlocked) {
             decisions.push({
@@ -3588,14 +3613,138 @@ export class SubAgentRuntime {
     }
 
     private evaluateReviewGates(run: ExecutionRun): ReviewGateResult[] {
-        const verified = run.verificationResults.every((result) => result.passed);
-        return (run.plannerState?.reviewGates ?? []).map((gate) => ({
-            ...gate,
-            status: verified ? 'ready' : 'blocked',
-            rationale: verified
-                ? `${gate.rationale} Runtime verification satisfied this gate.`
-                : `${gate.rationale} Runtime verification or hook checks did not complete cleanly.`,
-        }));
+        const verificationPassed = run.verificationResults.filter((result) => result.passed).length;
+        const verificationFailed = run.verificationResults.filter((result) => !result.passed).length;
+        const hasPlannerEvidence = Boolean(run.plannerState?.ledger?.length || run.plannerResult?.summary || run.executionLedger?.steps?.some((step) => step.id === 'planner-selection' && step.status === 'completed'));
+        const hasImplementation = run.workerResults.some((result) => result.role === 'coder');
+        const hasVerifiedImplementation = run.workerResults.some((result) => result.role === 'coder' && result.verified);
+        const hasVerifierEvidence = run.workerResults.some((result) => result.role === 'verifier') || run.verificationResults.length > 0;
+        const applyBlocked = run.shieldDecisions.some((decision) => decision.stage === 'apply' && decision.blocked);
+        const applySummary = run.shieldDecisions.find((decision) => decision.stage === 'apply')?.summary;
+
+        return (run.plannerState?.reviewGates ?? []).map((gate) => {
+            let status: ReviewGateResult['status'] = 'planned';
+            let rationale = gate.rationale;
+
+            if (gate.gate === 'pm') {
+                status = hasPlannerEvidence ? 'ready' : 'planned';
+                rationale = hasPlannerEvidence
+                    ? `${gate.rationale} Planner evidence captured scope and success criteria.`
+                    : `${gate.rationale} Awaiting planner or packet evidence.`;
+            } else if (gate.gate === 'architecture') {
+                status = hasPlannerEvidence ? 'ready' : 'planned';
+                rationale = hasPlannerEvidence
+                    ? `${gate.rationale} Architecture and fallback evidence were captured before execution.`
+                    : `${gate.rationale} Awaiting planner ledger evidence.`;
+            } else if (gate.gate === 'code-review') {
+                if (verificationFailed > 0) {
+                    status = 'blocked';
+                    rationale = `${gate.rationale} Verifier evidence reported ${verificationFailed} failing check(s).`;
+                } else if (verificationPassed > 0 || hasVerifiedImplementation) {
+                    status = 'ready';
+                    rationale = `${gate.rationale} Verifier evidence passed for the implementation path.`;
+                } else if (hasImplementation || hasVerifierEvidence) {
+                    status = 'planned';
+                    rationale = `${gate.rationale} Implementation exists, but verifier evidence is still pending.`;
+                }
+            } else if (gate.gate === 'cto') {
+                if (applyBlocked) {
+                    status = 'blocked';
+                    rationale = `${gate.rationale} ${applySummary || 'Apply-stage guardrails blocked release readiness.'}`;
+                } else if (hasPlannerEvidence && (verificationPassed > 0 || !hasImplementation || hasVerifiedImplementation)) {
+                    status = 'ready';
+                    rationale = `${gate.rationale} Planner, verification, and guardrail evidence support release readiness.`;
+                } else {
+                    status = 'planned';
+                    rationale = `${gate.rationale} Waiting for verification or release-readiness evidence.`;
+                }
+            } else if (gate.gate === 'devops') {
+                if (applyBlocked) {
+                    status = 'blocked';
+                    rationale = `${gate.rationale} Guardrails blocked deploy-facing execution.`;
+                } else if (verificationPassed > 0 || !hasImplementation) {
+                    status = 'ready';
+                    rationale = `${gate.rationale} Verification evidence is sufficient for deploy-facing work.`;
+                } else {
+                    status = 'planned';
+                    rationale = `${gate.rationale} Waiting for packaging or deploy verification evidence.`;
+                }
+            } else if (gate.gate === 'marketer-docs') {
+                status = hasPlannerEvidence || run.workerResults.length > 0 ? 'ready' : 'planned';
+                rationale = status === 'ready'
+                    ? `${gate.rationale} Content-facing execution evidence is available.`
+                    : `${gate.rationale} Waiting for docs or launch-facing output evidence.`;
+            }
+
+            return {
+                ...gate,
+                status,
+                rationale,
+            };
+        });
+    }
+
+    private buildMemoryRecallFilters() {
+        const container = this.resolveMemoryContainer([]);
+        return {
+            sessionId: this.runtimeSnapshot.orchestration?.sessionId,
+            repoId: container.repoId,
+            workspaceId: container.workspaceId,
+            projectId: container.projectId,
+            includeShared: true,
+            includeProfile: true,
+            includeHidden: false,
+        };
+    }
+
+    private resolveMemoryContainer(tags: string[]): {
+        repoId: string;
+        workspaceId: string;
+        projectId: string;
+        lane: 'profile' | 'workspace' | 'shared' | 'inbox';
+        scope: 'session' | 'shared' | 'project' | 'user';
+        containerTags: string[];
+    } {
+        const workspacePath = path.resolve(this.repoRoot);
+        const repoId = this.stableContainerId(`repo:${workspacePath}`);
+        const explicitProjectTag = tags.find((tag) => tag.startsWith('#project:'));
+        const explicitWorkspaceTag = tags.find((tag) => tag.startsWith('#workspace:'));
+        const workspaceId = explicitWorkspaceTag
+            ? this.stableContainerId(`workspace:${explicitWorkspaceTag.slice('#workspace:'.length)}`)
+            : repoId;
+        const projectId = explicitProjectTag
+            ? this.stableContainerId(`project:${explicitProjectTag.slice('#project:'.length)}:${repoId}`)
+            : repoId;
+        const lane: 'profile' | 'workspace' | 'shared' | 'inbox' = tags.includes('#shared') || tags.includes('#worker-shared')
+            ? 'shared'
+            : tags.includes('#profile') || tags.includes('#user')
+                ? 'profile'
+                : tags.includes('#inbox') || tags.includes('#quarantine') || tags.includes('#runtime-result')
+                    ? 'inbox'
+                    : 'workspace';
+        const scope: 'session' | 'shared' | 'project' | 'user' = lane === 'shared'
+            ? 'shared'
+            : lane === 'profile'
+                ? 'user'
+                : lane === 'inbox'
+                    ? 'session'
+                    : 'project';
+        return {
+            repoId,
+            workspaceId,
+            projectId,
+            lane,
+            scope,
+            containerTags: [
+                `#repo:${repoId}`,
+                `#workspace:${workspaceId}`,
+                `#project:${projectId}`,
+            ],
+        };
+    }
+
+    private stableContainerId(value: string): string {
+        return createHash('sha1').update(value).digest('hex').slice(0, 12);
     }
 
     private async executeAutomationContinuations(

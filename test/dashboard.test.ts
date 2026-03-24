@@ -100,7 +100,7 @@ async function fetchJson(url: string): Promise<any> {
 }
 
 function assertHealthContract(health: any, address: string): void {
-  assert.strictEqual(health.dashboardApiVersion, '3', 'health should expose dashboard API version');
+  assert.strictEqual(health.dashboardApiVersion, '4', 'health should expose dashboard API version');
   assert.strictEqual(health.dashboardUrl, address, 'health should report the active dashboard URL');
   assert.strictEqual(health.capabilities.runs, true, 'runs capability should be advertised');
   assert.strictEqual(health.capabilities.memory, true, 'memory capability should be advertised');
@@ -132,6 +132,9 @@ function assertHealthContract(health: any, address: string): void {
   assert.strictEqual(health.capabilities.featureRegistry, true, 'feature-registry capability should be advertised');
   assert.strictEqual(health.capabilities.synapse, true, 'synapse capability should be advertised');
   assert.strictEqual(health.capabilities.architects, true, 'architects capability should be advertised');
+  assert.strictEqual(health.capabilities.dashboardSummary, true, 'dashboard summary capability should be advertised');
+  assert.strictEqual(health.capabilities.dashboardSurfaces, true, 'dashboard surface capability should be advertised');
+  assert.strictEqual(health.capabilities.nexusLayer, true, 'nexus layer capability should be advertised');
 }
 
 async function test() {
@@ -172,6 +175,18 @@ async function test() {
   const { SessionDNAManager } = await import('../dist/engines/session-dna.js');
   const { DashboardServer } = await import('../dist/dashboard/server.js');
   const { ensureBootstrap } = await import('../dist/engines/client-bootstrap.js');
+
+  const readonlyStateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-prime-readonly-memory-'));
+  const readonlyDbDir = path.join(readonlyStateDir, 'readonly-db');
+  fs.mkdirSync(readonlyDbDir, { recursive: true });
+  fs.chmodSync(readonlyDbDir, 0o555);
+  const fallbackMemory = createMemoryEngine(path.join(readonlyDbDir, 'memory.db'));
+  const fallbackStatus = fallbackMemory.getStorageStatus();
+  assert.strictEqual(fallbackStatus.fallbackApplied, true, 'memory engine should fall back when the requested DB path is readonly');
+  assert.notStrictEqual(fallbackStatus.activeDbPath, fallbackStatus.requestedDbPath, 'memory engine should switch to a writable fallback DB path');
+  fallbackMemory.store('Readonly fallback memory path smoke test', 0.7, ['#dashboard', '#fallback']);
+  fallbackMemory.close();
+  fs.chmodSync(readonlyDbDir, 0o755);
 
   const memory = createMemoryEngine(memoryDbPath);
   ensureBootstrap({ packageRoot: process.cwd(), workspaceRoot: repoRoot, phase: 'runtime', silent: true });
@@ -309,6 +324,13 @@ async function test() {
       patternsRes,
       backendsRes,
       healthRes,
+      dashboardSummaryRes,
+      surfaceOperateRes,
+      surfaceMemoryRes,
+      surfaceRunsRes,
+      surfaceAssetsRes,
+      surfaceTrustRes,
+      dashboardEntityRes,
       memoryRes,
       memoryHealthRes,
       memoryTraceRes,
@@ -355,6 +377,13 @@ async function test() {
       fetch(`${primaryAddress}/api/patterns/search?limit=5`),
       fetch(`${primaryAddress}/api/backends`),
       fetch(`${primaryAddress}/api/health`),
+      fetch(`${primaryAddress}/api/dashboard/summary?runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
+      fetch(`${primaryAddress}/api/dashboard/surface/operate?runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
+      fetch(`${primaryAddress}/api/dashboard/surface/memory?runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
+      fetch(`${primaryAddress}/api/dashboard/surface/runs?runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
+      fetch(`${primaryAddress}/api/dashboard/surface/assets?runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
+      fetch(`${primaryAddress}/api/dashboard/surface/trust?runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
+      fetch(`${primaryAddress}/api/dashboard/entity?kind=memory&id=${encodeURIComponent(rootMemoryId)}&runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
       fetch(`${primaryAddress}/api/memory`),
       fetch(`${primaryAddress}/api/memory/health`),
       fetch(`${primaryAddress}/api/memory/trace?id=${encodeURIComponent(rootMemoryId)}&runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
@@ -402,6 +431,13 @@ async function test() {
     const patterns = await patternsRes.json();
     const backends = await backendsRes.json();
     const health = await healthRes.json();
+    const dashboardSummary = await dashboardSummaryRes.json();
+    const surfaceOperate = await surfaceOperateRes.json();
+    const surfaceMemory = await surfaceMemoryRes.json();
+    const surfaceRuns = await surfaceRunsRes.json();
+    const surfaceAssets = await surfaceAssetsRes.json();
+    const surfaceTrust = await surfaceTrustRes.json();
+    const dashboardEntity = await dashboardEntityRes.json();
     const memories = await memoryRes.json();
     const memoryHealth = await memoryHealthRes.json();
     const memoryTrace = await memoryTraceRes.json();
@@ -424,35 +460,41 @@ async function test() {
     assert.ok(html.includes('Memory Explorer'), 'dashboard HTML should render the memory explorer shell');
     assert.ok(html.includes('Connected Ecosystem'), 'dashboard HTML should render restored ecosystem rail');
     assert.ok(html.includes('status-banner'), 'dashboard HTML should include compatibility banner shell');
-    assert.ok(html.includes('data-surface-mode="knowledge"'), 'dashboard HTML should expose a top-level knowledge mode');
+    assert.ok(html.includes('data-surface-mode="operate"'), 'dashboard HTML should expose a top-level operate mode');
+    assert.ok(html.includes('data-surface-mode="memory"'), 'dashboard HTML should expose a top-level memory mode');
     assert.ok(html.includes('data-surface-mode="runs"'), 'dashboard HTML should expose a top-level runs mode');
-    assert.ok(html.includes('data-surface-mode="governance"'), 'dashboard HTML should expose a top-level governance mode');
+    assert.ok(html.includes('data-surface-mode="assets"'), 'dashboard HTML should expose a top-level assets mode');
+    assert.ok(html.includes('data-surface-mode="trust"'), 'dashboard HTML should expose a top-level trust mode');
     assert.ok(html.includes('id="focus-overlay"'), 'dashboard HTML should expose the shared focus overlay shell');
     assert.ok(html.includes('id="focus-backdrop"'), 'dashboard HTML should expose the focus overlay backdrop');
     assert.ok(html.includes('data-focus-toggle="memory-graph"'), 'dashboard HTML should expose a graph focus control');
     assert.ok(html.includes('data-widget-id="memory-snapshots"'), 'dashboard HTML should expose memory snapshots as a focusable widget');
     assert.ok(html.includes('data-widget-id="events-panel"'), 'dashboard HTML should expose runtime events as a focusable widget');
-    assert.ok(html.includes('data-widget-id="actions-panel"'), 'dashboard HTML should expose operator actions as a focusable widget');
+    assert.ok(html.includes('data-widget-id="actions-panel"'), 'dashboard HTML should expose run controls as a focusable widget');
     assert.ok(html.includes('data-widget-id="token-source-card"'), 'dashboard HTML should expose the by-source token card as a focusable widget');
     assert.ok(html.includes('data-widget-id="token-phase-card"'), 'dashboard HTML should expose the by-phase token card as a focusable widget');
     assert.ok(html.includes('workspaceViews:'), 'dashboard HTML should track per-workspace view state');
     assert.ok(html.includes('data-library-mode="${escapeHtml(tab.mode)}"'), 'dashboard HTML should render secondary workspace tabs dynamically');
     assert.ok(!html.includes('data-library-mode="knowledge"'), 'dashboard HTML should not hardcode Knowledge inside the shared snapshots rail');
-    assert.ok(!html.includes('data-library-mode="governance"'), 'dashboard HTML should not hardcode Governance inside the shared snapshots rail');
-    assert.match(html, /knowledge:\s*\{[\s\S]*defaultLibraryMode:\s*'knowledge'[\s\S]*showGraph:\s*false/m, 'knowledge workspace should render as its own non-graph-first surface');
+    assert.ok(!html.includes('data-library-mode="trust"'), 'dashboard HTML should not hardcode Trust inside the shared snapshots rail');
+    assert.match(html, /operate:\s*\{[\s\S]*defaultLibraryMode:\s*'operate'[\s\S]*showGraph:\s*true/m, 'operate workspace should expose a guided default surface');
+    assert.match(html, /memory:\s*\{[\s\S]*defaultLibraryMode:\s*'memories'[\s\S]*showGraph:\s*false/m, 'memory workspace should render as its own non-graph-first surface');
     assert.match(html, /runs:\s*\{[\s\S]*defaultLibraryMode:\s*'planning'[\s\S]*showGraph:\s*true/m, 'runs workspace should keep its own run-first center layout');
-    assert.match(html, /catalog:\s*\{[\s\S]*defaultLibraryMode:\s*'platform'[\s\S]*showGraph:\s*false/m, 'catalog workspace should render inventory without the graph shell');
-    assert.match(html, /governance:\s*\{[\s\S]*defaultLibraryMode:\s*'governance'[\s\S]*showGraph:\s*false/m, 'governance workspace should render as a non-graph-first center layout');
+    assert.match(html, /assets:\s*\{[\s\S]*defaultLibraryMode:\s*'platform'[\s\S]*showGraph:\s*false/m, 'assets workspace should render inventory without the graph shell');
+    assert.match(html, /trust:\s*\{[\s\S]*defaultLibraryMode:\s*'trust'[\s\S]*showGraph:\s*false/m, 'trust workspace should render as a non-graph-first center layout');
     assert.ok(html.includes('id="runtime-select"'), 'dashboard HTML should expose a runtime selector');
     assert.ok(html.includes('id="synapse-label"'), 'dashboard HTML should expose Synapse status in the header');
     assert.ok(html.includes('id="architects-label"'), 'dashboard HTML should expose Architects status in the header');
     assert.ok(html.includes('runtime-usage-summary'), 'dashboard HTML should expose runtime usage summary shell');
     assert.ok(html.includes('summary-chip'), 'dashboard HTML should render compact runtime summary chips');
     assert.ok(html.includes('id="plan-button"'), 'dashboard HTML should expose planner preview action');
+    assert.ok(html.includes('id="execute-button"'), 'dashboard HTML should expose the primary execute action explicitly');
+    assert.ok(html.includes('id="advanced-run-controls"'), 'dashboard HTML should collapse advanced run controls behind a details panel');
+    assert.ok(html.includes('data-onboarding-task="memory-search"'), 'dashboard onboarding should expose a task-based entrypoint');
     assert.ok(html.includes('No persisted token telemetry for this runtime yet'), 'dashboard HTML should explain empty token telemetry state clearly');
     assert.ok(html.includes('Token Telemetry'), 'dashboard HTML should rename the token panel to a more concrete label');
     assert.ok(html.includes('Runtime Events'), 'dashboard HTML should rename the event stream panel to a more concrete label');
-    assert.ok(html.includes('Operator Actions'), 'dashboard HTML should rename the control-plane panel to a more concrete label');
+    assert.ok(html.includes('Run Controls'), 'dashboard HTML should rename the control-plane panel to a more concrete label');
     assert.ok(html.includes('Create / Ingest / Attach'), 'dashboard HTML should expose the explicit RAG collection workflow');
     assert.ok(html.includes('RAG Injection Path'), 'dashboard HTML should expose the RAG injection-path widget');
     assert.ok(html.includes('Used in Planner'), 'dashboard HTML should expose planner-stage RAG usage');
@@ -473,6 +515,9 @@ async function test() {
     assert.match(html, /runtime:\s*\['runs', 'pod', 'usage', 'orchestrationSession', 'orchestrationLedger', 'instructionPacket', 'tokensSummary', 'tokensTimeline', 'tokensBySource'\]/, 'runtime-category refresh should include token resources');
     assert.match(html, /knowledge:\s*\['knowledgeFabricSession', 'knowledgeProvenance', 'ragCollections', 'patterns', 'tokensSummary', 'tokensTimeline', 'tokensBySource', 'modelTiers', 'memoryShared', 'usage'\]/, 'knowledge-category refresh should include token resources');
     assert.match(html, /refreshAll\(\['ragCollections', 'knowledgeFabricSession', 'knowledgeProvenance', 'usage', 'tokensSummary', 'tokensTimeline', 'tokensBySource', 'orchestrationSession', 'orchestrationLedger'\]\)/, 'RAG actions should refresh token telemetry alongside knowledge surfaces');
+    assert.ok(html.includes("getDefaultRefreshTargets()"), 'dashboard client should load summary plus the active surface by default');
+    assert.ok(html.includes("url: '/api/dashboard/summary'"), 'dashboard client should use the aggregated summary read model');
+    assert.ok(html.includes("url: '/api/dashboard/surface/operate'"), 'dashboard client should use aggregated surface read models');
     assert.ok(html.includes('skipWhenStreamHealthy: true'), 'dashboard client should skip events refetch while SSE is healthy');
     assert.ok(html.includes('renderForTargets('), 'dashboard client should support lightweight section renders');
     assert.ok(html.includes('ttlMs: 15000'), 'dashboard client should assign TTLs to hot resources');
@@ -549,6 +594,44 @@ async function test() {
     assert.ok((health.runtime?.runtimeCount || 0) >= 2, 'health API should include runtime registry count');
     assert.strictEqual(health.docs.pagesWorkflowValid, true, 'health API should report fixed Pages workflow syntax');
     assert.strictEqual(cachedHealthAgain.release.packageVersion, health.release.packageVersion, 'health endpoint should return the same cached release metadata within the TTL window');
+    assert.ok(health.memory?.storage, 'health API should expose memory storage status');
+    assert.ok(typeof health.memory.storage.fallbackApplied === 'boolean', 'health API should surface whether memory storage fallback is active');
+    assert.strictEqual(dashboardSummary.selectedRuntimeId, runtime.getRuntimeId(), 'dashboard summary should resolve the selected runtime');
+    assert.ok(Array.isArray(dashboardSummary.runtimes) && dashboardSummary.runtimes.length >= 2, 'dashboard summary should include runtime choices');
+    assert.ok(Array.isArray(dashboardSummary.alerts), 'dashboard summary should include operator alerts');
+    assert.ok(dashboardSummary.backends?.memory, 'dashboard summary should include backend catalogs for first-load controls');
+    assert.ok(dashboardSummary.nexusLayer?.domains?.knowledge, 'dashboard summary should expose the nexus layer knowledge domain');
+    assert.strictEqual(dashboardSummary.tokenOptimization?.applied, true, 'dashboard summary should expose first-class token optimization truth');
+    assert.ok(dashboardSummary.gateSummary && typeof dashboardSummary.gateSummary.total === 'number', 'dashboard summary should expose gate summary counts');
+    assert.ok(dashboardSummary.memoryContainers?.byLane, 'dashboard summary should expose memory container counts');
+    assert.ok(Array.isArray(dashboardSummary.interpretationIssues), 'dashboard summary should expose interpretation issues');
+    assert.ok(Object.prototype.hasOwnProperty.call(dashboardSummary, 'preCompactionBackup'), 'dashboard summary should expose pre-compaction backup status');
+    assert.ok(Array.isArray(surfaceOperate.runs) && surfaceOperate.runs.length > 0, 'operate surface should return run data');
+    assert.ok(Array.isArray(surfaceOperate.memory) && surfaceOperate.memory.length > 0, 'operate surface should return recent memory');
+    assert.strictEqual(surfaceOperate.tokenOptimization?.applied, true, 'operate surface should expose token optimization truth');
+    assert.ok(surfaceOperate.gateSummary && typeof surfaceOperate.gateSummary.total === 'number', 'operate surface should expose gate summary counts');
+    assert.ok(surfaceOperate.memoryContainers?.byLane, 'operate surface should expose memory containers');
+    assert.ok(Array.isArray(surfaceOperate.interpretationIssues), 'operate surface should expose interpretation issues');
+    assert.ok(surfaceMemory.nexusLayer?.domains?.reflection, 'memory surface should expose nexus layer reflection data');
+    assert.ok(Array.isArray(surfaceMemory.ragCollections), 'memory surface should return context-source collections');
+    assert.ok(Array.isArray(surfaceMemory.workspace), 'memory surface should expose workspace memories');
+    assert.ok(Array.isArray(surfaceMemory.profile), 'memory surface should expose profile memories');
+    assert.ok(Array.isArray(surfaceMemory.shared), 'memory surface should expose shared memories');
+    assert.ok(Array.isArray(surfaceMemory.inbox), 'memory surface should expose inbox memories');
+    assert.ok(surfaceMemory.qualitySummary && typeof surfaceMemory.qualitySummary.workspace === 'number', 'memory surface should expose quality summary');
+    assert.ok(Array.isArray(surfaceRuns.runs) && surfaceRuns.runs.length > 0, 'runs surface should return recent runs');
+    assert.ok(surfaceRuns.orchestrationLedger?.steps?.length > 0, 'runs surface should return the orchestration ledger');
+    assert.ok(surfaceRuns.selectionAudit, 'runs surface should expose selection audit');
+    assert.ok(Array.isArray(surfaceRuns.gateTimeline), 'runs surface should expose gate timeline');
+    assert.ok(surfaceRuns.parallelism && typeof surfaceRuns.parallelism.totalWorkers === 'number', 'runs surface should expose bounded parallelism');
+    assert.ok(Array.isArray(surfaceAssets.skills) && surfaceAssets.skills.length > 0, 'assets surface should return skill inventory');
+    assert.ok(surfaceAssets.featureRegistry?.sections?.length > 0, 'assets surface should return the feature registry');
+    assert.ok(surfaceAssets.selectionAudit, 'assets surface should expose asset-selection reasons');
+    assert.ok(surfaceTrust.health?.memory?.storage, 'trust surface should surface health and storage state');
+    assert.ok(surfaceTrust.federation && typeof surfaceTrust.federation === 'object', 'trust surface should return federation status');
+    assert.ok(Array.isArray(surfaceTrust.interpretationIssues), 'trust surface should expose interpretation issues');
+    assert.ok(Object.prototype.hasOwnProperty.call(surfaceTrust, 'preCompactionBackup'), 'trust surface should expose pre-compaction backup status');
+    assert.strictEqual(dashboardEntity.id, rootMemoryId, 'dashboard entity read model should resolve a memory entity');
     assert.ok(Array.isArray(memories) && memories.length >= 2, 'memory API should return snapshots');
     assert.ok(typeof memoryHealth.total === 'number', 'memory health API should expose aggregate counts');
     assert.strictEqual(memoryTrace.id, rootMemoryId, 'memory trace API should resolve the requested memory');

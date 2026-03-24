@@ -6,7 +6,7 @@ import {
 } from './token-supremacy.js';
 import { KVBridge, createKVBridge, type BridgeMetrics } from './kv-bridge.js';
 import { MetaLearner } from './meta-learner.js';
-import { type MemoryItem, type MemoryStats } from './memory.js';
+import { type MemoryItem, type MemoryRecallFilters, type MemoryStats } from './memory.js';
 import { NXLInterpreter, nxl, type AgentArchetype } from './nxl-interpreter.js';
 
 export type BackendMode = 'default' | 'shadow' | 'experimental';
@@ -23,10 +23,10 @@ export interface MemorySnapshotCapable {
 
 export interface MemoryBackend {
     descriptor: BackendDescriptor;
-    recall(query: string, k?: number): Promise<string[]>;
+    recall(query: string, k?: number, filters?: MemoryRecallFilters): Promise<string[]>;
     store(content: string, priority?: number, tags?: string[], parentId?: string, depth?: number): Promise<string> | string;
     stats(): MemoryStats | Record<string, unknown>;
-    shadowRecall?(query: string, k?: number): Promise<Record<string, unknown>>;
+    shadowRecall?(query: string, k?: number, filters?: MemoryRecallFilters): Promise<Record<string, unknown>>;
 }
 
 export interface CompressionShadow {
@@ -82,7 +82,7 @@ export interface DSLCompilerBackend {
 }
 
 type MemoryLike = {
-    recall(query: string, k?: number): Promise<string[]>;
+    recall(query: string, k?: number, filters?: MemoryRecallFilters): Promise<string[]>;
     store(content: string, priority?: number, tags?: string[], parentId?: string, depth?: number): string;
     getStats(): MemoryStats;
 } & MemorySnapshotCapable;
@@ -99,8 +99,8 @@ export class SQLiteMemoryBackend implements MemoryBackend {
 
     constructor(protected memory: MemoryLike) { }
 
-    async recall(query: string, k: number = 5): Promise<string[]> {
-        return this.memory.recall(query, k);
+    async recall(query: string, k: number = 5, filters?: MemoryRecallFilters): Promise<string[]> {
+        return this.memory.recall(query, k, filters);
     }
 
     store(content: string, priority: number = 0.7, tags: string[] = [], parentId?: string, depth: number = 0): string {
@@ -111,8 +111,8 @@ export class SQLiteMemoryBackend implements MemoryBackend {
         return this.memory.getStats();
     }
 
-    async shadowRecall(query: string, k: number = 5): Promise<Record<string, unknown>> {
-        const recalled = await this.memory.recall(query, k);
+    async shadowRecall(query: string, k: number = 5, filters?: MemoryRecallFilters): Promise<Record<string, unknown>> {
+        const recalled = await this.memory.recall(query, k, filters);
         return {
             query,
             strategy: 'temporal-hyperbolic-shadow',
@@ -134,10 +134,10 @@ export class TemporalHyperbolicMemoryBackend extends SQLiteMemoryBackend {
         },
     };
 
-    async recall(query: string, k: number = 5): Promise<string[]> {
+    async recall(query: string, k: number = 5, filters?: MemoryRecallFilters): Promise<string[]> {
         const snapshot = this.memory.snapshot?.(Math.max(k * 6, 24)) ?? [];
         if (snapshot.length === 0) {
-            return super.recall(query, k);
+            return super.recall(query, k, filters);
         }
 
         const queryTerms = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -151,9 +151,9 @@ export class TemporalHyperbolicMemoryBackend extends SQLiteMemoryBackend {
             .map(({ item }) => item.content);
     }
 
-    async shadowRecall(query: string, k: number = 5): Promise<Record<string, unknown>> {
-        const promoted = await this.recall(query, k);
-        const baseline = await super.recall(query, k);
+    async shadowRecall(query: string, k: number = 5, filters?: MemoryRecallFilters): Promise<Record<string, unknown>> {
+        const promoted = await this.recall(query, k, filters);
+        const baseline = await super.recall(query, k, filters);
         return {
             query,
             baseline,

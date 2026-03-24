@@ -7,7 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { MemoryEngine } from './memory.js';
 import { nexusEventBus } from './event-bus.js';
 import { CompactionSentinel } from './compaction-sentinel.js';
@@ -305,7 +305,7 @@ export class OrchestratorEngine {
     const primaryClient = this.resolvePrimaryClient();
     const bootstrapManifest = readBootstrapManifest();
     const latestDNA = SessionDNAManager.loadLatest();
-    const memoryMatches = await this.memory.recall(task, 8);
+    const memoryMatches = await this.memory.recall(task, 8, this.buildWorkspaceRecallFilters());
     const memoryStats = this.memory.getStats();
     const candidateFiles = options.files?.length
       ? options.files
@@ -387,6 +387,22 @@ export class OrchestratorEngine {
       hash = (hash * 33n ^ BigInt(char.charCodeAt(0))) & 0xFFFFFFFFFFFFFFFFn;
     }
     return hash.toString(16);
+  }
+
+  private buildWorkspaceRecallFilters() {
+    return {
+      sessionId: this.sessionState.sessionId,
+      repoId: this.getRepoScopedId('repo'),
+      workspaceId: this.getRepoScopedId('workspace'),
+      projectId: this.getRepoScopedId('project'),
+      includeShared: true,
+      includeProfile: true,
+      includeHidden: false,
+    };
+  }
+
+  private getRepoScopedId(kind: 'repo' | 'workspace' | 'project'): string {
+    return createHash('sha1').update(`${kind}:${path.resolve(this.repoRoot)}`).digest('hex').slice(0, 12);
   }
 
   private nextRepeatedFailures(runState: string, previous: number): number {
@@ -501,7 +517,10 @@ export class OrchestratorEngine {
     // First-use project scan: auto-generate a repo-profile memory on first bootstrap
     const repoTree = this.repoTreeGenerator.generate();
     try {
-      const existingProfile = await this.memory.recall('#repo-profile', 2);
+      const existingProfile = await this.memory.recall('#repo-profile', 2, {
+        ...this.buildWorkspaceRecallFilters(),
+        includeHidden: true,
+      });
       const hasProfile = existingProfile.some(m => m.includes('#repo-profile') || m.includes('Repo profile:'));
       if (!hasProfile) {
         const extCounts: Record<string, number> = {};
@@ -529,7 +548,19 @@ export class OrchestratorEngine {
         if (checkFile('.github/workflows')) frameworks.push('GitHub Actions');
 
         const profileContent = `Repo profile: ${path.basename(this.repoRoot)} | Languages: ${topLangs} | Frameworks: ${frameworks.join(', ') || 'unknown'} | Files: ${Object.values(extCounts).reduce((a, b) => a + b, 0)}`;
-        this.memory.store(profileContent, 0.9, ['#repo-profile', '#system', '#first-use']);
+        this.memory.store(profileContent, 0.9, ['#repo-profile', '#workspace', '#system', '#hidden', '#first-use'], undefined, 0, {
+          scope: 'project',
+          source: 'system',
+          provenance: {
+            source: 'system',
+            repoId: this.getRepoScopedId('repo'),
+            workspaceId: this.getRepoScopedId('workspace'),
+            projectId: this.getRepoScopedId('project'),
+            lane: 'workspace',
+            containerTags: ['#repo-profile', '#hidden'],
+            summary: 'Hidden repo profile for workspace memory routing.',
+          },
+        });
       }
     } catch {
       // Non-critical — don't block bootstrap if profiling fails
@@ -1487,17 +1518,6 @@ export class OrchestratorEngine {
       limit: 5,
       selector: 'name',
     });
-    // Mandatory skill calling: ensure at least one skill is selected if available
-    if (skillSelection.selectedValues.length === 0 && skillItems.length > 0) {
-      skillSelection.selectedValues.push(skillItems[0].name);
-      skillSelection.selectedEntries.push(this.toArtifactAuditEntry('skill', skillItems[0].name, skillItems, {
-        score: 1.0,
-        source: 'explicit',
-        confidence: 'high',
-        reason: 'Mandatory skill fallback',
-        selector: 'name',
-      }));
-    }
     const workflowSelection = this.resolveCatalogVotes('workflow', task, intent, workflowItems, {
       explicit: options.workflowSelectors,
       planner: planner.selectedWorkflows,
@@ -1565,7 +1585,9 @@ export class OrchestratorEngine {
       automations: automationSelection.selectedValues,
       audit: {
         generatedAt: Date.now(),
-        summary: `Selected ${selected.length} artifact(s) after planner, knowledge-fabric, and scorer audit.`,
+        summary: selected.length > 0
+          ? `Selected ${selected.length} artifact(s) after planner, knowledge-fabric, and scorer audit.`
+          : 'Selector confidence stayed low, so Nexus fell back to the stable baseline runtime instead of injecting weak or cross-domain artifacts.',
         selected,
         rejected,
       },
@@ -1667,8 +1689,12 @@ export class OrchestratorEngine {
         };
       })
       .sort((left, right) => right.score - left.score || (left.item?.name ?? left.value).localeCompare(right.item?.name ?? right.value));
-    const selected = ranked.slice(0, input.limit);
-    const rejected = ranked.slice(input.limit, input.limit + 6);
+    const selected = ranked
+      .filter((entry) => this.isCatalogVoteSelected(entry))
+      .slice(0, input.limit);
+    const rejected = ranked
+      .filter((entry) => !selected.some((candidate) => candidate.value === entry.value))
+      .slice(0, 8);
 
     return {
       selectedValues: selected.map((entry) => entry.value),
@@ -1687,6 +1713,16 @@ export class OrchestratorEngine {
         selector: input.selector,
       }, false)),
     };
+  }
+
+  private isCatalogVoteSelected(entry: {
+    score: number;
+    source: 'explicit' | 'planner' | 'knowledge-fabric' | 'scorer';
+    confidence: 'high' | 'medium' | 'low';
+  }): boolean {
+    if (entry.source === 'explicit' || entry.source === 'planner') return true;
+    if (entry.source === 'knowledge-fabric') return entry.score >= 0.72 || entry.confidence !== 'low';
+    return entry.confidence !== 'low' && entry.score >= 0.64;
   }
 
   private toArtifactAuditEntry(
@@ -2180,6 +2216,11 @@ function scoreText(value: string, keywords: string[], intent?: AutonomyIntent): 
     if (intent.taskType === 'sales' && (lower.includes('lead') || lower.includes('pitch') || lower.includes('prospect'))) score += 15;
     if (intent.taskType === 'data' && (lower.includes('analysis') || lower.includes('query') || lower.includes('dashboard') || lower.includes('metrics'))) score += 15;
     if (intent.taskType === 'test' && (lower.includes('test') || lower.includes('jest') || lower.includes('e2e') || lower.includes('cypress') || lower.includes('qa'))) score += 15;
+
+    const technicalIntent = ['bugfix', 'feature', 'review', 'refactor', 'test', 'frontend', 'backend', 'ai'].includes(intent.taskType);
+    if (technicalIntent && /(marketing|seo|campaign|social|sales|gtm|product requirement|roadmap|pdlc)/.test(lower)) score -= 18;
+    if (intent.taskType === 'backend' && /(landing page|copywriting|campaign|social|seo)/.test(lower)) score -= 22;
+    if (intent.taskType === 'frontend' && /(seo|campaign|sales|gtm)/.test(lower) && !/(ui|component|layout|design system)/.test(lower)) score -= 12;
   }
   
   return score;

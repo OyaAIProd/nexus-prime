@@ -35,7 +35,7 @@ export interface FallbackPlan {
 
 export interface ReviewGateResult {
     gate: 'pm' | 'architecture' | 'code-review' | 'cto' | 'devops' | 'marketer-docs';
-    status: 'planned' | 'ready' | 'blocked';
+    status: 'planned' | 'ready' | 'blocked' | 'skipped';
     owner: string;
     rationale: string;
 }
@@ -163,16 +163,17 @@ export function planSpecialists(input: {
         ...(input.requestedSkills ?? []),
         ...(input.requestedWorkflows ?? []),
     ]);
+    const taskSignals = analyzeTaskContext(goal, matchedDomains, input.files ?? []);
     const selectedCrew = selectCrew(goal, matchedDomains, requestedCrews);
     const selectedSpecialists = rankSpecialists(goal, matchedDomains, selectedCrew, requestedSpecialists, input.optimizationProfile ?? 'standard');
-    const selectedSkills = dedupeStrings([
+    const selectedSkills = rankAssetSelectors(goal, matchedDomains, input.files ?? [], dedupeStrings([
         ...(input.requestedSkills ?? []),
         ...selectedSpecialists.flatMap((entry) => getSpecialist(entry.specialistId)?.recommendedSkills ?? []),
-    ]);
-    const selectedWorkflows = dedupeStrings([
+    ]), input.optimizationProfile ?? 'standard');
+    const selectedWorkflows = rankAssetSelectors(goal, matchedDomains, input.files ?? [], dedupeStrings([
         ...(input.requestedWorkflows ?? []),
         ...selectedSpecialists.flatMap((entry) => getSpecialist(entry.specialistId)?.recommendedWorkflows ?? []),
-    ]);
+    ]), input.optimizationProfile ?? 'standard');
     const toolPolicy = selectToolPolicy(selectedSpecialists);
     const fallbackPlan = {
         summary: 'Fallback to current runtime domain-pack execution if specialist confidence or crew coverage is weak.',
@@ -182,7 +183,12 @@ export function planSpecialists(input: {
             'Fall back to current skill/workflow/domain resolution if confidence remains low.',
         ],
     };
-    const reviewGates = buildReviewGates(selectedCrew, selectedSpecialists);
+    const reviewGates = buildReviewGates(selectedCrew, selectedSpecialists, {
+        goal,
+        matchedDomains,
+        files: input.files ?? [],
+        signals: taskSignals,
+    });
     const continuation = {
         summary: 'After completion, queue bounded next-step recommendations through continuation-capable specialists.',
         suggestedActions: [
@@ -433,8 +439,7 @@ function buildCrewTemplates(specialists: SpecialistProfile[]): CrewTemplate[] {
 
 function selectCrew(goal: string, matchedDomains: string[], requestedCrews: string[]): SelectedCrew {
     const requestSet = new Set(requestedCrews.map((value) => value.toLowerCase()));
-    const lowerGoal = goal.toLowerCase();
-    const technicalAudit = /(dashboard|frontend|backend|api|runtime|control plane|orchestrat|synapse|architect|pod|integration|performance|lag|bug|review|audit|cto)/.test(lowerGoal);
+    const technicalAudit = analyzeTaskContext(goal, matchedDomains).technical;
     const ranked = CREWS
         .map((crew) => {
             let score = 0.1;
@@ -494,6 +499,7 @@ function rankSpecialists(
     const requestSet = new Set(requestedSpecialists.map((value) => value.toLowerCase()));
     const crewTemplate = getCrewTemplate(crew.crewId);
     const seededIds = new Set([...(crewTemplate?.requiredSpecialists ?? []), ...(crewTemplate?.optionalSpecialists ?? [])]);
+    const signals = analyzeTaskContext(goal, matchedDomains);
 
     const ranked = SPECIALISTS.map((specialist) => {
         let score = 0.05;
@@ -519,6 +525,18 @@ function rankSpecialists(
         if (goal.toLowerCase().includes('implement') && specialist.authority === 'mutate') {
             score += 0.08;
             reasons.push('Implementation task prefers mutate-capable specialists.');
+        }
+        if (signals.technical && isCrossDomainSpecialist(specialist) && !requestSet.has(specialist.specialistId.toLowerCase()) && !requestSet.has(specialist.name.toLowerCase())) {
+            score -= 0.42;
+            reasons.push('Cross-domain marketing or product specialist deprioritized for a technical task.');
+        }
+        if (signals.technical && specialist.domains.some((domain) => ['backend', 'frontend', 'typescript', 'node', 'python', 'react', 'api', 'security', 'trust', 'ai', 'research'].includes(domain))) {
+            score += 0.14;
+            reasons.push('Engineering, trust, or AI domain matches a technical task.');
+        }
+        if (signals.docsOrPitch && specialist.division === 'marketing') {
+            score += 0.12;
+            reasons.push('Docs or pitch-facing work allows marketing and writing specialists.');
         }
 
         return {
@@ -559,16 +577,122 @@ function selectToolPolicy(selectedSpecialists: SelectedSpecialist[]): ToolPolicy
     };
 }
 
-function buildReviewGates(crew: SelectedCrew, selectedSpecialists: SelectedSpecialist[]): ReviewGateResult[] {
+function buildReviewGates(
+    crew: SelectedCrew,
+    selectedSpecialists: SelectedSpecialist[],
+    context: {
+        goal: string;
+        matchedDomains: string[];
+        files: string[];
+        signals: TaskSignals;
+    },
+): ReviewGateResult[] {
     const owner = selectedSpecialists[0]?.name ?? crew.name;
-    return [
-        { gate: 'pm', status: 'planned', owner, rationale: 'Scope, audience, and success criteria review.' },
-        { gate: 'architecture', status: 'planned', owner, rationale: 'Interface and fallback review before execution.' },
-        { gate: 'code-review', status: 'planned', owner: 'Code Review Layer', rationale: 'Post-verifier implementation review.' },
-        { gate: 'cto', status: 'planned', owner: 'CTO Review Layer', rationale: 'Release-readiness and system-quality review.' },
-        { gate: 'devops', status: 'planned', owner: 'DevOps Shipper', rationale: 'Packaging, release notes, deploy, and rollback.' },
-        { gate: 'marketer-docs', status: 'planned', owner: 'Marketer Docs Layer', rationale: 'Append-only website/docs/README surfacing.' },
-    ];
+    const template = getCrewTemplate(crew.crewId);
+    const requestedGates = template?.reviewGates ?? [];
+    const gateRationales: Record<ReviewGateResult['gate'], { owner: string; rationale: string; applies: boolean }> = {
+        pm: {
+            owner,
+            rationale: 'Scope, audience, and success criteria review.',
+            applies: context.signals.pmFacing,
+        },
+        architecture: {
+            owner,
+            rationale: 'Interface, scope, and fallback review before execution.',
+            applies: context.signals.multiFile || context.signals.technical || context.signals.memorySensitive || context.signals.orchestrationSensitive,
+        },
+        'code-review': {
+            owner: 'Code Review Layer',
+            rationale: 'Implementation review after verification evidence is available.',
+            applies: context.signals.technical || context.signals.implementation,
+        },
+        cto: {
+            owner: 'CTO Review Layer',
+            rationale: 'Release-readiness and system-quality review.',
+            applies: context.signals.release || context.signals.multiFile || context.signals.memorySensitive || context.signals.orchestrationSensitive,
+        },
+        devops: {
+            owner: 'DevOps Shipper',
+            rationale: 'Packaging, release, deployment, and rollback review.',
+            applies: context.signals.release || context.signals.devopsFacing,
+        },
+        'marketer-docs': {
+            owner: 'Marketer Docs Layer',
+            rationale: 'Website, README, docs, and launch-facing surfacing review.',
+            applies: context.signals.docsOrPitch,
+        },
+    };
+
+    return requestedGates
+        .filter((gate) => gateRationales[gate]?.applies)
+        .map((gate) => ({
+            gate,
+            status: 'planned',
+            owner: gateRationales[gate].owner,
+            rationale: gateRationales[gate].rationale,
+        }));
+}
+
+interface TaskSignals {
+    technical: boolean;
+    implementation: boolean;
+    multiFile: boolean;
+    memorySensitive: boolean;
+    orchestrationSensitive: boolean;
+    release: boolean;
+    devopsFacing: boolean;
+    docsOrPitch: boolean;
+    pmFacing: boolean;
+}
+
+function analyzeTaskContext(goal: string, matchedDomains: string[], files: string[] = []): TaskSignals {
+    const haystack = `${goal} ${(files || []).join(' ')} ${matchedDomains.join(' ')}`.toLowerCase();
+    const technical = /(dashboard|frontend|backend|api|runtime|control plane|orchestrat|memory|mcp|token|repo|project|scope|bug|fix|refactor|implement|patch|review|audit|cto|typescript|react|node|test)/.test(haystack);
+    const implementation = /(implement|fix|patch|refactor|upgrade|repair|remediate|rewrite|build)/.test(haystack) || technical;
+    const multiFile = (files || []).length >= 3;
+    const memorySensitive = /(memory|recall|profile|scope|quarantine|compaction|knowledge)/.test(haystack);
+    const orchestrationSensitive = /(orchestrat|skill|workflow|hook|automation|parallel|worker|planner|crew|specialist|gate)/.test(haystack);
+    const release = /(release|deploy|shipping|rollback|package|ci\/cd|ci|infra|environment|production)/.test(haystack);
+    const devopsFacing = /(deploy|docker|kubernetes|release|infra|pipeline|workflow|github action|build)/.test(haystack);
+    const docsOrPitch = /(docs|readme|website|landing|investor|pitch|launch|demo|marketing)/.test(haystack);
+    const pmFacing = /(plan|planning|product|roadmap|prd|requirements|user research|persona|investor|pitch)/.test(haystack);
+    return {
+        technical,
+        implementation,
+        multiFile,
+        memorySensitive,
+        orchestrationSensitive,
+        release,
+        devopsFacing,
+        docsOrPitch,
+        pmFacing,
+    };
+}
+
+function isCrossDomainSpecialist(specialist: SpecialistProfile): boolean {
+    return ['marketing', 'paid-media', 'sales', 'support', 'strategy', 'project-management'].includes(specialist.division);
+}
+
+function rankAssetSelectors(goal: string, matchedDomains: string[], files: string[], values: string[], optimizationProfile: OptimizationProfile): string[] {
+    const signals = analyzeTaskContext(goal, matchedDomains, files);
+    const requestSet = new Set(values.map((value) => value.toLowerCase()));
+    const ranked = dedupeStrings(values)
+        .map((value) => {
+            const lower = value.toLowerCase();
+            let score = 0.1;
+            if (requestSet.has(lower)) score += 0.5;
+            if (signals.technical && /(memory|backend|frontend|workflow|hook|automation|api|security|test|token|orchestrat|runtime)/.test(lower)) score += 0.32;
+            if (signals.docsOrPitch && /(docs|content|landing|pitch|investor|launch)/.test(lower)) score += 0.24;
+            if (signals.technical && /(marketing|seo|campaign|social|sales|gtm|product|pdlc)/.test(lower)) score -= 0.58;
+            if (!signals.docsOrPitch && /(marketing|seo|campaign|social|sales|gtm)/.test(lower)) score -= 0.24;
+            return { value, score };
+        })
+        .filter((entry) => entry.score > 0.18)
+        .sort((left, right) => right.score - left.score || left.value.localeCompare(right.value));
+
+    return ranked
+        .slice(0, optimizationProfile === 'max' ? 6 : 4)
+        .map((entry) => entry.value);
 }
 
 function dedupeStrings(values: string[]): string[] {

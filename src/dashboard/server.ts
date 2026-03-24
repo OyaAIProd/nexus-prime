@@ -15,6 +15,7 @@ import { buildFeatureRegistry } from '../engines/feature-registry.js';
 import { RepoTreeGenerator } from '../engines/repo-tree.js';
 import type { SynapseRuntime } from '../synapse/index.js';
 import type { ArchitectsRuntime } from '../architects/index.js';
+import { NexusLayerAdapter } from '../engines/nexus-layer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,7 +23,7 @@ const __dirname = path.dirname(__filename);
 const HOST = process.env.NEXUS_DASHBOARD_HOST || '127.0.0.1';
 const DEFAULT_PORT = parseInt(process.env.NEXUS_DASHBOARD_PORT || '3377', 10);
 const MAX_PORT_SCAN = 24;
-const DASHBOARD_API_VERSION = '3';
+const DASHBOARD_API_VERSION = '4';
 const DASHBOARD_SCHEMA_VERSION = 1;
 const REQUIRED_CAPABILITIES = {
     runs: true,
@@ -55,6 +56,9 @@ const REQUIRED_CAPABILITIES = {
     featureRegistry: true,
     synapse: true,
     architects: true,
+    dashboardSummary: true,
+    dashboardSurfaces: true,
+    nexusLayer: true,
 } as const;
 
 interface DashboardServerOptions {
@@ -112,6 +116,8 @@ interface CachedResponse<T> {
     value?: T;
     refresh?: Promise<T>;
 }
+
+type DashboardSurfaceMode = 'operate' | 'memory' | 'runs' | 'assets' | 'trust';
 
 export class DashboardServer {
     private server: http.Server;
@@ -286,17 +292,7 @@ export class DashboardServer {
         }
 
         if (req.method === 'GET' && url.pathname === '/api/usage') {
-            const runtimes = this.runtimeRegistry.list();
-            const requestedRuntimeId = url.searchParams.get('runtimeId') || this.getRuntime()?.getRuntimeId() || runtimes[0]?.runtimeId;
-            const selected = requestedRuntimeId
-                ? runtimes.find((runtime) => runtime.runtimeId === requestedRuntimeId) ?? this.runtimeRegistry.read(requestedRuntimeId)
-                : undefined;
-            this.respondJson(res, selected ?? {
-                runtimeId: requestedRuntimeId ?? null,
-                health: 'stale',
-                usage: {},
-                libraries: {},
-            });
+            this.respondJson(res, this.collectUsageSnapshot(url));
             return;
         }
 
@@ -519,6 +515,30 @@ export class DashboardServer {
             return;
         }
 
+        if (req.method === 'GET' && url.pathname === '/api/dashboard/summary') {
+            const runtimeId = url.searchParams.get('runtimeId') || 'default';
+            this.respondJson(res, await this.getCachedValue(`dashboard-summary:${runtimeId}`, 5_000, () => this.collectDashboardSummary(url)));
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname.startsWith('/api/dashboard/surface/')) {
+            const surface = decodeURIComponent(url.pathname.replace('/api/dashboard/surface/', '')) as DashboardSurfaceMode;
+            this.respondJson(res, await this.collectDashboardSurface(surface, url));
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/dashboard/entity') {
+            const kind = url.searchParams.get('kind') ?? '';
+            const id = url.searchParams.get('id') ?? '';
+            if (!kind || !id) {
+                this.respondJson(res, { error: 'kind-and-id-required' }, 400);
+                return;
+            }
+            const entity = this.resolveDashboardEntity(kind, id, url);
+            this.respondJson(res, entity ?? { error: 'dashboard-entity-not-found', kind, id }, entity ? 200 : 404);
+            return;
+        }
+
         if (req.method === 'GET' && url.pathname === '/api/memory') {
             const limit = parseInt(url.searchParams.get('limit') || '40', 10);
             const tier = url.searchParams.get('tier') ?? undefined;
@@ -526,22 +546,24 @@ export class DashboardServer {
             const linkedType = url.searchParams.get('linkedType') ?? undefined;
             const recencyMs = url.searchParams.get('recencyMs');
             const showPhantom = url.searchParams.get('showPhantom') === 'true';
-            const memory = this.getMemory();
-            // Fetch extra to account for post-filtering
-            const raw = memory?.listSnapshots(Math.min(limit * 3, 200), {
+            const lane = url.searchParams.get('lane') ?? undefined;
+            const repoId = url.searchParams.get('repoId') ?? undefined;
+            const workspaceId = url.searchParams.get('workspaceId') ?? undefined;
+            const projectId = url.searchParams.get('projectId') ?? undefined;
+            const includeHidden = url.searchParams.get('includeHidden') === 'true';
+            this.respondJson(res, this.listDashboardMemories({
+                limit,
                 tier: tier as 'prefrontal' | 'hippocampus' | 'cortex' | undefined,
                 tag,
                 linkedType: linkedType as 'session' | 'run' | 'skill' | 'workflow' | undefined,
                 recencyMs: recencyMs ? parseInt(recencyMs, 10) : undefined,
-            }) ?? [];
-            // Default filtering: exclude quarantine and phantom/swarm noise
-            const filtered = raw.filter((m: any) => {
-                const tags: string[] = Array.isArray(m.tags) ? m.tags : [];
-                if (tags.includes('#quarantine')) return false;
-                if (!showPhantom && (tags.includes('#phantom-learning') || tags.includes('#swarm'))) return false;
-                return true;
-            });
-            this.respondJson(res, filtered.slice(0, limit));
+                showPhantom,
+                lane: lane as 'profile' | 'workspace' | 'shared' | 'inbox' | undefined,
+                repoId,
+                workspaceId,
+                projectId,
+                includeHidden,
+            }));
             return;
         }
 
@@ -1245,6 +1267,402 @@ export class DashboardServer {
         }
     }
 
+    private collectUsageSnapshot(url: URL) {
+        const runtimes = this.runtimeRegistry.list();
+        const requestedRuntimeId = url.searchParams.get('runtimeId') || this.getRuntime()?.getRuntimeId() || runtimes[0]?.runtimeId;
+        const selected = requestedRuntimeId
+            ? runtimes.find((runtime) => runtime.runtimeId === requestedRuntimeId) ?? this.runtimeRegistry.read(requestedRuntimeId)
+            : undefined;
+        return selected ?? {
+            runtimeId: requestedRuntimeId ?? null,
+            health: 'stale',
+            usage: {},
+            libraries: {},
+            latestRun: null,
+        };
+    }
+
+    private listDashboardMemories(options: {
+        limit?: number;
+        tier?: 'prefrontal' | 'hippocampus' | 'cortex';
+        tag?: string;
+        linkedType?: 'session' | 'run' | 'skill' | 'workflow';
+        recencyMs?: number;
+        showPhantom?: boolean;
+        lane?: 'profile' | 'workspace' | 'shared' | 'inbox';
+        repoId?: string;
+        workspaceId?: string;
+        projectId?: string;
+        includeHidden?: boolean;
+    } = {}) {
+        const limit = Math.max(1, Number(options.limit || 40));
+        const raw = this.getMemory()?.listSnapshots(Math.min(limit * 3, 200), {
+            tier: options.tier,
+            tag: options.tag,
+            linkedType: options.linkedType,
+            recencyMs: options.recencyMs,
+            lane: options.lane,
+            repoId: options.repoId,
+            workspaceId: options.workspaceId,
+            projectId: options.projectId,
+            includeHidden: options.includeHidden,
+        }) ?? [];
+        return raw
+            .filter((memory: any) => {
+                const tags: string[] = Array.isArray(memory.tags) ? memory.tags : [];
+                if (tags.includes('#quarantine') && options.lane !== 'inbox') return false;
+                if (!options.showPhantom && (tags.includes('#phantom-learning') || tags.includes('#swarm'))) return false;
+                if (!options.includeHidden && (tags.includes('#hidden') || tags.includes('#repo-profile') || tags.includes('#system-hidden'))) return false;
+                return true;
+            })
+            .slice(0, limit);
+    }
+
+    private collectTokenOptimization(snapshot: any, usage: any) {
+        const tokens = snapshot?.tokens ?? this.getRuntime()?.getTokenTelemetrySummary?.() ?? {};
+        const budget = usage?.sourceAwareTokenBudget ?? {};
+        return {
+            applied: Boolean(usage?.tokenOptimizationApplied || budget?.applied),
+            savedTokens: Number(tokens?.savedTokens || 0),
+            forwardedTokens: Number(tokens?.forwardedTokens || 0),
+            grossInputTokens: Number(tokens?.grossInputTokens || 0),
+            compressionPct: Number(tokens?.compressionPct || 0),
+            reason: budget?.reason || 'Token optimization has not reported a source-aware budget yet.',
+            dominantSource: budget?.dominantSource || null,
+            dropped: Array.isArray(budget?.dropped) ? budget.dropped : [],
+        };
+    }
+
+    private collectGateSummary(run: any) {
+        const gates = Array.isArray(run?.plannerState?.reviewGates)
+            ? run.plannerState.reviewGates
+            : Array.isArray(run?.plannerResult?.reviewGates)
+                ? run.plannerResult.reviewGates
+                : [];
+        const counts = gates.reduce((acc: Record<string, number>, gate: any) => {
+            const key = String(gate?.status || 'planned');
+            acc[key] = (acc[key] || 0) + 1;
+            return acc;
+        }, {});
+        return {
+            total: gates.length,
+            ready: Number(counts.ready || 0),
+            blocked: Number(counts.blocked || 0),
+            planned: Number(counts.planned || 0),
+            skipped: Number(counts.skipped || 0),
+            items: gates,
+        };
+    }
+
+    private collectInterpretationIssues(input: {
+        usage: any;
+        latestRun: any;
+        memoryHealth: any;
+    }) {
+        const issues: Array<{ id: string; severity: 'info' | 'warn' | 'bad'; summary: string }> = [];
+        const selectionAudit = input.usage?.artifactSelectionAudit ?? {};
+        const rejected = Array.isArray(selectionAudit?.rejected) ? selectionAudit.rejected : [];
+        const latestRunResult = String(input.latestRun?.result || '');
+
+        const lowConfidenceRejected = rejected.filter((entry: any) => entry?.source === 'scorer' && entry?.confidence === 'low');
+        if (lowConfidenceRejected.length > 0) {
+            issues.push({
+                id: 'selection-low-confidence',
+                severity: 'warn',
+                summary: `${lowConfidenceRejected.length} low-confidence scorer suggestion(s) were rejected to avoid cross-domain misrouting.`,
+            });
+        }
+        if (/review gate .* remains blocked/i.test(latestRunResult)) {
+            issues.push({
+                id: 'gate-blocked',
+                severity: 'bad',
+                summary: latestRunResult,
+            });
+        }
+        if (Number(input.memoryHealth?.quarantined || 0) > 0) {
+            issues.push({
+                id: 'memory-quarantine',
+                severity: 'info',
+                summary: `${input.memoryHealth.quarantined} memory entr${input.memoryHealth.quarantined === 1 ? 'y is' : 'ies are'} quarantined or inboxed for review.`,
+            });
+        }
+        return issues;
+    }
+
+    private collectMemoryQualitySummary(memoryHealth: any, containers: any) {
+        return {
+            active: Number(memoryHealth?.active || 0),
+            quarantined: Number(memoryHealth?.quarantined || 0),
+            workspace: Number(containers?.byLane?.workspace || 0),
+            profile: Number(containers?.byLane?.profile || 0),
+            shared: Number(containers?.byLane?.shared || 0),
+            inbox: Number(containers?.byLane?.inbox || 0),
+            hiddenCount: Number(containers?.hiddenCount || 0),
+            topTags: Array.isArray(memoryHealth?.topTags) ? memoryHealth.topTags : [],
+        };
+    }
+
+    private buildDashboardAlerts(payload: {
+        health: DashboardHealthResponse;
+        usage: any;
+        memoryHealth: any;
+    }) {
+        const alerts: Array<{ id: string; tone: 'info' | 'warn' | 'bad'; title: string; summary: string }> = [];
+        const healthMemory = (payload.health.memory || {}) as any;
+        const healthConnection = (payload.health.connection || {}) as any;
+
+        if (payload.usage?.health === 'stale') {
+            alerts.push({
+                id: 'runtime-stale',
+                tone: 'warn',
+                title: 'Selected runtime is stale',
+                summary: 'Run mutations and deploy controls stay guarded until a fresh runtime heartbeat appears.',
+            });
+        }
+
+        if (healthMemory.storage?.fallbackApplied) {
+            alerts.push({
+                id: 'memory-fallback',
+                tone: 'warn',
+                title: 'Memory storage fallback active',
+                summary: `Using ${healthMemory.storage.activeDbPath} because the requested database path was not writable.`,
+            });
+        }
+
+        if (Number(payload.memoryHealth?.quarantined || 0) > 0) {
+            alerts.push({
+                id: 'memory-quarantine',
+                tone: 'info',
+                title: 'Quarantined memory needs review',
+                summary: `${payload.memoryHealth.quarantined} memory entr${payload.memoryHealth.quarantined === 1 ? 'y' : 'ies'} are quarantined in the trust layer.`,
+            });
+        }
+
+        if (healthConnection.stream !== 'connected') {
+            alerts.push({
+                id: 'stream-idle',
+                tone: 'info',
+                title: 'Live stream not attached',
+                summary: 'The dashboard is polling snapshots instead of consuming the live operator stream.',
+            });
+        }
+
+        return alerts;
+    }
+
+    private async collectDashboardSummary(url: URL) {
+        const usage = this.collectUsageSnapshot(url);
+        const snapshot = this.resolveRuntimeSnapshot(url);
+        const runtime = this.getRuntime();
+        const orchestrator = this.getOrchestrator();
+        const memory = this.getMemory();
+        const health = await this.getCachedValue('health', 15_000, () => this.collectHealth());
+        const layer = memory ? new NexusLayerAdapter(memory, runtime, orchestrator) : null;
+        const clients = snapshot?.clients?.detected?.length
+            ? snapshot.clients.detected
+            : this.getClientRegistry()?.listClients(this.getAdapters()) ?? [];
+        const primaryClient = snapshot?.clients?.primary ?? this.getClientRegistry()?.getPrimaryClient(this.getAdapters()) ?? null;
+        const memoryHealth = runtime?.getMemoryHealth() ?? memory?.getHealthSummary() ?? {
+            generatedAt: Date.now(),
+            total: 0,
+            active: 0,
+            quarantined: 0,
+            scrap: 0,
+            promoted: 0,
+            shared: 0,
+            topTags: [],
+        };
+        const latestRun = snapshot?.runtimeId && runtime?.getRuntimeId() === snapshot.runtimeId
+            ? runtime?.listRuns?.(1)?.[0] ?? usage?.latestRun ?? null
+            : usage?.latestRun ?? null;
+        const tokenOptimization = this.collectTokenOptimization(snapshot, usage);
+        const memoryContainers = memory?.getContainerSummary(snapshot?.orchestration?.sessionId) ?? null;
+        const gateSummary = this.collectGateSummary(latestRun);
+        const interpretationIssues = this.collectInterpretationIssues({ usage, latestRun, memoryHealth });
+        const sharedMemory = snapshot?.runtimeId && runtime?.getRuntimeId() === snapshot.runtimeId
+            ? runtime.getSharedMemorySnapshot?.(12) ?? []
+            : [];
+
+        return {
+            generatedAt: Date.now(),
+            selectedRuntimeId: usage?.runtimeId ?? runtime?.getRuntimeId() ?? null,
+            health,
+            runtimes: this.runtimeRegistry.list(),
+            usage,
+            latestRun,
+            orchestrationSession: snapshot?.orchestration ?? orchestrator?.getSessionState?.() ?? {},
+            memoryHealth,
+            memoryShared: sharedMemory,
+            memoryContainers,
+            gateSummary,
+            tokenOptimization,
+            interpretationIssues,
+            preCompactionBackup: memory?.getLastPreCompactionBackup?.() ?? null,
+            backends: runtime?.getBackendCatalog() ?? {},
+            clients,
+            primaryClient,
+            nexusLayer: layer?.getSummary(snapshot?.orchestration?.sessionId) ?? null,
+            alerts: this.buildDashboardAlerts({ health, usage, memoryHealth }),
+        };
+    }
+
+    private async collectDashboardSurface(surface: DashboardSurfaceMode, url: URL) {
+        const snapshot = this.resolveRuntimeSnapshot(url);
+        const runtime = this.getRuntime();
+        const orchestrator = this.getOrchestrator();
+        const memory = this.getMemory();
+        const usage = this.collectUsageSnapshot(url);
+        const layer = memory ? new NexusLayerAdapter(memory, runtime, orchestrator) : null;
+        const latestRun = snapshot?.runtimeId && runtime?.getRuntimeId() === snapshot.runtimeId
+            ? runtime?.listRuns?.(1)?.[0] ?? usage?.latestRun ?? null
+            : usage?.latestRun ?? null;
+        const memoryHealth = runtime?.getMemoryHealth() ?? memory?.getHealthSummary() ?? {};
+        const memoryContainers = memory?.getContainerSummary(snapshot?.orchestration?.sessionId) ?? null;
+        const tokenOptimization = this.collectTokenOptimization(snapshot, usage);
+        const gateSummary = this.collectGateSummary(latestRun);
+        const interpretationIssues = this.collectInterpretationIssues({ usage, latestRun, memoryHealth });
+
+        switch (surface) {
+            case 'operate':
+                return {
+                    runs: runtime?.listRuns(12) ?? [],
+                    usage,
+                    tokenOptimization,
+                    gateSummary,
+                    memoryContainers,
+                    interpretationIssues,
+                    orchestrationSession: snapshot?.orchestration ?? orchestrator?.getSessionState?.() ?? {},
+                    orchestrationLedger: snapshot?.executionLedger ?? runtime?.getExecutionLedger() ?? {},
+                    instructionPacket: snapshot?.instructionPacket ?? runtime?.getInstructionPacket() ?? {},
+                    tokensSummary: snapshot?.tokens ?? runtime?.getTokenTelemetrySummary() ?? {},
+                    tokensTimeline: snapshot?.tokens?.timeline ?? runtime?.getTokenTelemetryTimeline(12) ?? [],
+                    tokensBySource: snapshot?.tokens?.bySourceClass ?? runtime?.getTokenTelemetrySummary()?.bySourceClass ?? {},
+                    memory: this.listDashboardMemories({ limit: 12 }),
+                    memoryHealth,
+                    memoryShared: snapshot?.runtimeId && runtime?.getRuntimeId() === snapshot.runtimeId ? runtime.getSharedMemorySnapshot?.(8) ?? [] : [],
+                    clients: snapshot?.clients?.detected?.length ? snapshot.clients.detected : this.getClientRegistry()?.listClients(this.getAdapters()) ?? [],
+                    primaryClient: snapshot?.clients?.primary ?? this.getClientRegistry()?.getPrimaryClient(this.getAdapters()) ?? null,
+                };
+            case 'memory':
+                return {
+                    usage,
+                    memory: this.listDashboardMemories({ limit: 40, lane: 'workspace' }),
+                    workspace: this.listDashboardMemories({ limit: 28, lane: 'workspace' }),
+                    profile: this.listDashboardMemories({ limit: 18, lane: 'profile' }),
+                    shared: this.listDashboardMemories({ limit: 18, lane: 'shared' }),
+                    inbox: this.listDashboardMemories({ limit: 18, lane: 'inbox', includeHidden: true }),
+                    memoryHealth,
+                    memoryContainers,
+                    qualitySummary: this.collectMemoryQualitySummary(memoryHealth, memoryContainers),
+                    memoryAudit: runtime?.auditMemory(80) ?? { scanned: 0, quarantined: [], findings: [] },
+                    memoryQuarantine: runtime?.listMemoryQuarantine(40) ?? [],
+                    memoryShared: snapshot?.runtimeId && runtime?.getRuntimeId() === snapshot.runtimeId ? runtime.getSharedMemorySnapshot?.(12) ?? [] : [],
+                    knowledgeFabricSession: snapshot?.knowledgeFabric ?? orchestrator?.getKnowledgeFabricSnapshot?.() ?? {},
+                    knowledgeProvenance: snapshot?.knowledgeFabric?.provenance ?? orchestrator?.getKnowledgeFabricProvenance?.() ?? { entries: [] },
+                    ragCollections: orchestrator?.listRagCollections?.() ?? [],
+                    patterns: orchestrator?.listPatterns?.()?.slice(0, 8) ?? [],
+                    modelTiers: snapshot?.knowledgeFabric
+                        ? { policy: snapshot.knowledgeFabric.modelTierPolicy, trace: snapshot.knowledgeFabric.modelTierTrace }
+                        : orchestrator?.getModelTierTrace?.() ?? { trace: [] },
+                    nexusLayer: layer?.getSummary(snapshot?.orchestration?.sessionId) ?? null,
+                };
+            case 'runs':
+                return {
+                    runs: runtime?.listRuns(20) ?? [],
+                    usage,
+                    gateSummary,
+                    selectionAudit: (usage as any)?.artifactSelectionAudit ?? { selected: [], rejected: [], summary: 'No selection audit recorded yet.' },
+                    gateTimeline: Array.isArray(latestRun?.plannerState?.reviewGates) ? latestRun.plannerState.reviewGates : [],
+                    parallelism: {
+                        totalWorkers: Number(snapshot?.workerPlan?.totalWorkers ?? runtime?.getUsageSnapshot()?.workerPlan?.totalWorkers ?? 0),
+                        lanes: snapshot?.workerPlan?.lanes ?? runtime?.getUsageSnapshot()?.workerPlan?.lanes ?? [],
+                    },
+                    tokenOptimization,
+                    orchestrationSession: snapshot?.orchestration ?? orchestrator?.getSessionState?.() ?? {},
+                    orchestrationLedger: snapshot?.executionLedger ?? runtime?.getExecutionLedger() ?? {},
+                    workerPlan: snapshot?.workerPlan ?? runtime?.getUsageSnapshot()?.workerPlan ?? {},
+                    artifactOutcomes: snapshot?.artifactOutcome ?? runtime?.getUsageSnapshot()?.artifactOutcome ?? {},
+                    instructionPacket: snapshot?.instructionPacket ?? runtime?.getInstructionPacket() ?? {},
+                    tokensSummary: snapshot?.tokens ?? runtime?.getTokenTelemetrySummary() ?? {},
+                    tokensTimeline: snapshot?.tokens?.timeline ?? runtime?.getTokenTelemetryTimeline(20) ?? [],
+                    tokensBySource: snapshot?.tokens?.bySourceClass ?? runtime?.getTokenTelemetrySummary()?.bySourceClass ?? {},
+                    worktreeHealth: snapshot?.worktreeHealth ?? runtime?.getUsageSnapshot()?.worktreeHealth ?? {},
+                };
+            case 'assets':
+                return {
+                    usage,
+                    selectionAudit: (usage as any)?.artifactSelectionAudit ?? { selected: [], rejected: [], summary: 'No selection audit recorded yet.' },
+                    featureRegistry: await this.getCachedValue('feature-registry', 30_000, () => Promise.resolve(buildFeatureRegistry(this.repoRoot))),
+                    skills: runtime?.listSkills() ?? [],
+                    specialists: (runtime?.listSpecialists() ?? []).map((specialist) => ({
+                        specialistId: specialist.specialistId,
+                        name: specialist.name,
+                        division: specialist.division,
+                        description: specialist.description,
+                        authority: specialist.authority,
+                        domains: specialist.domains,
+                        tools: specialist.tools,
+                        mission: specialist.mission,
+                        workflow: specialist.workflow,
+                        deliverables: specialist.deliverables,
+                        communicationStyle: specialist.communicationStyle,
+                        successMetrics: specialist.successMetrics,
+                        recommendedSkills: specialist.recommendedSkills,
+                        recommendedWorkflows: specialist.recommendedWorkflows,
+                        sourcePath: specialist.sourcePath,
+                    })),
+                    crews: runtime?.listCrews() ?? [],
+                    workflows: runtime?.listWorkflows() ?? [],
+                    hooks: runtime?.listHooks() ?? [],
+                    automations: runtime?.listAutomations() ?? [],
+                    backends: runtime?.getBackendCatalog() ?? {},
+                };
+            case 'trust':
+                return {
+                    usage,
+                    interpretationIssues,
+                    preCompactionBackup: memory?.getLastPreCompactionBackup?.() ?? null,
+                    memoryContainers,
+                    health: await this.getCachedValue('health', 15_000, () => this.collectHealth()),
+                    worktreeHealth: snapshot?.worktreeHealth ?? runtime?.getUsageSnapshot()?.worktreeHealth ?? {},
+                    federation: runtime?.getNetworkStatus() ?? {},
+                    memoryAudit: runtime?.auditMemory(80) ?? { scanned: 0, quarantined: [], findings: [] },
+                    memoryQuarantine: runtime?.listMemoryQuarantine(40) ?? [],
+                    synapseTeams: this.getSynapse()?.getStrikeTeamStatus() ?? [],
+                    synapseHealth: this.getSynapse()?.getOperativeHealth() ?? [],
+                    synapseApprovals: this.getSynapse()?.getPendingApprovals() ?? [],
+                    architectsDispatch: this.getArchitects()?.getDispatchStatus() ?? {},
+                    architectsEscalations: this.getArchitects()?.getWardEscalations() ?? [],
+                    clients: snapshot?.clients?.detected?.length ? snapshot.clients.detected : this.getClientRegistry()?.listClients(this.getAdapters()) ?? [],
+                    primaryClient: snapshot?.clients?.primary ?? this.getClientRegistry()?.getPrimaryClient(this.getAdapters()) ?? null,
+                    nexusLayer: layer?.getSummary(snapshot?.orchestration?.sessionId) ?? null,
+                };
+            default:
+                return { error: 'dashboard-surface-not-found', surface };
+        }
+    }
+
+    private resolveDashboardEntity(kind: string, id: string, url: URL) {
+        if (kind === 'run') return this.getRuntime()?.getRun(id);
+        if (kind === 'memory') return this.getMemory()?.trace?.(id) ?? this.getMemory()?.getDetail(id);
+        if (kind === 'skill') return this.getRuntime()?.listSkills().find((item) => item.skillId === id);
+        if (kind === 'workflow') return this.getRuntime()?.listWorkflows().find((item) => item.workflowId === id);
+        if (kind === 'hook') return this.getRuntime()?.listHooks().find((item) => item.hookId === id);
+        if (kind === 'automation') return this.getRuntime()?.listAutomations().find((item) => item.automationId === id);
+        if (kind === 'specialist') return this.getRuntime()?.listSpecialists().find((item) => item.specialistId === id);
+        if (kind === 'crew') return this.getRuntime()?.listCrews().find((item) => item.crewId === id);
+        if (kind === 'client') {
+            const snapshot = this.resolveRuntimeSnapshot(url);
+            const clients = snapshot?.clients?.detected?.length ? snapshot.clients.detected : this.getClientRegistry()?.listClients(this.getAdapters()) ?? [];
+            return clients.find((client: any) => client.clientId === id);
+        }
+        if (kind === 'federation-peer') {
+            const peers = this.getRuntime()?.getNetworkStatus() as { knownPeers?: Array<{ peerId: string }> } | undefined;
+            return peers?.knownPeers?.find((peer) => peer.peerId === id);
+        }
+        return null;
+    }
+
     private async collectHealth(): Promise<DashboardHealthResponse> {
         const packageJsonPath = path.join(this.repoRoot, 'package.json');
         const workflowPath = path.join(this.repoRoot, '.github', 'workflows', 'pages.yml');
@@ -1307,7 +1725,10 @@ export class DashboardServer {
                 runtimeCount: runtimes.length,
                 selectedRuntimeId: runtime?.getRuntimeId() ?? runtimes[0]?.runtimeId ?? null,
             },
-            memory: memory?.getStats() ?? { prefrontal: 0, hippocampus: 0, cortex: 0, totalLinks: 0, oldestEntry: null, topTags: [] },
+            memory: {
+                ...(memory?.getStats() ?? { prefrontal: 0, hippocampus: 0, cortex: 0, totalLinks: 0, oldestEntry: null, topTags: [] }),
+                storage: memory?.getStorageStatus?.() ?? null,
+            },
             pod: {
                 workers: podSnapshot.activeWorkers.length,
                 lastMessageTimestamp: podSnapshot.lastMessageTimestamp,

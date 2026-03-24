@@ -188,9 +188,11 @@ export function planTask(task: ExecutionTask): TaskPlannerOutput {
 }
 
 function decideWorkers(requestedWorkers: number, specialistCount: number, optimizationProfile: OptimizationProfile, fileCount: number): number {
-    if (optimizationProfile === 'max') return Math.max(requestedWorkers, Math.min(7, Math.max(3, specialistCount)));
-    if (specialistCount <= 2 && fileCount <= 2) return Math.min(requestedWorkers, 2);
-    return Math.max(requestedWorkers, Math.min(4, Math.max(2, Math.ceil(specialistCount / 2))));
+    const requested = Math.max(1, requestedWorkers || 1);
+    const workerCap = requested > 4 ? requested : 4;
+    if (optimizationProfile === 'max') return Math.min(workerCap, Math.max(requested, Math.max(3, Math.min(4, specialistCount))));
+    if (specialistCount <= 2 && fileCount <= 2) return Math.min(workerCap, Math.min(requested, 2));
+    return Math.min(workerCap, Math.max(requested, Math.min(4, Math.max(2, Math.ceil(specialistCount / 2)))));
 }
 
 function dedupeStrings(values: string[]): string[] {

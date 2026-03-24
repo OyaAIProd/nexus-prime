@@ -85,6 +85,18 @@ async function runTests() {
     const id2 = mem.store('SQLite flush called on SIGINT before process exit', 0.8, ['#architecture']);
     const id3 = mem.store('git worktree creates isolated branch per phantom worker', 0.8, ['#phantom']);
     const id4 = mem.store('token budget plan: 55% savings on 5 files', 0.7, ['#token-plan']);
+    mem.store('Repo A architecture uses an event bus for orchestration state.', 0.92, ['#workspace'], undefined, 0, {
+        scope: 'project',
+        provenance: { repoId: 'repo-a', workspaceId: 'workspace-a', projectId: 'project-a', lane: 'workspace' },
+    });
+    mem.store('Repo B payment service uses Stripe webhooks for settlement.', 0.92, ['#workspace'], undefined, 0, {
+        scope: 'project',
+        provenance: { repoId: 'repo-b', workspaceId: 'workspace-b', projectId: 'project-b', lane: 'workspace' },
+    });
+    mem.store('Operator prefers concise release notes with bullet summaries.', 0.88, ['#user', '#profile'], undefined, 0, {
+        scope: 'user',
+        provenance: { repoId: 'repo-a', workspaceId: 'workspace-a', projectId: 'project-a', lane: 'profile' },
+    });
 
     assert(typeof id1 === 'string' && id1.length > 0, 'store() returns valid ID');
     assert(typeof id2 === 'string', 'Multiple items stored');
@@ -158,12 +170,47 @@ async function runTests() {
     assert(snapshots.every((snapshot: any) => typeof snapshot.importanceScore === 'number'), 'Snapshots expose importance score');
     const health = mem.getHealthSummary();
     assert(typeof health.shared === 'number', 'Memory health summary exposes shared count');
+    const containerSummary = mem.getContainerSummary();
+    assert(containerSummary.byLane.workspace >= 2, 'Container summary tracks workspace lane counts');
+    assert(containerSummary.byLane.profile >= 1, 'Container summary tracks profile lane counts');
     const exported = mem.exportBundle({ limit: 10 });
     assert(Array.isArray(exported.items) && exported.items.length >= 4, 'Memory export bundle includes stored items');
     const backup = mem.backupBundle({ limit: 10 });
     assert(fs.existsSync(backup.path), 'Memory backup writes a portable bundle file');
     const importResult = mem.importBundle({ path: backup.path });
     assert(typeof importResult.duplicates === 'number', 'Memory import reports duplicate handling');
+
+    const repoScopedResults = await mem.recall('event bus orchestration state', 5, {
+        repoId: 'repo-a',
+        projectId: 'project-a',
+        includeShared: false,
+        includeProfile: false,
+    });
+    assert(repoScopedResults.some((entry: string) => entry.includes('event bus')), 'Repo-scoped recall returns repo A workspace memory');
+    assert(!repoScopedResults.some((entry: string) => entry.includes('Stripe webhooks')), 'Repo-scoped recall excludes repo B workspace memory');
+
+    const crossRepoProfileResults = await mem.recall('concise release notes preference', 5, {
+        repoId: 'repo-b',
+        projectId: 'project-b',
+        includeShared: false,
+        includeProfile: true,
+    });
+    assert(crossRepoProfileResults.some((entry: string) => entry.includes('concise release notes')), 'Profile memory remains available across repos');
+
+    const noisyResult = mem.storeWithControlPlane(
+        'Orchestrated run failed. Run ID: exec_deadbeef. Summary: FAILED. Crew: PDLC Crew. Review gate pm remains blocked.',
+        0.72,
+        ['#runtime-result'],
+        undefined,
+        0,
+        {
+            sessionId: 'session-noise',
+            provenance: { repoId: 'repo-a', workspaceId: 'workspace-a', projectId: 'project-a' },
+        },
+    );
+    const noisyTrace = noisyResult.storedIds[0] ? mem.trace(noisyResult.storedIds[0]) : undefined;
+    assert(Boolean(noisyTrace), 'Noisy orchestration chatter still leaves an inspectable memory trace');
+    assert(noisyTrace?.state === 'quarantined' || noisyTrace?.provenance?.lane === 'inbox', 'Noisy orchestration chatter is routed to inbox or quarantine');
 
     // ── Pre-Compaction Flush ──────────────────────────────────────────────────
     console.log('\n💾 Pre-Compaction Flush');
@@ -177,6 +224,8 @@ async function runTests() {
     
     // Call preCompactionFlush
     pcMem.preCompactionFlush('test-compaction');
+    const preCompactionBackup = pcMem.getLastPreCompactionBackup();
+    assert(Boolean(preCompactionBackup?.path) && fs.existsSync(preCompactionBackup.path), 'Pre-compaction flush records a recoverable backup bundle');
     pcMem.close();
 
     // Reload from disk

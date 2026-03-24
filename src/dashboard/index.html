@@ -783,6 +783,14 @@
             color: var(--text);
         }
 
+        .ghost-button:disabled,
+        .primary-button:disabled,
+        .action-bar button:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            transform: none;
+        }
+
         .compact-chip-wrap {
             position: relative;
             min-width: 0;
@@ -862,21 +870,21 @@
             overflow: auto;
         }
 
-        body[data-surface-mode="knowledge"] .graph-panel,
-        body[data-surface-mode="catalog"] .graph-panel,
-        body[data-surface-mode="governance"] .graph-panel {
+        body[data-surface-mode="memory"] .graph-panel,
+        body[data-surface-mode="assets"] .graph-panel,
+        body[data-surface-mode="trust"] .graph-panel {
             background: var(--panel-strong);
         }
 
-        body[data-surface-mode="knowledge"] .graph-panel > .panel-body,
-        body[data-surface-mode="catalog"] .graph-panel > .panel-body,
-        body[data-surface-mode="governance"] .graph-panel > .panel-body {
+        body[data-surface-mode="memory"] .graph-panel > .panel-body,
+        body[data-surface-mode="assets"] .graph-panel > .panel-body,
+        body[data-surface-mode="trust"] .graph-panel > .panel-body {
             gap: 0.72rem;
         }
 
-        body[data-surface-mode="knowledge"] [data-widget-id="memory-snapshots"],
-        body[data-surface-mode="catalog"] [data-widget-id="memory-snapshots"],
-        body[data-surface-mode="governance"] [data-widget-id="memory-snapshots"] {
+        body[data-surface-mode="memory"] [data-widget-id="memory-snapshots"],
+        body[data-surface-mode="assets"] [data-widget-id="memory-snapshots"],
+        body[data-surface-mode="trust"] [data-widget-id="memory-snapshots"] {
             flex: 1 1 auto;
             margin-top: 0;
             background: rgba(16, 21, 31, 0.96);
@@ -1600,9 +1608,9 @@
                 min-height: 24rem;
             }
 
-            body[data-surface-mode="knowledge"] .graph-panel,
-            body[data-surface-mode="catalog"] .graph-panel,
-            body[data-surface-mode="governance"] .graph-panel {
+            body[data-surface-mode="memory"] .graph-panel,
+            body[data-surface-mode="assets"] .graph-panel,
+            body[data-surface-mode="trust"] .graph-panel {
                 min-height: auto;
             }
 
@@ -1719,14 +1727,14 @@
     <section class="workspace-strip" aria-label="Dashboard views">
         <div class="workspace-summary">
             <div id="surface-tabs" class="segmented">
-                <button data-surface-mode="overview" class="active">Overview</button>
-                <button data-surface-mode="knowledge">Knowledge</button>
+                <button data-surface-mode="operate" class="active">Operate</button>
+                <button data-surface-mode="memory">Memory</button>
                 <button data-surface-mode="runs">Runs</button>
-                <button data-surface-mode="catalog">Catalog</button>
-                <button data-surface-mode="governance">Governance</button>
+                <button data-surface-mode="assets">Assets</button>
+                <button data-surface-mode="trust">Trust</button>
             </div>
         </div>
-        <div id="surface-note" class="surface-note">Overview keeps runtime truth, lifetime token telemetry, and memory context in focus.</div>
+        <div id="surface-note" class="surface-note">Operate keeps runtime health, the current goal, recent run state, and key alerts in focus.</div>
     </section>
 
     <main class="layout" style="position:relative;">
@@ -1970,9 +1978,9 @@
                 </div>
             </section>
 
-            <section class="panel" data-widget-id="actions-panel" data-widget-title="Operator Actions" data-widget-subtitle="Local dashboard controls for planning, execution, and runtime-specific overrides.">
+            <section class="panel" data-widget-id="actions-panel" data-widget-title="Run Controls" data-widget-subtitle="Guided local controls for planning, execution, and runtime-specific overrides.">
                 <div class="panel-header">
-                    <h2>Operator Actions</h2>
+                    <h2>Run Controls</h2>
                     <div class="panel-actions">
                         <button type="button" class="widget-action" data-focus-toggle="actions-panel" aria-pressed="false">Expand</button>
                         <span class="badge">Guarded</span>
@@ -1982,58 +1990,62 @@
                     <form id="execute-form" class="control-grid">
                         <div class="field">
                             <label for="goal-input">Goal</label>
-                            <textarea id="goal-input" placeholder="Run a bounded local task through the runtime."></textarea>
+                            <textarea id="goal-input" placeholder="Launch a guided local task through the runtime."></textarea>
                         </div>
                         <div class="field">
                             <label for="files-input">Files</label>
                             <input id="files-input" type="text" placeholder="src/a.ts, src/b.ts">
                         </div>
-                        <div class="field">
-                            <label for="skills-input">Skills</label>
-                            <input id="skills-input" type="text" placeholder="backend-playbook, orchestration-playbook">
-                        </div>
-                        <div class="field">
-                            <label for="crews-input">Crews</label>
-                            <input id="crews-input" type="text" placeholder="implementation, pdlc">
-                        </div>
-                        <div class="field">
-                            <label for="specialists-input">Specialists</label>
-                            <input id="specialists-input" type="text" placeholder="frontend developer, qa engineer">
-                        </div>
-                        <div class="field">
-                            <label for="workflows-input">Workflows</label>
-                            <input id="workflows-input" type="text" placeholder="backend-execution-loop">
-                        </div>
-                        <div class="inline-fields">
-                            <div class="field">
-                                <label for="workers-input">Workers</label>
-                                <input id="workers-input" type="number" min="2" max="7" value="2">
+                        <details id="advanced-run-controls" class="card" style="margin:0; border-color: rgba(255,255,255,0.08); background: rgba(255,255,255,0.02);">
+                            <summary style="cursor:pointer; font-size:0.82rem; font-weight:600; color:var(--muted);">Advanced controls</summary>
+                            <div class="field" style="margin-top:0.75rem;">
+                                <label for="skills-input">Skills</label>
+                                <input id="skills-input" type="text" placeholder="backend-playbook, orchestration-playbook">
                             </div>
                             <div class="field">
-                                <label for="memory-backend">Memory Backend</label>
-                                <select id="memory-backend"></select>
+                                <label for="crews-input">Crews</label>
+                                <input id="crews-input" type="text" placeholder="implementation, pdlc">
                             </div>
                             <div class="field">
-                                <label for="compression-backend">Compression Backend</label>
-                                <select id="compression-backend"></select>
+                                <label for="specialists-input">Specialists</label>
+                                <input id="specialists-input" type="text" placeholder="frontend developer, qa engineer">
                             </div>
                             <div class="field">
-                                <label for="dsl-backend">DSL Compiler</label>
-                                <select id="dsl-backend"></select>
+                                <label for="workflows-input">Workflows</label>
+                                <input id="workflows-input" type="text" placeholder="backend-execution-loop">
                             </div>
-                            <div class="field">
-                                <label for="optimization-profile">Optimization</label>
-                                <select id="optimization-profile">
-                                    <option value="standard" selected>Standard</option>
-                                    <option value="max">Max</option>
-                                </select>
+                            <div class="inline-fields">
+                                <div class="field">
+                                    <label for="workers-input">Workers</label>
+                                    <input id="workers-input" type="number" min="2" max="7" value="2">
+                                </div>
+                                <div class="field">
+                                    <label for="memory-backend">Memory Backend</label>
+                                    <select id="memory-backend"></select>
+                                </div>
+                                <div class="field">
+                                    <label for="compression-backend">Compression Backend</label>
+                                    <select id="compression-backend"></select>
+                                </div>
+                                <div class="field">
+                                    <label for="dsl-backend">DSL Compiler</label>
+                                    <select id="dsl-backend"></select>
+                                </div>
+                                <div class="field">
+                                    <label for="optimization-profile">Optimization</label>
+                                    <select id="optimization-profile">
+                                        <option value="standard" selected>Standard</option>
+                                        <option value="max">Max</option>
+                                    </select>
+                                </div>
                             </div>
-                        </div>
+                        </details>
                         <div class="action-bar">
                             <button id="plan-button" type="button" class="ghost-button">Plan Run</button>
-                            <button type="submit" class="primary-button">Execute Run</button>
+                            <button id="execute-button" type="submit" class="primary-button">Execute Run</button>
                             <button id="refresh-button" type="button" class="ghost-button">Refresh All</button>
                         </div>
+                        <div id="action-guard-hint" class="meta">Advanced controls stay available, but they remain out of the default path.</div>
                         <div id="control-status" class="meta">Dashboard actions stay local and route through the runtime.</div>
                     </form>
                 </div>
@@ -2072,8 +2084,8 @@
     <div id="drawer-backdrop" class="drawer-backdrop"></div>
 
     <script>
-        const DASHBOARD_API_VERSION = '3';
-        const REQUIRED_CAPABILITIES = ['runs', 'memory', 'pod', 'clients', 'events', 'stream', 'specialists', 'crews', 'planner', 'hooks', 'automations', 'federation', 'orchestration', 'tokens', 'tokenSources', 'clientPrimary', 'instructionPacket', 'orchestrationLedger', 'knowledgeFabric', 'ragCollections', 'patterns', 'modelTiers', 'workerPlan', 'artifactOutcomes', 'memoryTrace', 'memoryShared', 'worktreeHealth', 'featureRegistry', 'synapse', 'architects'];
+        const DASHBOARD_API_VERSION = '4';
+        const REQUIRED_CAPABILITIES = ['runs', 'memory', 'pod', 'clients', 'events', 'stream', 'specialists', 'crews', 'planner', 'hooks', 'automations', 'federation', 'orchestration', 'tokens', 'tokenSources', 'clientPrimary', 'instructionPacket', 'orchestrationLedger', 'knowledgeFabric', 'ragCollections', 'patterns', 'modelTiers', 'workerPlan', 'artifactOutcomes', 'memoryTrace', 'memoryShared', 'worktreeHealth', 'featureRegistry', 'synapse', 'architects', 'dashboardSummary', 'dashboardSurfaces', 'nexusLayer'];
 
         function createResourceState() {
             return { status: 'idle', error: '', fetchedAt: 0, lastSource: 'idle' };
@@ -2124,24 +2136,45 @@
             federation: { localNode: null, knownPeers: [], activePeerLinks: 0, relayLearnings: [], tracesPublished: 0 },
             events: [],
             plannerPreview: null,
-            surfaceMode: 'overview',
+            surfaceMode: 'operate',
             graphMode: 'memory',
             memoryViewMode: 'graph',
             showPhantomLearnings: false,
-            libraryMode: 'memories',
+            libraryMode: 'operate',
             workspaceViews: {
-                overview: 'memories',
-                knowledge: 'knowledge',
+                operate: 'operate',
+                memory: 'memories',
                 runs: 'planning',
-                catalog: 'platform',
-                governance: 'governance',
+                assets: 'platform',
+                trust: 'trust',
             },
+            operatorAlerts: [],
+            nexusLayer: null,
+            summaryLatestRun: null,
+            gateSummary: null,
+            tokenOptimization: null,
+            memoryContainers: null,
+            interpretationIssues: [],
+            preCompactionBackup: null,
+            memoryWorkspace: [],
+            memoryProfile: [],
+            memoryInbox: [],
+            memoryQualitySummary: null,
+            selectionAudit: null,
+            parallelism: null,
+            memorySearchQuery: '',
             eventFilter: 'all',
             selected: null,
             streamConnected: false,
             lastRefreshAt: 0,
             banner: null,
             resources: {
+                dashboardSummary: createResourceState(),
+                surfaceOperate: createResourceState(),
+                surfaceMemory: createResourceState(),
+                surfaceRuns: createResourceState(),
+                surfaceAssets: createResourceState(),
+                surfaceTrust: createResourceState(),
                 health: createResourceState(),
                 backends: createResourceState(),
                 runs: createResourceState(),
@@ -2189,7 +2222,116 @@
 
         let _focusState = null;
 
+        function assignDashboardBundle(value) {
+            if (!value || typeof value !== 'object') return;
+            if (value.health) state.health = value.health;
+            if (Array.isArray(value.runtimes)) state.runtimes = value.runtimes;
+            if (value.usage) state.usage = value.usage;
+            if (Array.isArray(value.runs)) state.runs = value.runs;
+            if (value.orchestrationSession) state.orchestrationSession = value.orchestrationSession;
+            if (value.orchestrationLedger) state.orchestrationLedger = value.orchestrationLedger;
+            if (value.workerPlan) state.workerPlan = value.workerPlan;
+            if (value.artifactOutcomes) state.artifactOutcomes = value.artifactOutcomes;
+            if (value.instructionPacket) state.instructionPacket = value.instructionPacket;
+            if (value.knowledgeFabricSession) state.knowledgeFabricSession = value.knowledgeFabricSession;
+            if (value.knowledgeProvenance) state.knowledgeProvenance = value.knowledgeProvenance;
+            if (value.tokensSummary) state.tokensSummary = value.tokensSummary;
+            if (Array.isArray(value.tokensTimeline)) state.tokensTimeline = value.tokensTimeline;
+            if (value.tokensBySource) state.tokensBySource = value.tokensBySource;
+            if (Array.isArray(value.skills)) state.skills = value.skills;
+            if (Array.isArray(value.specialists)) state.specialists = value.specialists;
+            if (Array.isArray(value.crews)) state.crews = value.crews;
+            if (Array.isArray(value.workflows)) state.workflows = value.workflows;
+            if (Array.isArray(value.hooks)) state.hooks = value.hooks;
+            if (Array.isArray(value.automations)) state.automations = value.automations;
+            if (value.featureRegistry) state.featureRegistry = value.featureRegistry;
+            if (Array.isArray(value.ragCollections)) state.ragCollections = value.ragCollections;
+            if (Array.isArray(value.patterns)) state.patterns = value.patterns;
+            if (value.modelTiers) state.modelTiers = value.modelTiers;
+            if (Array.isArray(value.memory)) state.memories = value.memory;
+            if (Array.isArray(value.workspace)) state.memoryWorkspace = value.workspace;
+            if (Array.isArray(value.profile)) state.memoryProfile = value.profile;
+            if (Array.isArray(value.shared)) state.memoryShared = value.shared;
+            if (Array.isArray(value.inbox)) state.memoryInbox = value.inbox;
+            if (value.memoryHealth) state.memoryHealth = value.memoryHealth;
+            if (value.memoryContainers) state.memoryContainers = value.memoryContainers;
+            if (value.qualitySummary) state.memoryQualitySummary = value.qualitySummary;
+            if (value.memoryAudit) state.memoryAudit = value.memoryAudit;
+            if (Array.isArray(value.memoryQuarantine)) state.memoryQuarantine = value.memoryQuarantine;
+            if (Array.isArray(value.memoryShared)) state.memoryShared = value.memoryShared;
+            if (value.gateSummary) state.gateSummary = value.gateSummary;
+            if (value.tokenOptimization) state.tokenOptimization = value.tokenOptimization;
+            if (Array.isArray(value.interpretationIssues)) state.interpretationIssues = value.interpretationIssues;
+            if (value.preCompactionBackup) state.preCompactionBackup = value.preCompactionBackup;
+            if (value.selectionAudit) state.selectionAudit = value.selectionAudit;
+            if (value.parallelism) state.parallelism = value.parallelism;
+            if (value.worktreeHealth) state.worktreeHealth = value.worktreeHealth;
+            if (value.backends) state.backends = value.backends;
+            if (Array.isArray(value.clients)) state.clients = value.clients;
+            if (value.primaryClient) state.primaryClient = Object.keys(value.primaryClient).length ? value.primaryClient : null;
+            if (value.federation) state.federation = value.federation;
+            if (Array.isArray(value.synapseTeams)) state.synapseTeams = value.synapseTeams;
+            if (Array.isArray(value.synapseHealth)) state.synapseHealth = value.synapseHealth;
+            if (Array.isArray(value.synapseApprovals)) state.synapseApprovals = value.synapseApprovals;
+            if (value.architectsDispatch) state.architectsDispatch = value.architectsDispatch;
+            if (Array.isArray(value.architectsEscalations)) state.architectsEscalations = value.architectsEscalations;
+            if (value.nexusLayer) state.nexusLayer = value.nexusLayer;
+            if (Array.isArray(value.alerts)) state.operatorAlerts = value.alerts;
+            if (value.latestRun) state.summaryLatestRun = value.latestRun;
+            if (!state.selectedRuntimeId && value.selectedRuntimeId) {
+                state.selectedRuntimeId = value.selectedRuntimeId;
+            }
+        }
+
         const RESOURCE_LOADERS = {
+            dashboardSummary: {
+                url: '/api/dashboard/summary',
+                dynamic: true,
+                ttlMs: 5000,
+                assign(value) {
+                    assignDashboardBundle(value);
+                },
+            },
+            surfaceOperate: {
+                url: '/api/dashboard/surface/operate',
+                dynamic: true,
+                ttlMs: 5000,
+                assign(value) {
+                    assignDashboardBundle(value);
+                },
+            },
+            surfaceMemory: {
+                url: '/api/dashboard/surface/memory',
+                dynamic: true,
+                ttlMs: 5000,
+                assign(value) {
+                    assignDashboardBundle(value);
+                },
+            },
+            surfaceRuns: {
+                url: '/api/dashboard/surface/runs',
+                dynamic: true,
+                ttlMs: 5000,
+                assign(value) {
+                    assignDashboardBundle(value);
+                },
+            },
+            surfaceAssets: {
+                url: '/api/dashboard/surface/assets',
+                dynamic: true,
+                ttlMs: 5000,
+                assign(value) {
+                    assignDashboardBundle(value);
+                },
+            },
+            surfaceTrust: {
+                url: '/api/dashboard/surface/trust',
+                dynamic: true,
+                ttlMs: 5000,
+                assign(value) {
+                    assignDashboardBundle(value);
+                },
+            },
             runs: {
                 url: '/api/runs?limit=20',
                 assign(value) {
@@ -2496,30 +2638,30 @@
         };
 
         const surfaceModes = {
-            overview: {
-                note: 'Overview keeps runtime truth, lifetime token telemetry, and memory context in focus.',
+            operate: {
+                note: 'Operate keeps runtime health, the current goal, recent run state, and key alerts in focus.',
                 graphMode: 'memory',
                 eventFilter: 'all',
                 memoryViewMode: 'graph',
-                defaultLibraryMode: 'memories',
-                graphTitle: 'Memory Explorer',
-                graphSubtitle: 'Select a node to inspect context, trace lineage, and keep runtime state in view.',
-                libraryTitle: 'Memory Snapshots',
-                librarySubtitle: 'Select, inspect, and trace why a memory matters across runtime links and session history.',
+                defaultLibraryMode: 'operate',
+                graphTitle: 'Operator Context Graph',
+                graphSubtitle: 'Inspect the current memory graph without burying the active operator loop.',
+                libraryTitle: 'Operate',
+                librarySubtitle: 'Start from runtime status, the latest run, memory health, and the next guided action.',
                 showGraph: true,
                 showGraphModeRail: true,
                 showMemoryViewRail: true,
             },
-            knowledge: {
-                note: 'Knowledge centers RAG collections, provenance, by-source budgeting, and attached context.',
+            memory: {
+                note: 'Memory centers search, trace, shared context, and context sources for the selected runtime.',
                 graphMode: 'memory',
                 eventFilter: 'tokens',
                 memoryViewMode: 'graph',
-                defaultLibraryMode: 'knowledge',
-                graphTitle: 'Knowledge Fabric',
-                graphSubtitle: 'RAG collections, injection path, provenance, and source mix for the selected runtime.',
-                libraryTitle: 'Knowledge Fabric',
-                librarySubtitle: 'Create, ingest, attach, and inspect session-first RAG without leaving the workspace.',
+                defaultLibraryMode: 'memories',
+                graphTitle: 'Memory Explorer',
+                graphSubtitle: 'Search memory, follow lineage, and inspect context sources for the selected runtime.',
+                libraryTitle: 'Memory',
+                librarySubtitle: 'Search memory first, then drill into trace, shared context, and attached sources.',
                 showGraph: false,
                 showGraphModeRail: false,
                 showMemoryViewRail: false,
@@ -2538,30 +2680,30 @@
                 showGraphModeRail: false,
                 showMemoryViewRail: false,
             },
-            catalog: {
-                note: 'Catalog separates what is available from what the selected runtime actually used.',
+            assets: {
+                note: 'Assets separates what is available from what the selected runtime actually used.',
                 graphMode: 'pod',
                 eventFilter: 'skills',
                 memoryViewMode: 'graph',
                 defaultLibraryMode: 'platform',
-                graphTitle: 'Catalog Inventory',
+                graphTitle: 'Asset Inventory',
                 graphSubtitle: 'Skills, workflows, crews, hooks, automations, and generated registry surfaces.',
-                libraryTitle: 'Catalog Inventory',
+                libraryTitle: 'Assets',
                 librarySubtitle: 'Review what exists, what is usable, and what the runtime actually selected.',
                 showGraph: false,
                 showGraphModeRail: false,
                 showMemoryViewRail: false,
             },
-            governance: {
-                note: 'Governance focuses on guardrails, review gates, quarantine, federation health, and relay status.',
+            trust: {
+                note: 'Trust focuses on guardrails, quarantine, federation health, client drift, and worktree state.',
                 graphMode: 'memory',
                 eventFilter: 'shield',
                 memoryViewMode: 'timeline',
-                defaultLibraryMode: 'governance',
-                graphTitle: 'Governance Console',
+                defaultLibraryMode: 'trust',
+                graphTitle: 'Trust Console',
                 graphSubtitle: 'Review guardrails, quarantines, worktree health, and federation state without the graph shell in the way.',
-                libraryTitle: 'Governance Console',
-                librarySubtitle: 'Inspect quarantines, guardrails, federation status, and worktree health for the selected runtime.',
+                libraryTitle: 'Trust',
+                librarySubtitle: 'Inspect quarantine, trust checks, federation status, and worktree health for the selected runtime.',
                 showGraph: false,
                 showGraphModeRail: false,
                 showMemoryViewRail: false,
@@ -2569,13 +2711,19 @@
         };
 
         const workspaceTabs = {
-            overview: [],
-            knowledge: [],
+            operate: [],
+            memory: [
+                { mode: 'memories', label: 'Search Memory' },
+                { mode: 'profile', label: 'Profile' },
+                { mode: 'shared', label: 'Shared' },
+                { mode: 'inbox', label: 'Inbox & Trust' },
+                { mode: 'knowledge', label: 'Context Sources' },
+            ],
             runs: [
                 { mode: 'planning', label: 'Plan' },
                 { mode: 'workflows', label: 'Workflows' },
             ],
-            catalog: [
+            assets: [
                 { mode: 'platform', label: 'Platform' },
                 { mode: 'skills', label: 'Skills' },
                 { mode: 'specialists', label: 'Roster' },
@@ -2584,8 +2732,8 @@
                 { mode: 'hooks', label: 'Hooks' },
                 { mode: 'automations', label: 'Autos' },
             ],
-            governance: [
-                { mode: 'governance', label: 'Governance' },
+            trust: [
+                { mode: 'trust', label: 'Trust' },
                 { mode: 'federation', label: 'Federation' },
             ],
         };
@@ -2645,8 +2793,24 @@
             return 'info';
         }
 
+        function renderMemoryCards(memories, emptyMessage) {
+            return memories.length
+                ? memories.map((memory) => `
+                    <div class="card interactive ${state.selected?.kind === 'memory' && state.selected.id === memory.id ? 'active' : ''}" data-kind="memory" data-id="${escapeHtml(memory.id)}">
+                        <div class="card-title">
+                            <strong>${escapeHtml(memory.excerpt)}</strong>
+                            <span class="state-chip ${stateClass(memory.state === 'quarantined' ? 'warn' : memory.tier)}">${escapeHtml(memory.state === 'quarantined' ? 'inbox' : memory.tier)}</span>
+                        </div>
+                        <div class="meta">${formatDate(memory.timestamp)} · priority ${Number(memory.priority || 0).toFixed(2)} · trust ${Number(memory.trustScore || 0).toFixed(2)} · importance ${Number(memory.importanceScore || 0).toFixed(2)}</div>
+                        <div class="meta">scope ${escapeHtml(memory.scope || 'session')} · source ${escapeHtml(memory.source || 'runtime')} · lane ${escapeHtml(memory.provenance?.lane || 'workspace')}</div>
+                        <div class="list-inline">${(memory.tags || []).slice(0, 5).map((tag) => chip(tag)).join('')}</div>
+                    </div>
+                `).join('')
+                : emptyState(emptyMessage);
+        }
+
         function getSurfaceConfig(mode = state.surfaceMode) {
-            return surfaceModes[mode] || surfaceModes.overview;
+            return surfaceModes[mode] || surfaceModes.operate;
         }
 
         function getWorkspaceTabs(mode = state.surfaceMode) {
@@ -2660,6 +2824,34 @@
             return tabs.length && !tabs.some((tab) => tab.mode === savedMode)
                 ? config.defaultLibraryMode
                 : savedMode;
+        }
+
+        function getSurfaceLoaderName(mode = state.surfaceMode) {
+            const map = {
+                operate: 'surfaceOperate',
+                memory: 'surfaceMemory',
+                runs: 'surfaceRuns',
+                assets: 'surfaceAssets',
+                trust: 'surfaceTrust',
+            };
+            return map[mode] || 'surfaceOperate';
+        }
+
+        function getDefaultRefreshTargets(mode = state.surfaceMode) {
+            return ['dashboardSummary', getSurfaceLoaderName(mode), 'events'];
+        }
+
+        function isRuntimeStale() {
+            return getSelectedRuntime()?.health === 'stale';
+        }
+
+        function getActionGuard() {
+            return isRuntimeStale()
+                ? {
+                    disabled: true,
+                    reason: 'Selected runtime is stale. Refresh or switch runtimes before mutating state.',
+                }
+                : { disabled: false, reason: '' };
         }
 
         function getWidgetRoot(widgetId) {
@@ -3046,7 +3238,7 @@
             bar.classList.add('active');
             const targets = resourceNames?.length
                 ? resourceNames.filter((name, index, list) => RESOURCE_LOADERS[name] && list.indexOf(name) === index)
-                : Object.keys(RESOURCE_LOADERS);
+                : getDefaultRefreshTargets();
             const force = Boolean(options.force);
             const refreshedTargets = [];
 
@@ -3069,7 +3261,13 @@
             reconcileBanner();
             populateBackendSelects();
 
-            const shouldRefreshMemorySelection = targets.includes('memory') || targets.includes('memoryHealth') || targets.includes('memoryAudit') || targets.includes('memoryQuarantine') || !resourceNames;
+            const shouldRefreshMemorySelection = targets.includes('memory')
+                || targets.includes('memoryHealth')
+                || targets.includes('memoryAudit')
+                || targets.includes('memoryQuarantine')
+                || targets.includes('surfaceOperate')
+                || targets.includes('surfaceMemory')
+                || !resourceNames;
             const focusMemoryId = shouldRefreshMemorySelection
                 ? state.selected?.kind === 'memory'
                     ? state.selected.id
@@ -3184,7 +3382,7 @@
         }
 
         function scheduleRefresh(resourceNames = null) {
-            const targets = resourceNames?.length ? resourceNames : Object.keys(RESOURCE_LOADERS);
+            const targets = resourceNames?.length ? resourceNames : getDefaultRefreshTargets();
             targets.forEach((name) => {
                 if (RESOURCE_LOADERS[name]) _pendingRefreshTargets.add(name);
             });
@@ -3327,6 +3525,7 @@
             state.workspaceViews[mode] = getWorkspaceMode(mode);
             state.libraryMode = state.workspaceViews[mode] || next.defaultLibraryMode;
             render();
+            void refreshAll(['dashboardSummary', getSurfaceLoaderName(mode)]);
         }
 
         function computeSpendData() {
@@ -3410,7 +3609,7 @@
         }
 
         function renderSurfaceMode() {
-            const note = surfaceModes[state.surfaceMode]?.note || surfaceModes.overview.note;
+            const note = surfaceModes[state.surfaceMode]?.note || surfaceModes.operate.note;
             $('surface-note').textContent = note;
             document.querySelectorAll('#surface-tabs button').forEach((button) => {
                 button.classList.toggle('active', button.dataset.surfaceMode === state.surfaceMode);
@@ -4142,6 +4341,7 @@
 
             const executionMode = usage.executionMode || runtime.executionMode || state.orchestrationSession?.mode || runtime.orchestration?.mode || 'single-pass';
             const toolChain = recentTools.length ? recentTools.join(' → ') : 'n/a';
+            const storage = state.health?.memory?.storage || null;
             summary.innerHTML = [
                 summaryChip('runtime', shortLabel(runtime.runtimeId, 22), runtime.health === 'stale' ? 'warn' : 'good'),
                 summaryChip('state', runtime.health === 'stale' ? 'stale' : 'active', runtime.health === 'stale' ? 'warn' : 'good'),
@@ -4152,9 +4352,22 @@
                 summaryChip('orchestrate', orchestrateCalled ? 'on' : 'off', orchestrateCalled ? 'good' : 'warn'),
                 summaryChip('plan', usage.plannerApplied ? 'on' : 'off', usage.plannerApplied ? 'good' : 'info'),
                 summaryChip('tokens', usage.tokenOptimizationApplied ? 'on' : 'off', usage.tokenOptimizationApplied ? 'good' : 'info'),
+                storage?.fallbackApplied ? summaryChip('storage', 'fallback', 'warn') : '',
                 recentTools.length ? summaryChip('tools', toolChain, 'info') : '',
                 summaryChip('activity', formatAgo(runtime.lastActivityAt), 'info'),
             ].filter(Boolean).join('');
+
+            const guard = getActionGuard();
+            ['plan-button', 'execute-button', 'refresh-button'].forEach((id) => {
+                const button = $(id);
+                if (!button) return;
+                button.disabled = id !== 'refresh-button' ? guard.disabled : false;
+                button.title = id !== 'refresh-button' && guard.disabled ? guard.reason : '';
+            });
+            const actionHint = $('action-guard-hint');
+            if (actionHint) {
+                actionHint.textContent = guard.disabled ? guard.reason : 'Advanced controls stay available, but they remain out of the default path.';
+            }
         }
 
         function renderPlannerLedgerTable(ledger) {
@@ -4207,21 +4420,29 @@
                 tabsRail.innerHTML = '';
             }
             const titles = {
+                operate: 'Operate',
                 memories: 'Memory Snapshots',
+                profile: 'Profile Memory',
+                shared: 'Shared Memory',
+                inbox: 'Inbox & Trust',
                 platform: 'Platform Registry',
                 skills: 'Skills',
                 specialists: 'Specialist Roster',
                 crews: 'Crew Templates',
-                knowledge: 'Knowledge Fabric',
+                knowledge: 'Context Sources',
                 planning: 'Task Planner',
                 workflows: 'Workflows',
                 hooks: 'Hooks',
                 automations: 'Automations',
-                governance: 'Memory Governance',
+                trust: 'Trust Console',
                 federation: 'Federation Mesh',
             };
             const subtitles = {
+                operate: 'Start with runtime status, alerts, and the latest run before opening advanced controls.',
                 memories: 'Select, inspect, and trace why a memory matters across runtime links and session history.',
+                profile: 'Stable operator preferences and cross-repo memory that should stay durable.',
+                shared: 'Explicitly shared verified memory that can travel across runs and collaborators.',
+                inbox: 'Noisy, low-confidence, contradictory, or quarantined memory candidates awaiting review.',
                 platform: 'See the shared product inventory: MCP surfaces, client bootstrap targets, dashboard capabilities, runtime subsystems, and release gates.',
                 skills: 'Compare what the runtime can activate with what the selected runtime actually used.',
                 specialists: 'Review specialist authority, mission fit, and operator-facing role coverage.',
@@ -4231,7 +4452,7 @@
                 workflows: 'Track reusable execution loops, their guardrails, and when they get selected.',
                 hooks: 'Inspect runtime checkpoints and the artifact selectors they inject into a run.',
                 automations: 'Review bounded follow-ups, trigger modes, and connector-facing delivery behavior.',
-                governance: 'Inspect quarantines, guardrails, and the reasons a memory or run path is blocked.',
+                trust: 'Inspect quarantines, guardrails, and the reasons a memory or run path is blocked.',
                 federation: 'See peer inventory, relay status, and what the selected runtime exchanged with the mesh.',
             };
             $('library-title').textContent = surface.libraryTitle || titles[state.libraryMode];
@@ -4242,10 +4463,112 @@
             }
             const container = $('library-list');
 
-            if (state.libraryMode === 'memories') {
+            if (state.libraryMode === 'operate') {
+                const runtime = getSelectedRuntime() || {};
+                const usage = state.usage || runtime || {};
+                const latestRun = state.summaryLatestRun || state.runs[0] || runtime.latestRun || null;
+                const alerts = Array.isArray(state.operatorAlerts) ? state.operatorAlerts : [];
+                const memoryHealth = state.memoryHealth || {};
+                const gateSummary = state.gateSummary || {};
+                const tokenOptimization = state.tokenOptimization || {};
+                const memoryContainers = state.memoryContainers || {};
+                const interpretationIssues = Array.isArray(state.interpretationIssues) ? state.interpretationIssues : [];
+                const recentMemories = Array.isArray(state.memories) ? state.memories.slice(0, 6) : [];
+                container.innerHTML = `
+                    <div class="metrics-grid">
+                        <div class="hero-metric">
+                            <label>Runtime</label>
+                            <strong>${escapeHtml(runtime.runtimeId || 'Awaiting runtime')}</strong>
+                            <div class="meta">${escapeHtml(runtime.health === 'stale' ? 'Stale snapshot. Refresh or switch runtimes before mutating.' : usage.sequenceCompliance?.summary || 'Runtime ready for guided work.')}</div>
+                        </div>
+                        <div class="hero-metric">
+                            <label>Latest Run</label>
+                            <strong>${escapeHtml(latestRun?.runId || 'No run yet')}</strong>
+                            <div class="meta">${escapeHtml(latestRun?.goal || 'Use Run Controls to launch a guided task.')}</div>
+                        </div>
+                        <div class="hero-metric">
+                            <label>Optimization</label>
+                            <strong>${escapeHtml(tokenOptimization.applied ? 'on' : 'off')}</strong>
+                            <div class="meta">${escapeHtml(tokenOptimization.applied ? `${formatNumber(tokenOptimization.savedTokens || 0)} tokens saved` : 'No source-aware token optimization reported yet.')}</div>
+                        </div>
+                        <div class="hero-metric">
+                            <label>Gate Status</label>
+                            <strong>${formatNumber(gateSummary.ready || 0)}/${formatNumber(gateSummary.total || 0)}</strong>
+                            <div class="meta">${escapeHtml(gateSummary.blocked ? `${gateSummary.blocked} blocked` : 'No blocked review gates on the latest run.')}</div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Quick Start</strong>
+                            <span class="state-chip info">First fold</span>
+                        </div>
+                        <div class="list-inline">
+                            ${chip('1. Search memory')}
+                            ${chip('2. Inspect a run')}
+                            ${chip('3. Launch a guided task')}
+                            ${chip('4. Open advanced controls')}
+                        </div>
+                        <div class="meta">The right rail keeps Run Controls local. Advanced asset, backend, and rollout choices stay collapsed until you need them.</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Operator Truth</strong>
+                            <span class="state-chip ${stateClass(tokenOptimization.applied ? 'active' : 'warn')}">${escapeHtml(tokenOptimization.applied ? 'optimized' : 'baseline')}</span>
+                        </div>
+                        <div class="list-inline">
+                            ${chip(`workspace:${formatNumber(memoryContainers?.byLane?.workspace || 0)}`)}
+                            ${chip(`profile:${formatNumber(memoryContainers?.byLane?.profile || 0)}`)}
+                            ${chip(`shared:${formatNumber(memoryContainers?.byLane?.shared || 0)}`)}
+                            ${chip(`inbox:${formatNumber(memoryContainers?.byLane?.inbox || 0)}`)}
+                            ${chip(`memory:${formatNumber(memoryHealth.total || 0)}`)}
+                        </div>
+                        <div class="meta">${escapeHtml(tokenOptimization.reason || alerts[0]?.summary || 'No source-aware token budget reason recorded yet.')}</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Operator Alerts</strong>
+                            <span class="state-chip ${stateClass(alerts.length ? 'warn' : 'ready')}">${escapeHtml(alerts.length ? 'review' : 'clear')}</span>
+                        </div>
+                        ${alerts.length
+                            ? renderSmallList(alerts.map((alert) => ({
+                                label: alert.title,
+                                meta: alert.summary,
+                            })))
+                            : '<div class="meta">No blocking operator alerts.</div>'}
+                    </div>
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Interpretation Issues</strong>
+                            <span class="state-chip ${stateClass(interpretationIssues.length ? 'warn' : 'ready')}">${escapeHtml(interpretationIssues.length ? 'watch' : 'clear')}</span>
+                        </div>
+                        ${interpretationIssues.length
+                            ? renderSmallList(interpretationIssues.map((issue) => ({
+                                label: issue.summary,
+                                meta: issue.severity,
+                            })))
+                            : '<div class="meta">No selection or MCP interpretation issues are currently flagged.</div>'}
+                    </div>
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Recent Memory</strong>
+                            <span class="state-chip info">${formatNumber(recentMemories.length)}</span>
+                        </div>
+                        ${recentMemories.length
+                            ? renderSmallList(recentMemories.map((memory) => ({
+                                label: memory.excerpt,
+                                meta: `${memory.scope} · ${memory.state} · ${formatAgo(memory.timestamp)}`,
+                                action: `memory:${memory.id}`,
+                            })))
+                            : '<div class="meta">No recent memory available yet.</div>'}
+                    </div>
+                `;
+            } else if (state.libraryMode === 'memories') {
                 const memoryHealth = state.memoryHealth || {};
                 const memoryScopeUsage = state.usage?.memoryScopeUsage || {};
                 const sharedMemory = Array.isArray(state.memoryShared) ? state.memoryShared : [];
+                const workspaceMemories = Array.isArray(state.memoryWorkspace) && state.memoryWorkspace.length ? state.memoryWorkspace : state.memories;
+                const qualitySummary = state.memoryQualitySummary || {};
+                const query = String(state.memorySearchQuery || '').trim().toLowerCase();
                 const memoryHealthCard = `
                     <div class="card">
                         <div class="card-title">
@@ -4271,6 +4594,19 @@
                         </div>
                         <div class="meta">${escapeHtml(Object.entries(memoryScopeUsage.byState || {}).length ? Object.entries(memoryScopeUsage.byState || {}).map(([name, count]) => `${name}:${count}`).join(' · ') : 'Shared, session, project, user, and promoted scopes appear here after orchestration.')}</div>
                     </div>
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Container Quality</strong>
+                            <span class="state-chip ${stateClass((qualitySummary.inbox || 0) > 0 ? 'warn' : 'ready')}">${escapeHtml(formatNumber(qualitySummary.workspace || 0))} workspace</span>
+                        </div>
+                        <div class="list-inline">
+                            ${chip(`profile:${formatNumber(qualitySummary.profile || 0)}`)}
+                            ${chip(`shared:${formatNumber(qualitySummary.shared || 0)}`)}
+                            ${chip(`inbox:${formatNumber(qualitySummary.inbox || 0)}`)}
+                            ${chip(`hidden:${formatNumber(qualitySummary.hiddenCount || 0)}`)}
+                        </div>
+                        <div class="meta">${escapeHtml((qualitySummary.topTags || []).length ? `Top visible tags: ${(qualitySummary.topTags || []).join(' · ')}` : 'Workspace memory is the default active working set for this repo.')}</div>
+                    </div>
                     ${sharedMemory.length ? `
                         <div class="card">
                             <div class="card-title">
@@ -4285,24 +4621,75 @@
                         </div>
                     ` : ''}
                 `;
-                const memoryList = resourceFailed('memory') && !state.memories.length
-                    ? emptyState('Memory endpoint unavailable.')
-                    : state.memories.length
-                    ? state.memories.map((memory) => `
-                        <div class="card interactive ${state.selected?.kind === 'memory' && state.selected.id === memory.id ? 'active' : ''}" data-kind="memory" data-id="${escapeHtml(memory.id)}">
-                            <div class="card-title">
-                                <strong>${escapeHtml(memory.excerpt)}</strong>
-                                <span class="state-chip ${stateClass(memory.tier)}">${escapeHtml(memory.tier)}</span>
-                            </div>
-                            <div class="meta">${formatDate(memory.timestamp)} · priority ${Number(memory.priority || 0).toFixed(2)} · importance ${Number(memory.importanceScore || 0).toFixed(2)} · relevance ${Number(memory.relevanceScore || 0).toFixed(2)} · trust ${Number(memory.trustScore || 0).toFixed(2)}</div>
-                            <div class="meta">scope ${escapeHtml(memory.scope || 'session')} · state ${escapeHtml(memory.state || 'active')} · source ${escapeHtml(memory.source || 'runtime')} · ${memory.linkCount} links</div>
-                            <div class="list-inline">${(memory.tags || []).slice(0, 5).map((tag) => chip(tag)).join('')}</div>
+                const filteredMemories = query
+                    ? workspaceMemories.filter((memory) => {
+                        const haystack = `${memory.excerpt} ${(memory.tags || []).join(' ')} ${memory.scope || ''} ${memory.source || ''}`.toLowerCase();
+                        return haystack.includes(query);
+                    })
+                    : workspaceMemories;
+                const searchCard = `
+                    <div class="card" style="border-color: rgba(84,255,135,0.14); background: rgba(84,255,135,0.04);">
+                        <div class="card-title">
+                            <strong>Search Memory</strong>
+                            <span class="state-chip info">${formatNumber(filteredMemories.length)} visible</span>
                         </div>
-                    `).join('')
-                    : emptyState('No memory stored yet.');
-                container.innerHTML = memoryHealthCard + memoryList;
+                        <div class="field" style="margin-top:0.6rem;">
+                            <label for="memory-search-input">Search memory</label>
+                            <input id="memory-search-input" type="text" placeholder="Search excerpt, tag, scope, or source" value="${escapeHtml(state.memorySearchQuery || '')}">
+                        </div>
+                    </div>
+                `;
+                const memoryList = resourceFailed('memory') && !workspaceMemories.length
+                    ? emptyState('Memory endpoint unavailable.')
+                    : renderMemoryCards(filteredMemories, query ? 'No memories match this search yet.' : 'No workspace memory stored yet.');
+                container.innerHTML = searchCard + memoryHealthCard + memoryList;
+                const searchInput = $('memory-search-input');
+                if (searchInput && !searchInput.dataset.bound) {
+                    searchInput.dataset.bound = 'true';
+                    searchInput.addEventListener('input', (event) => {
+                        state.memorySearchQuery = event.target.value;
+                        renderLibrary();
+                    });
+                }
+            } else if (state.libraryMode === 'profile') {
+                const memories = Array.isArray(state.memoryProfile) ? state.memoryProfile : [];
+                container.innerHTML = `
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Profile Memory</strong>
+                            <span class="state-chip info">${formatNumber(memories.length)}</span>
+                        </div>
+                        <div class="meta">Stable operator preferences and cross-repo facts stay here. They should be durable, low-noise, and easy to explain.</div>
+                    </div>
+                    ${renderMemoryCards(memories, 'No profile memory is stored yet.')}
+                `;
+            } else if (state.libraryMode === 'shared') {
+                const memories = Array.isArray(state.memoryShared) ? state.memoryShared : [];
+                container.innerHTML = `
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Shared Memory</strong>
+                            <span class="state-chip info">${formatNumber(memories.length)}</span>
+                        </div>
+                        <div class="meta">Only explicitly shared verified learnings should appear here. Shared worker learnings should move here only after reuse or validation.</div>
+                    </div>
+                    ${renderMemoryCards(memories, 'No shared memory is visible for this runtime yet.')}
+                `;
+            } else if (state.libraryMode === 'inbox') {
+                const memories = Array.isArray(state.memoryInbox) ? state.memoryInbox : [];
+                container.innerHTML = `
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Inbox & Trust</strong>
+                            <span class="state-chip ${stateClass(memories.length ? 'warn' : 'ready')}">${escapeHtml(memories.length ? 'review' : 'clear')}</span>
+                        </div>
+                        <div class="meta">Low-confidence, contradictory, or noisy memory candidates land here instead of polluting the active workspace memory lane.</div>
+                    </div>
+                    ${renderMemoryCards(memories, 'Inbox is clear right now.')}
+                `;
             } else if (state.libraryMode === 'platform') {
                 const registry = state.featureRegistry;
+                const selectionAudit = state.selectionAudit || state.usage?.artifactSelectionAudit || {};
                 const counts = registry?.counts || {};
                 const sections = Array.isArray(registry?.sections) ? registry.sections : [];
                 const featureMetrics = `
@@ -4326,6 +4713,11 @@
                             <label>Release Gates</label>
                             <strong>${formatNumber(counts.releaseGates || 0)}</strong>
                             <div class="meta">Quality and security checks wired into release readiness.</div>
+                        </div>
+                        <div class="hero-metric">
+                            <label>Selected Assets</label>
+                            <strong>${formatNumber((selectionAudit.selected || []).length || 0)}</strong>
+                            <div class="meta">${escapeHtml(selectionAudit.summary || 'No asset-selection audit available yet.')}</div>
                         </div>
                     </div>
                 `;
@@ -4351,6 +4743,16 @@
                             <span class="state-chip ${stateClass(registry ? 'active' : resourceFailed('featureRegistry') ? 'failed' : 'info')}">${escapeHtml(registry ? 'ready' : resourceFailed('featureRegistry') ? 'unavailable' : 'loading')}</span>
                         </div>
                         <div class="meta">${escapeHtml(registry?.generatedAt ? `Generated ${formatDate(registry.generatedAt)} for ${registry.generatedFor || 'this workspace'}.` : 'Feature inventory will appear here once the registry is loaded.')}</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Why Nexus picked assets</strong>
+                            <span class="state-chip info">${formatNumber((selectionAudit.rejected || []).length || 0)} rejected</span>
+                        </div>
+                        ${renderSmallList([...(selectionAudit.selected || []).slice(0, 4), ...(selectionAudit.rejected || []).slice(0, 4)].map((entry) => ({
+                            label: `${entry.selected ? 'Selected' : 'Rejected'} · ${entry.name}`,
+                            meta: entry.reason,
+                        })))}
                     </div>
                     ${featureMetrics}
                     <div class="stack" style="margin-top:0.8rem;">${sectionCards}</div>
@@ -4489,7 +4891,7 @@
                             <strong>Runtime Usage</strong>
                             <span class="state-chip ${stateClass(fabric?.sourceMix?.dominantSource ? 'active' : getSelectedRuntime()?.health === 'stale' ? 'warn' : 'ready')}">${escapeHtml(fabric?.sourceMix?.dominantSource ? 'Used' : getSelectedRuntime()?.health === 'stale' ? 'Stale' : 'Not used yet')}</span>
                         </div>
-                        <div class="meta">${escapeHtml(fabric?.summary || 'No knowledge fabric bundle recorded for this runtime yet.')}</div>
+                        <div class="meta">${escapeHtml(fabric?.summary || 'No context-source bundle recorded for this runtime yet.')}</div>
                     </div>
                     <div class="metrics-grid">
                         <div class="hero-metric">
@@ -4725,6 +5127,10 @@
                 const taskGraph = state.usage?.taskGraph || null;
                 const artifactOutcome = state.usage?.artifactOutcome || null;
                 const worktreeHealth = state.worktreeHealth || state.usage?.worktreeHealth || null;
+                const selectionAudit = state.selectionAudit || state.usage?.artifactSelectionAudit || {};
+                const gateSummary = state.gateSummary || {};
+                const parallelism = state.parallelism || {};
+                const tokenOptimization = state.tokenOptimization || {};
                 container.innerHTML = planner
                     ? `
                         <div class="card">
@@ -4754,6 +5160,16 @@
                                 <label>Swarm</label>
                                 <strong>${escapeHtml(planner.swarmDecision?.mode || 'sequential')}</strong>
                                 <div class="meta">${escapeHtml(planner.swarmDecision ? `${planner.swarmDecision.workers} workers · ${planner.optimizationProfile}` : planner.optimizationProfile)}</div>
+                            </div>
+                            <div class="hero-metric">
+                                <label>Selection Audit</label>
+                                <strong>${formatNumber((selectionAudit.selected || []).length || 0)}</strong>
+                                <div class="meta">${escapeHtml(selectionAudit.summary || 'No audited selection recorded yet.')}</div>
+                            </div>
+                            <div class="hero-metric">
+                                <label>Gate Status</label>
+                                <strong>${formatNumber(gateSummary.ready || 0)}/${formatNumber(gateSummary.total || 0)}</strong>
+                                <div class="meta">${escapeHtml(gateSummary.blocked ? `${gateSummary.blocked} blocked` : 'No blocked review gates in the latest run.')}</div>
                             </div>
                         </div>
                         <div class="stack" style="margin-top:0.8rem;">
@@ -4786,6 +5202,27 @@
                                 <div class="list-inline">
                                     ${planner.reviewGates.map((gate) => chip(`${gate.gate}:${gate.status}`)).join('')}
                                 </div>
+                                <div class="meta">${escapeHtml((gateSummary.items || []).map((gate) => `${gate.gate}:${gate.rationale}`).slice(0, 2).join(' · ') || 'No per-gate evidence recorded yet.')}</div>
+                            </div>
+                            <div class="card">
+                                <div class="card-title">
+                                    <strong>Parallel Plan</strong>
+                                    <span class="state-chip ${stateClass((parallelism.totalWorkers || 0) > 0 ? 'active' : 'ready')}">${formatNumber(parallelism.totalWorkers || workerPlan?.totalWorkers || 0)} workers</span>
+                                </div>
+                                <div class="meta">${escapeHtml(tokenOptimization.applied ? `${formatNumber(tokenOptimization.savedTokens || 0)} tokens saved before execution.` : 'Token optimization truth is missing for the latest run.')}</div>
+                                <div class="list-inline">
+                                    ${(parallelism.lanes || workerPlan?.lanes || []).map((lane) => chip(`${lane.role}:${lane.count}`)).join('')}
+                                </div>
+                            </div>
+                            <div class="card">
+                                <div class="card-title">
+                                    <strong>Selection Reasons</strong>
+                                    <span class="state-chip info">${formatNumber((selectionAudit.rejected || []).length || 0)} rejected</span>
+                                </div>
+                                ${renderSmallList([...(selectionAudit.selected || []).slice(0, 4), ...(selectionAudit.rejected || []).slice(0, 4)].map((entry) => ({
+                                    label: `${entry.selected ? 'Selected' : 'Rejected'} · ${entry.name}`,
+                                    meta: entry.reason,
+                                })))}
                             </div>
                             <div class="card">
                                 <div class="card-title">
@@ -4903,7 +5340,10 @@
                         </div>
                     `).join('')
                     : emptyState('No automations loaded.'));
-            } else if (state.libraryMode === 'governance') {
+            } else if (state.libraryMode === 'trust') {
+                const interpretationIssues = Array.isArray(state.interpretationIssues) ? state.interpretationIssues : [];
+                const preCompactionBackup = state.preCompactionBackup || null;
+                const memoryContainers = state.memoryContainers || {};
                 container.innerHTML = `
                     <div class="card">
                         <div class="card-title">
@@ -4916,7 +5356,7 @@
                         <div class="hero-metric">
                             <label>Audited Memories</label>
                             <strong>${resourceFailed('memoryAudit') ? 'n/a' : formatNumber(state.memoryAudit.scanned || 0)}</strong>
-                            <div class="meta">Latest governance audit sweep</div>
+                            <div class="meta">Latest trust audit sweep</div>
                         </div>
                         <div class="hero-metric">
                             <label>Quarantined</label>
@@ -4931,8 +5371,37 @@
                         <div class="hero-metric">
                             <label>Blocking Issues</label>
                             <strong>${resourceFailed('memoryAudit') ? 'n/a' : formatNumber((state.memoryAudit.findings || []).filter((item) => item.action === 'block' || item.action === 'quarantine').length)}</strong>
-                            <div class="meta">Promotion-blocking governance actions</div>
+                            <div class="meta">Promotion-blocking trust actions</div>
                         </div>
+                        <div class="hero-metric">
+                            <label>Inbox Lane</label>
+                            <strong>${formatNumber(memoryContainers?.byLane?.inbox || 0)}</strong>
+                            <div class="meta">Low-confidence memory held out of the working set</div>
+                        </div>
+                        <div class="hero-metric">
+                            <label>Pre-Compaction Backup</label>
+                            <strong>${escapeHtml(preCompactionBackup ? 'ready' : 'none')}</strong>
+                            <div class="meta">${escapeHtml(preCompactionBackup ? formatDate(preCompactionBackup.timestamp) : 'No backup recorded yet.')}</div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Interpretation Issues</strong>
+                            <span class="state-chip ${stateClass(interpretationIssues.length ? 'warn' : 'ready')}">${escapeHtml(interpretationIssues.length ? 'watch' : 'clear')}</span>
+                        </div>
+                        ${interpretationIssues.length
+                            ? renderSmallList(interpretationIssues.map((issue) => ({
+                                label: issue.summary,
+                                meta: issue.severity,
+                            })))
+                            : '<div class="meta">No MCP interpretation or selector drift issue is currently flagged.</div>'}
+                    </div>
+                    <div class="card">
+                        <div class="card-title">
+                            <strong>Backup Status</strong>
+                            <span class="state-chip ${stateClass(preCompactionBackup ? 'active' : 'warn')}">${escapeHtml(preCompactionBackup ? 'captured' : 'pending')}</span>
+                        </div>
+                        <div class="meta">${escapeHtml(preCompactionBackup ? `${preCompactionBackup.path} · ${formatNumber(preCompactionBackup.itemCount || 0)} items` : 'Compaction should write a backup before summarization or budget compression runs.')}</div>
                     </div>
                     <div class="stack" style="margin-top:0.8rem;">
                         <div class="entity-header"><h3>Quarantine Queue</h3></div>
@@ -4964,7 +5433,7 @@
                                         <div class="meta">${(finding.findings || []).map((item) => `${item.category}:${item.severity}`).join(' · ') || 'No sub-findings'}</div>
                                     </div>
                                 `).join('')
-                                : emptyState('No governance findings available yet.')}
+                                : emptyState('No trust findings available yet.')}
                     </div>
                 `;
             } else if (state.libraryMode === 'federation') {
@@ -5184,6 +5653,12 @@
         }
 
         function renderDrawerSections(kind, data) {
+            const actionGuard = getActionGuard();
+            const guardedActions = actionGuard.disabled
+                ? `<div class="meta" style="margin-top:0.55rem;">${escapeHtml(actionGuard.reason)}</div>`
+                : '';
+            const actionAttrs = actionGuard.disabled ? 'disabled aria-disabled="true"' : '';
+
             if (kind === 'token-summary') {
                 const summary = data.summary || {};
                 const timeline = Array.isArray(data.timeline) ? data.timeline : [];
@@ -5247,13 +5722,13 @@
                         <div class="meta">${escapeHtml(packet.task?.goal || 'No compiled packet for this runtime yet.')}</div>
                     </section>
                     <section class="drawer-section">
-                        <h4>Knowledge Fabric</h4>
+                        <h4>Context Sources</h4>
                         <div class="list-inline">
                             ${chip(`source:${data.fabric?.sourceMix?.dominantSource || 'n/a'}`)}
                             ${chip(`collections:${(data.fabric?.attachedCollections || []).length || 0}`)}
                             ${chip(`patterns:${(data.fabric?.patternHits || []).length || 0}`)}
                         </div>
-                        <div class="meta">${escapeHtml(data.fabric?.summary || 'No knowledge-fabric snapshot for this runtime yet.')}</div>
+                        <div class="meta">${escapeHtml(data.fabric?.summary || 'No context-source snapshot for this runtime yet.')}</div>
                     </section>
                     <section class="drawer-section" style="margin-top: 1rem;">
                         <button class="primary-button" onclick="downloadTokenExport()" style="width: 100%;">Download JSON Export</button>
@@ -5383,9 +5858,10 @@
                     <section class="drawer-section">
                         <h4>Actions</h4>
                         <div class="action-bar">
-                            <button class="primary-button" data-drawer-action="deploy-skill" data-id="${escapeHtml(data.skillId)}">Deploy</button>
-                            <button class="ghost-button" data-drawer-action="revoke-skill" data-id="${escapeHtml(data.skillId)}">Revoke</button>
+                            <button class="primary-button" ${actionAttrs} data-drawer-action="deploy-skill" data-id="${escapeHtml(data.skillId)}">Deploy</button>
+                            <button class="ghost-button" ${actionAttrs} data-drawer-action="revoke-skill" data-id="${escapeHtml(data.skillId)}">Revoke</button>
                         </div>
+                        ${guardedActions}
                     </section>
                 `;
             }
@@ -5463,9 +5939,10 @@
                     <section class="drawer-section">
                         <h4>Actions</h4>
                         <div class="action-bar">
-                            <button class="primary-button" data-drawer-action="deploy-workflow" data-id="${escapeHtml(data.workflowId)}">Deploy</button>
-                            <button class="ghost-button" data-drawer-action="run-workflow" data-id="${escapeHtml(data.workflowId)}">Run</button>
+                            <button class="primary-button" ${actionAttrs} data-drawer-action="deploy-workflow" data-id="${escapeHtml(data.workflowId)}">Deploy</button>
+                            <button class="ghost-button" ${actionAttrs} data-drawer-action="run-workflow" data-id="${escapeHtml(data.workflowId)}">Run</button>
                         </div>
+                        ${guardedActions}
                     </section>
                 `;
             }
@@ -5501,9 +5978,10 @@
                     <section class="drawer-section">
                         <h4>Actions</h4>
                         <div class="action-bar">
-                            <button class="primary-button" data-drawer-action="deploy-hook" data-id="${escapeHtml(data.hookId)}">Deploy</button>
-                            <button class="ghost-button" data-drawer-action="revoke-hook" data-id="${escapeHtml(data.hookId)}">Revoke</button>
+                            <button class="primary-button" ${actionAttrs} data-drawer-action="deploy-hook" data-id="${escapeHtml(data.hookId)}">Deploy</button>
+                            <button class="ghost-button" ${actionAttrs} data-drawer-action="revoke-hook" data-id="${escapeHtml(data.hookId)}">Revoke</button>
                         </div>
+                        ${guardedActions}
                     </section>
                 `;
             }
@@ -5538,10 +6016,11 @@
                     <section class="drawer-section">
                         <h4>Actions</h4>
                         <div class="action-bar">
-                            <button class="primary-button" data-drawer-action="deploy-automation" data-id="${escapeHtml(data.automationId)}">Deploy</button>
-                            <button class="ghost-button" data-drawer-action="run-automation" data-id="${escapeHtml(data.automationId)}">Run</button>
-                            <button class="ghost-button" data-drawer-action="revoke-automation" data-id="${escapeHtml(data.automationId)}">Revoke</button>
+                            <button class="primary-button" ${actionAttrs} data-drawer-action="deploy-automation" data-id="${escapeHtml(data.automationId)}">Deploy</button>
+                            <button class="ghost-button" ${actionAttrs} data-drawer-action="run-automation" data-id="${escapeHtml(data.automationId)}">Run</button>
+                            <button class="ghost-button" ${actionAttrs} data-drawer-action="revoke-automation" data-id="${escapeHtml(data.automationId)}">Revoke</button>
                         </div>
+                        ${guardedActions}
                     </section>
                 `;
             }
@@ -5585,9 +6064,10 @@
                     <section class="drawer-section">
                         <h4>Actions</h4>
                         <div class="action-bar">
-                            <button class="primary-button" data-drawer-action="reconnect-client" data-id="${escapeHtml(data.clientId)}">Reconnect</button>
-                            <button class="ghost-button" data-drawer-action="clear-client" data-id="${escapeHtml(data.clientId)}">Clear Stale</button>
+                            <button class="primary-button" ${actionAttrs} data-drawer-action="reconnect-client" data-id="${escapeHtml(data.clientId)}">Reconnect</button>
+                            <button class="ghost-button" ${actionAttrs} data-drawer-action="clear-client" data-id="${escapeHtml(data.clientId)}">Clear Stale</button>
                         </div>
+                        ${guardedActions}
                     </section>
                 `;
             }
@@ -5664,6 +6144,30 @@
         }
 
         async function handleDrawerAction(action, id) {
+            const guard = getActionGuard();
+            if (guard.disabled) {
+                $('control-status').textContent = guard.reason;
+                return;
+            }
+
+            const confirmations = {
+                'deploy-skill': 'Deploy this skill to the selected runtime?',
+                'revoke-skill': 'Revoke this skill from the selected runtime?',
+                'deploy-workflow': 'Deploy this workflow to the selected runtime?',
+                'run-workflow': 'Run this workflow now?',
+                'deploy-hook': 'Deploy this hook to the selected runtime?',
+                'revoke-hook': 'Revoke this hook from the selected runtime?',
+                'deploy-automation': 'Deploy this automation to the selected runtime?',
+                'run-automation': 'Run this automation now?',
+                'revoke-automation': 'Revoke this automation from the selected runtime?',
+                'clear-client': 'Clear this stale client entry?',
+            };
+
+            if (confirmations[action] && !window.confirm(confirmations[action])) {
+                $('control-status').textContent = 'Action cancelled.';
+                return;
+            }
+
             try {
                 if (action === 'deploy-skill') {
                     await fetchJson('/api/skills/deploy', postJson({ skillId: id }));
@@ -5689,7 +6193,7 @@
                     await fetchJson(`/api/clients/${encodeURIComponent(id)}/clear`, postJson({}));
                 }
                 $('control-status').textContent = `Action ${action} completed.`;
-                await refreshAll();
+                await refreshAll(['dashboardSummary', getSurfaceLoaderName(state.surfaceMode)], { force: true });
             } catch (error) {
                 $('control-status').textContent = `Action ${action} failed: ${error.message}`;
             }
@@ -5927,11 +6431,16 @@
 
             $('runtime-select').addEventListener('change', async (event) => {
                 state.selectedRuntimeId = event.target.value || null;
-                await refreshAll(['usage', 'orchestrationSession', 'orchestrationLedger', 'instructionPacket', 'knowledgeFabricSession', 'knowledgeProvenance', 'tokensSummary', 'tokensTimeline', 'tokensBySource', 'clients', 'primaryClient', 'modelTiers']);
+                await refreshAll(['dashboardSummary', getSurfaceLoaderName(state.surfaceMode)], { force: true });
             });
 
             $('execute-form').addEventListener('submit', async (event) => {
                 event.preventDefault();
+                const guard = getActionGuard();
+                if (guard.disabled) {
+                    $('control-status').textContent = guard.reason;
+                    return;
+                }
                 const payload = buildExecutionPayload();
                 if (!payload.goal) {
                     $('control-status').textContent = 'Goal is required.';
@@ -5954,13 +6463,18 @@
                     state.libraryMode = 'planning';
                     state.surfaceMode = 'runs';
                     state.eventFilter = surfaceModes.runs.eventFilter;
-                    await refreshAll();
+                    await refreshAll(['dashboardSummary', 'surfaceRuns'], { force: true });
                 } catch (error) {
                     $('control-status').textContent = `Execution failed: ${error.message}`;
                 }
             });
 
             $('plan-button').addEventListener('click', async () => {
+                const guard = getActionGuard();
+                if (guard.disabled) {
+                    $('control-status').textContent = guard.reason;
+                    return;
+                }
                 const payload = buildExecutionPayload();
                 if (!payload.goal) {
                     $('control-status').textContent = 'Goal is required.';
@@ -5975,7 +6489,7 @@
                     state.surfaceMode = 'runs';
                     state.eventFilter = surfaceModes.runs.eventFilter;
                     render();
-                    await refreshAll(['usage', 'orchestrationSession', 'orchestrationLedger', 'instructionPacket', 'tokensSummary', 'tokensTimeline', 'tokensBySource', 'knowledgeFabricSession', 'knowledgeProvenance']);
+                    await refreshAll(['dashboardSummary', 'surfaceRuns'], { force: true });
                     $('control-status').textContent = `Planner ready: ${state.plannerPreview.selectedCrew?.name || 'baseline path'}.`;
                 } catch (error) {
                     $('control-status').textContent = `Planning failed: ${error.message}`;
@@ -6077,7 +6591,7 @@
             _stream.addEventListener('bootstrap', (e) => {
                 try {
                     const data = JSON.parse(e.data);
-                    if (data.version && data.version !== '3') {
+                    if (data.version && data.version !== DASHBOARD_API_VERSION) {
                         state.banner = { message: 'Dashboard outdated. Please reload.', type: 'warn' };
                         render();
                     }
@@ -6147,9 +6661,36 @@
                 const overlay = document.getElementById('onboarding-overlay');
                 if (overlay) {
                     overlay.style.display = 'flex';
-                    document.getElementById('close-onboarding').addEventListener('click', () => {
+                    const closeOverlay = () => {
                         localStorage.setItem('nexus_onboarded', 'true');
                         overlay.style.display = 'none';
+                    };
+                    document.getElementById('close-onboarding').addEventListener('click', closeOverlay);
+                    overlay.querySelectorAll('[data-onboarding-task]').forEach((button) => {
+                        button.addEventListener('click', async () => {
+                            const task = button.getAttribute('data-onboarding-task');
+                            closeOverlay();
+                            if (task === 'memory-search') {
+                                state.workspaceViews.memory = 'memories';
+                                state.libraryMode = 'memories';
+                                applySurfaceMode('memory');
+                                setTimeout(() => $('memory-search-input')?.focus(), 200);
+                            } else if (task === 'inspect-run') {
+                                state.workspaceViews.runs = 'planning';
+                                state.libraryMode = 'planning';
+                                applySurfaceMode('runs');
+                            } else if (task === 'launch-guided-task') {
+                                applySurfaceMode('operate');
+                                setTimeout(() => $('goal-input')?.focus(), 200);
+                            } else if (task === 'open-advanced-controls') {
+                                applySurfaceMode('operate');
+                                setTimeout(() => {
+                                    const advanced = $('advanced-run-controls');
+                                    if (advanced) advanced.open = true;
+                                    $('goal-input')?.focus();
+                                }, 200);
+                            }
+                        });
                     });
                 }
             }
@@ -6157,14 +6698,14 @@
 
         async function bootstrap() {
             attachStaticHandlers();
-            await refreshAll();
+            await refreshAll(getDefaultRefreshTargets(), { force: true });
 
             $('control-status').textContent = state.banner?.message
                 ? state.banner.message
                 : 'Dashboard actions stay local and route through the runtime.';
             connectStream();
             setInterval(() => {
-                scheduleRefresh(Object.keys(RESOURCE_LOADERS).filter((name) => !(name === 'events' && state.streamConnected)));
+                scheduleRefresh(getDefaultRefreshTargets().filter((name) => !(name === 'events' && state.streamConnected)));
             }, 20000);
         }
 
@@ -6173,7 +6714,7 @@
     </script>
 
     <div id="onboarding-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(8px);">
-        <div style="background: rgba(16, 18, 27, 0.95); padding: 2.5rem; border-radius: 24px; border: 1px solid var(--accent); max-width: 480px; text-align: center; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
+        <div style="background: rgba(16, 18, 27, 0.95); padding: 2.5rem; border-radius: 24px; border: 1px solid var(--accent); max-width: 560px; text-align: center; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);">
             <div style="margin-bottom: 1.5rem; display: flex; justify-content: center;">
                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
@@ -6182,8 +6723,14 @@
                 </svg>
             </div>
             <h2 style="color: var(--text); margin: 0 0 1rem 0; font-size: 1.5rem;">Welcome to Nexus Prime</h2>
-            <p style="color: var(--muted); margin: 0 0 2rem 0; line-height: 1.6;">Your workspace is fully connected. Nexus Prime is analyzing your repo and building a semantic understanding of your code to deliver an instant 'Aha moment'.</p>
-            <button id="close-onboarding" class="widget-action" style="font-size: 0.9rem; padding: 0.6rem 1.5rem; cursor: pointer; border-color: var(--accent); color: var(--text); background: rgba(84, 255, 135, 0.1);">Enter Dashboard</button>
+            <p style="color: var(--muted); margin: 0 0 1.4rem 0; line-height: 1.6;">Start with a focused operator task instead of the full control plane. Advanced controls stay available, but they no longer block the first decision.</p>
+            <div style="display:grid; gap:0.75rem; margin-bottom:1.4rem; text-align:left;">
+                <button data-onboarding-task="memory-search" class="ghost-button" style="justify-content:flex-start;">Search memory</button>
+                <button data-onboarding-task="inspect-run" class="ghost-button" style="justify-content:flex-start;">Inspect a run</button>
+                <button data-onboarding-task="launch-guided-task" class="ghost-button" style="justify-content:flex-start;">Launch a guided task</button>
+                <button data-onboarding-task="open-advanced-controls" class="ghost-button" style="justify-content:flex-start;">Open advanced controls</button>
+            </div>
+            <button id="close-onboarding" class="widget-action" style="font-size: 0.9rem; padding: 0.6rem 1.5rem; cursor: pointer; border-color: var(--accent); color: var(--text); background: rgba(84, 255, 135, 0.1);">Enter Operator Console</button>
         </div>
     </div>
 </body>

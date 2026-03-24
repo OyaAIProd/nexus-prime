@@ -83,6 +83,45 @@ export interface MemoryStats {
   topTags: string[];
 }
 
+export interface MemoryStorageStatus {
+  requestedDbPath: string;
+  activeDbPath: string;
+  stateRoot: string;
+  graphDbPath: string;
+  vaultDir: string;
+  fallbackApplied: boolean;
+  fallbackReason?: string;
+}
+
+export type MemoryContainerLane = 'profile' | 'workspace' | 'shared' | 'inbox';
+
+export interface MemoryRecallFilters {
+  sessionId?: string;
+  repoId?: string;
+  workspaceId?: string;
+  projectId?: string;
+  lane?: MemoryContainerLane;
+  includeShared?: boolean;
+  includeProfile?: boolean;
+  includeHidden?: boolean;
+}
+
+export interface MemoryContainerSummary {
+  generatedAt: number;
+  byLane: Record<MemoryContainerLane, number>;
+  byRepoId: Record<string, number>;
+  byProjectId: Record<string, number>;
+  byWorkspaceId: Record<string, number>;
+  hiddenCount: number;
+}
+
+export interface MemoryBackupSnapshot {
+  timestamp: number;
+  reason: string;
+  path: string;
+  itemCount: number;
+}
+
 export interface MemoryEntityReference {
   type: 'session' | 'run' | 'skill' | 'workflow';
   id: string;
@@ -288,6 +327,79 @@ interface MemoryDbSnapshot {
   tokenLedger: TokenLedgerRow[];
 }
 
+function resolvePreferredStateRoot(): string {
+  return process.env.NEXUS_STATE_DIR?.trim() || path.join(os.homedir(), '.nexus-prime');
+}
+
+function isWritableStorageError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return ['readonly', 'EACCES', 'EROFS', 'permission denied', 'SQLITE_CANTOPEN']
+    .some((fragment) => message.includes(fragment));
+}
+
+function ensureWritableDirectory(target: string): void {
+  fs.mkdirSync(target, { recursive: true });
+  fs.accessSync(target, fs.constants.W_OK);
+}
+
+function resolveFallbackStateRoot(requestedStateRoot: string): string {
+  const candidates = [
+    process.env.NEXUS_STATE_DIR?.trim(),
+    path.join(os.tmpdir(), 'nexus-prime-state'),
+    path.join(process.cwd(), '.nexus-prime-state'),
+  ].filter((entry): entry is string => Boolean(entry));
+
+  for (const candidate of candidates) {
+    if (path.resolve(candidate) === path.resolve(requestedStateRoot)) {
+      continue;
+    }
+    try {
+      ensureWritableDirectory(candidate);
+      return candidate;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  throw new Error(`No writable Nexus state root available outside ${requestedStateRoot}`);
+}
+
+function openMemoryDatabase(requestedDbPath: string): {
+  db: Database.Database;
+  dbPath: string;
+  stateRoot: string;
+  fallbackApplied: boolean;
+  fallbackReason?: string;
+} {
+  const requestedStateRoot = path.dirname(requestedDbPath);
+  try {
+    ensureWritableDirectory(requestedStateRoot);
+    return {
+      db: new Database(requestedDbPath),
+      dbPath: requestedDbPath,
+      stateRoot: requestedStateRoot,
+      fallbackApplied: false,
+    };
+  } catch (error) {
+    if (!isWritableStorageError(error)) {
+      throw error;
+    }
+
+    const fallbackReason = error instanceof Error ? error.message : String(error || 'unwritable database path');
+    const fallbackStateRoot = resolveFallbackStateRoot(requestedStateRoot);
+    const fallbackDbPath = path.join(fallbackStateRoot, path.basename(requestedDbPath) || 'memory.db');
+    ensureWritableDirectory(fallbackStateRoot);
+    console.error(`[MemoryEngine] Falling back from ${requestedDbPath} to ${fallbackDbPath}: ${fallbackReason}`);
+    return {
+      db: new Database(fallbackDbPath),
+      dbPath: fallbackDbPath,
+      stateRoot: fallbackStateRoot,
+      fallbackApplied: true,
+      fallbackReason,
+    };
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MemoryEngine
 // ─────────────────────────────────────────────────────────────────────────────
@@ -295,6 +407,11 @@ interface MemoryDbSnapshot {
 export class MemoryEngine {
   public db: Database.Database;
   private dbPath: string;
+  private requestedDbPath: string;
+  private stateRoot: string;
+  private graphDbPath: string;
+  private storageFallbackApplied = false;
+  private storageFallbackReason?: string;
   private graphMirror?: GraphMemoryEngine;
   private sessionId: string;
   private vaultDir: string;
@@ -304,7 +421,9 @@ export class MemoryEngine {
   private vaultEntityNotesDir: string;
   private vaultRunNotesDir: string;
   private vaultSessionNotesDir: string;
+  private backupMetadataPath: string;
   private lastReconciliationSummary: MemoryReconciliationSummary = createEmptyReconciliationSummary();
+  private lastPreCompactionBackup: MemoryBackupSnapshot | null = null;
 
   private config: Required<MemoryConfig>;
   private incrementAccessStmt!: Database.Statement;
@@ -333,25 +452,29 @@ export class MemoryEngine {
       recallCandidateLimit: Math.max(config?.recallCandidateLimit ?? 200, 1),
     };
     
-    const dbDir = path.join(os.homedir(), '.nexus-prime');
-    fs.mkdirSync(dbDir, { recursive: true });
-
-    const resolvedPath = dbPath ?? path.join(dbDir, 'memory.db');
-    this.dbPath = resolvedPath;
-    this.db = new Database(this.dbPath);
+    const requestedDbPath = dbPath ?? path.join(resolvePreferredStateRoot(), 'memory.db');
+    const opened = openMemoryDatabase(requestedDbPath);
+    this.requestedDbPath = requestedDbPath;
+    this.dbPath = opened.dbPath;
+    this.stateRoot = opened.stateRoot;
+    this.graphDbPath = path.join(path.dirname(this.dbPath), 'graph.db');
+    this.storageFallbackApplied = opened.fallbackApplied;
+    this.storageFallbackReason = opened.fallbackReason;
+    this.db = opened.db;
     try {
-      this.graphMirror = new GraphMemoryEngine(path.join(path.dirname(this.dbPath), 'graph.db'));
+      this.graphMirror = new GraphMemoryEngine(this.graphDbPath);
     } catch {
       this.graphMirror = undefined;
     }
     this.sessionId = randomUUID();
-    this.vaultDir = path.join(dbDir, 'memory-vault');
+    this.vaultDir = path.join(this.stateRoot, 'memory-vault');
     this.vaultItemsDir = path.join(this.vaultDir, 'items');
     this.vaultExportsDir = path.join(this.vaultDir, 'exports');
     this.vaultNotesDir = path.join(this.vaultDir, 'notes');
     this.vaultEntityNotesDir = path.join(this.vaultNotesDir, 'entities');
     this.vaultRunNotesDir = path.join(this.vaultNotesDir, 'runs');
     this.vaultSessionNotesDir = path.join(this.vaultNotesDir, 'sessions');
+    this.backupMetadataPath = path.join(this.vaultExportsDir, 'last-pre-compaction-backup.json');
     fs.mkdirSync(this.vaultItemsDir, { recursive: true });
     fs.mkdirSync(this.vaultExportsDir, { recursive: true });
     fs.mkdirSync(path.join(this.vaultNotesDir, 'memories'), { recursive: true });
@@ -363,6 +486,19 @@ export class MemoryEngine {
     this.embedder = new Embedder(this.db);
     this.prepareStatements();
     this.load();
+    this.loadBackupMetadata();
+  }
+
+  getStorageStatus(): MemoryStorageStatus {
+    return {
+      requestedDbPath: this.requestedDbPath,
+      activeDbPath: this.dbPath,
+      stateRoot: this.stateRoot,
+      graphDbPath: this.graphDbPath,
+      vaultDir: this.vaultDir,
+      fallbackApplied: this.storageFallbackApplied,
+      fallbackReason: this.storageFallbackReason,
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -616,6 +752,26 @@ export class MemoryEngine {
     this.checkGraphCoverage();
   }
 
+  private loadBackupMetadata(): void {
+    try {
+      if (!fs.existsSync(this.backupMetadataPath)) {
+        this.lastPreCompactionBackup = null;
+        return;
+      }
+      const parsed = JSON.parse(fs.readFileSync(this.backupMetadataPath, 'utf8'));
+      if (parsed && typeof parsed.path === 'string' && typeof parsed.reason === 'string' && typeof parsed.timestamp === 'number') {
+        this.lastPreCompactionBackup = {
+          path: parsed.path,
+          reason: parsed.reason,
+          timestamp: parsed.timestamp,
+          itemCount: Number(parsed.itemCount || 0),
+        };
+      }
+    } catch {
+      this.lastPreCompactionBackup = null;
+    }
+  }
+
   private ensurePersistentVocabulary(rows: MemoryRow[]): void {
     let repaired = false;
     let status = this.embedder.rebuildPersistentVocabulary();
@@ -863,6 +1019,9 @@ export class MemoryEngine {
 
   /** Alias for flush() that delegates to SQLite transaction immediately, tracking stats */
   preCompactionFlush(reason: string): void {
+    if (this.shouldCreatePreCompactionBackup(reason)) {
+      this.createPreCompactionBackup(reason);
+    }
     const itemsFlushed = this.prefrontal.length;
     if (itemsFlushed > 0) {
       this.flush();
@@ -913,6 +1072,7 @@ export class MemoryEngine {
     const timestamp = options.timestamp ?? Date.now();
     const sessionId = options.sessionId ?? this.sessionId;
     const trust = Number(options.trust ?? this.estimateTrust(normalizedTags, check, priority));
+    const lane = this.inferLane(normalizedTags, source);
     const provenance = createMemoryProvenance({
       source,
       sessionId,
@@ -921,6 +1081,11 @@ export class MemoryEngine {
       summary: options.provenance?.summary ?? `${source} memory`,
       runId: options.provenance?.runId,
       workerId: options.provenance?.workerId,
+      workspaceId: options.provenance?.workspaceId,
+      repoId: options.provenance?.repoId,
+      projectId: options.provenance?.projectId,
+      lane: options.provenance?.lane ?? lane,
+      containerTags: options.provenance?.containerTags ?? normalizedTags.filter((tag) => /^#(?:repo|project|workspace|hidden|profile|inbox)/.test(tag)),
       toolName: options.provenance?.toolName,
     });
     const item: MemoryItem = {
@@ -1028,7 +1193,7 @@ export class MemoryEngine {
       maxCandidates?: number;
     } = {},
   ): { storedIds: string[]; summary: MemoryReconciliationSummary } {
-    const candidates = deriveCandidateFacts(content, tags, options.maxCandidates ?? 5);
+    const candidates = deriveCandidateFacts(content, tags, options.maxCandidates ?? 2);
     const summary = createEmptyReconciliationSummary();
     const storedIds: string[] = [];
 
@@ -1042,13 +1207,18 @@ export class MemoryEngine {
       const expiresAt = candidate.ephemeral || (options.defaultTtlMs ?? 0) > 0
         ? Date.now() + (options.defaultTtlMs ?? 3 * 24 * 60 * 60 * 1000)
         : undefined;
+      const candidateLane = this.inferLane(candidate.tags, options.source === 'rag' ? 'imported' : (options.source ?? 'runtime'));
       let storedId: string | undefined;
       if (decision.action === 'ADD' || decision.action === 'UPDATE' || decision.action === 'MERGE' || decision.action === 'QUARANTINE') {
         storedId = this.store(candidate.content, priority, candidate.tags, parentId, depth, {
           sessionId: options.sessionId,
           timestamp: options.timestamp,
           scope: options.scope,
-          state: decision.action === 'QUARANTINE' ? 'quarantined' : options.state,
+          state: decision.action === 'QUARANTINE'
+            ? 'quarantined'
+            : candidateLane === 'inbox'
+              ? 'quarantined'
+              : options.state,
           source: options.source === 'rag' ? 'imported' : options.source,
           trust: Math.max(0.25, Math.min(0.98, candidate.confidence)),
           expiresAt,
@@ -1059,6 +1229,7 @@ export class MemoryEngine {
             summary: options.provenance?.summary ?? `${decision.action} via memory control plane`,
             tags: dedupeStrings([...(options.provenance?.tags ?? []), ...candidate.tags]),
             references: dedupeStrings([...(options.provenance?.references ?? []), ...decision.relatedIds]),
+            lane: options.provenance?.lane ?? candidateLane,
           },
         });
         storedIds.push(storedId);
@@ -1085,7 +1256,7 @@ export class MemoryEngine {
     return { storedIds, summary: this.lastReconciliationSummary };
   }
 
-  async recall(query: string, k: number = 5): Promise<string[]> {
+  async recall(query: string, k: number = 5, filters: MemoryRecallFilters = {}): Promise<string[]> {
     this.expireMemories();
     const now = Date.now();
     const candidateRows = this.db.prepare(`
@@ -1096,7 +1267,9 @@ export class MemoryEngine {
       ORDER BY priority DESC, timestamp DESC
       LIMIT ?
     `).all(now, this.config.recallCandidateLimit) as any[];
-    const candidateItems = candidateRows.map((row) => this.rowToItem(row));
+    const candidateItems = candidateRows
+      .map((row) => this.rowToItem(row))
+      .filter((item) => this.matchesRecallFilters(item, filters));
     // ── Stage 1: Vector search (semantic) ────────────────────────────────────
     const queryVector = await this.embedder.embed(query);
     const vectorMatches: Map<string, number> = new Map();
@@ -1122,18 +1295,17 @@ export class MemoryEngine {
     const podFindings = podNetwork.recall([]);
     const queryLower = query.toLowerCase();
 
-    const scored = candidateRows.map(row => {
-      const vectorScore = vectorMatches.get(row.id as string) ?? 0;
-      const item = this.rowToItem(row);
-      const recencyScore = Math.exp(-(now - row.timestamp) / (7 * 24 * 3600 * 1000));
-      const priorityScore = row.priority as number;
-      const accessBonus = Math.min((row.access_count as number) * 0.05, 0.3);
-      const massBoost = (row.mass as number ?? 1.0) * 0.2;
+    const scored = candidateItems.map((item) => {
+      const vectorScore = vectorMatches.get(item.id) ?? 0;
+      const recencyScore = Math.exp(-(now - item.timestamp) / (7 * 24 * 3600 * 1000));
+      const priorityScore = item.priority;
+      const accessBonus = Math.min(item.accessCount * 0.05, 0.3);
+      const massBoost = (item.mass ?? 1.0) * 0.2;
       const qmdScore = this.computeQmdScore(item);
 
       return {
-        content: row.content as string,
-        id: row.id as string,
+        content: item.content,
+        id: item.id,
         score: vectorScore * 0.4 + priorityScore * 0.15 + recencyScore * 0.1 + accessBonus * 0.05 + massBoost + qmdScore * 0.3,
       };
     });
@@ -1564,6 +1736,7 @@ export class MemoryEngine {
 
   private inferScope(tags: string[], priority: number): MemoryItem['scope'] {
     if (tags.includes('#shared') || tags.includes('#worker-shared')) return 'shared';
+    if (tags.includes('#workspace') || tags.includes('#repo-profile') || tags.some((tag) => tag.startsWith('#repo:')) || tags.some((tag) => tag.startsWith('#project:'))) return 'project';
     if (tags.includes('#project')) return 'project';
     if (tags.includes('#user')) return 'user';
     if (tags.includes('#promoted') || priority >= 0.92) return 'promoted';
@@ -1587,6 +1760,78 @@ export class MemoryEngine {
     if (tags.includes('#operator')) return 'operator';
     if (tags.includes('#system')) return 'system';
     return 'runtime';
+  }
+
+  private inferLane(tags: string[], source: MemoryItem['source']): MemoryContainerLane {
+    if (tags.includes('#shared') || tags.includes('#worker-shared')) return 'shared';
+    if (tags.includes('#profile') || tags.includes('#user') || tags.includes('#operator-preference')) return 'profile';
+    if (tags.includes('#inbox') || tags.includes('#quarantine') || tags.includes('#runtime-result')) return 'inbox';
+    if (source === 'worker' && !tags.includes('#shared')) return 'workspace';
+    return 'workspace';
+  }
+
+  private isHiddenMemory(tags: string[]): boolean {
+    return tags.includes('#hidden') || tags.includes('#system-hidden') || tags.includes('#repo-profile');
+  }
+
+  private matchesContainerFilters(provenance: MemoryProvenance, filters: {
+    repoId?: string;
+    workspaceId?: string;
+    projectId?: string;
+    lane?: MemoryContainerLane;
+  }): boolean {
+    if (filters.repoId && provenance.repoId !== filters.repoId) return false;
+    if (filters.workspaceId && provenance.workspaceId !== filters.workspaceId) return false;
+    if (filters.projectId && provenance.projectId !== filters.projectId) return false;
+    if (filters.lane && provenance.lane !== filters.lane) return false;
+    return true;
+  }
+
+  private matchesRecallFilters(item: MemoryItem, filters: MemoryRecallFilters): boolean {
+    if (!filters.includeHidden && this.isHiddenMemory(item.tags)) return false;
+    if (!this.matchesContainerFilters(item.provenance, filters)) return false;
+    const lane = item.provenance.lane ?? this.inferLane(item.tags, item.source);
+    if (filters.lane && lane !== filters.lane) return false;
+    if (filters.sessionId && item.scope === 'session' && item.sessionId !== filters.sessionId) return false;
+    if (filters.includeShared === false && lane === 'shared') return false;
+    if (filters.includeProfile === false && lane === 'profile') return false;
+    if ((filters.repoId || filters.projectId || filters.workspaceId) && lane === 'workspace') {
+      const matchAny = Boolean(
+        (filters.repoId && item.provenance.repoId === filters.repoId)
+        || (filters.projectId && item.provenance.projectId === filters.projectId)
+        || (filters.workspaceId && item.provenance.workspaceId === filters.workspaceId),
+      );
+      if (!matchAny) return false;
+    }
+    if ((filters.repoId || filters.projectId || filters.workspaceId) && lane === 'shared') {
+      return Boolean(filters.includeShared);
+    }
+    return true;
+  }
+
+  private shouldCreatePreCompactionBackup(reason: string): boolean {
+    return /(compaction|compact|summary|model|compression|budget|sentinel|flush-before-summary|test-compaction)/i.test(reason)
+      && !/(dispose|periodic)/i.test(reason);
+  }
+
+  private createPreCompactionBackup(reason: string): void {
+    const backup = this.backupBundle({ limit: 2000 });
+    const snapshot: MemoryBackupSnapshot = {
+      timestamp: backup.bundle.exportedAt,
+      reason,
+      path: backup.path,
+      itemCount: backup.bundle.items.length,
+    };
+    this.lastPreCompactionBackup = snapshot;
+    fs.writeFileSync(this.backupMetadataPath, JSON.stringify(snapshot, null, 2), 'utf8');
+  }
+
+  private parseRawTags(rawTags?: string): string[] {
+    try {
+      return JSON.parse(rawTags ?? '[]');
+    } catch {
+      return [];
+    }
   }
 
   private estimateTrust(tags: string[], check: MemoryCheckResult, priority: number): number {
@@ -1876,6 +2121,11 @@ export class MemoryEngine {
         sessionId: parsed.sessionId ?? sessionId,
         runId: parsed.runId,
         workerId: parsed.workerId,
+        workspaceId: parsed.workspaceId,
+        repoId: parsed.repoId,
+        projectId: parsed.projectId,
+        lane: parsed.lane,
+        containerTags: Array.isArray(parsed.containerTags) ? parsed.containerTags.map(String) : undefined,
         toolName: parsed.toolName,
         references: Array.isArray(parsed.references) ? parsed.references.map(String) : this.extractReferenceIds('', sessionId),
         tags: Array.isArray(parsed.tags) ? parsed.tags.map(String) : JSON.parse(rawTags ?? '[]'),
@@ -1885,6 +2135,7 @@ export class MemoryEngine {
       return createMemoryProvenance({
         source: (source ?? 'runtime') as MemoryProvenance['source'],
         sessionId,
+        lane: this.inferLane(this.parseRawTags(rawTags), source as MemoryItem['source']),
         tags: (() => {
           try {
             return JSON.parse(rawTags ?? '[]');
@@ -2227,7 +2478,7 @@ export class MemoryEngine {
       cortex: tierMap['cortex'] ?? 0,
       totalLinks: linkCount,
       oldestEntry: oldest,
-      topTags: topTagsRaw.map(r => r.tag as string)
+      topTags: topTagsRaw.map(r => r.tag as string).filter((tag) => isOperatorVisibleTag(tag)).slice(0, 5)
     };
   }
 
@@ -2249,6 +2500,11 @@ export class MemoryEngine {
     state?: MemoryItem['state'];
     source?: MemoryItem['source'];
     sessionId?: string;
+    repoId?: string;
+    workspaceId?: string;
+    projectId?: string;
+    lane?: MemoryContainerLane;
+    includeHidden?: boolean;
   } = {}): MemorySnapshot[] {
     const clauses: string[] = [];
     const params: unknown[] = [];
@@ -2292,6 +2548,8 @@ export class MemoryEngine {
 
     return rows
       .map((row) => this.toSnapshot(this.rowToItem(row)))
+      .filter((item) => this.matchesContainerFilters(item.provenance, filters))
+      .filter((item) => filters.includeHidden || !this.isHiddenMemory(item.tags))
       .filter((item) => !filters.linkedType || item.related.some((reference) => reference.type === filters.linkedType))
       .sort((a, b) => (b.importanceScore - a.importanceScore) || (b.relevanceScore - a.relevanceScore) || (b.timestamp - a.timestamp))
       .slice(0, Math.max(limit, 1));
@@ -2426,7 +2684,7 @@ export class MemoryEngine {
       expired: counts.expired ?? 0,
       promoted,
       shared,
-      topTags: topTagsRaw.map((entry) => entry.tag),
+      topTags: topTagsRaw.map((entry) => entry.tag).filter((tag) => isOperatorVisibleTag(tag)).slice(0, 6),
     };
   }
 
@@ -2472,6 +2730,48 @@ export class MemoryEngine {
       byState,
       sharedContextCount,
     };
+  }
+
+  getContainerSummary(sessionId?: string): MemoryContainerSummary {
+    const snapshots = this.listSnapshots(500, { sessionId, includeHidden: true });
+    const byLane: Record<MemoryContainerLane, number> = {
+      profile: 0,
+      workspace: 0,
+      shared: 0,
+      inbox: 0,
+    };
+    const byRepoId: Record<string, number> = {};
+    const byProjectId: Record<string, number> = {};
+    const byWorkspaceId: Record<string, number> = {};
+    let hiddenCount = 0;
+
+    for (const snapshot of snapshots) {
+      const lane = snapshot.provenance.lane ?? this.inferLane(snapshot.tags, snapshot.source);
+      byLane[lane] += 1;
+      if (snapshot.provenance.repoId) {
+        byRepoId[snapshot.provenance.repoId] = (byRepoId[snapshot.provenance.repoId] || 0) + 1;
+      }
+      if (snapshot.provenance.projectId) {
+        byProjectId[snapshot.provenance.projectId] = (byProjectId[snapshot.provenance.projectId] || 0) + 1;
+      }
+      if (snapshot.provenance.workspaceId) {
+        byWorkspaceId[snapshot.provenance.workspaceId] = (byWorkspaceId[snapshot.provenance.workspaceId] || 0) + 1;
+      }
+      if (this.isHiddenMemory(snapshot.tags)) hiddenCount += 1;
+    }
+
+    return {
+      generatedAt: Date.now(),
+      byLane,
+      byRepoId,
+      byProjectId,
+      byWorkspaceId,
+      hiddenCount,
+    };
+  }
+
+  getLastPreCompactionBackup(): MemoryBackupSnapshot | null {
+    return this.lastPreCompactionBackup;
   }
 
   listSharedSnapshots(limit: number = 24, sessionId?: string): MemorySnapshot[] {
@@ -2705,6 +3005,10 @@ function safeParseTags(raw: string): string[] {
 
 function dedupeStrings(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
+}
+
+function isOperatorVisibleTag(tag: string): boolean {
+  return !['#phantom-learning', '#swarm', '#repo-profile', '#hidden', '#system-hidden', '#system'].includes(tag);
 }
 
 function dedupeReferences(references: MemoryEntityReference[]): MemoryEntityReference[] {

@@ -45,6 +45,11 @@ function test() {
   expectIncludes(knowledgeBaseHtml, 'href="./integrations.html"', 'knowledge base should link to integrations');
   expectIncludes(knowledgeBaseHtml, 'href="./architecture-diagrams.html"', 'knowledge base should link to architecture diagrams');
   expectIncludes(knowledgeBaseHtml, 'Docs Home →', 'knowledge base should link back to docs home');
+  expectIncludes(knowledgeBaseHtml, 'How Memory Works Across Clients', 'knowledge base should explain shared memory across clients');
+  expectIncludes(knowledgeBaseHtml, 'What Stays Local', 'knowledge base should explain local-first state boundaries');
+  expectIncludes(knowledgeBaseHtml, 'Inspect a Run', 'knowledge base should explain how to inspect a run');
+  expectIncludes(knowledgeBaseHtml, 'Advanced Controls', 'knowledge base should explain when to open advanced controls');
+  expectIncludes(knowledgeBaseHtml, 'readonly', 'knowledge base should document readonly memory fallback behavior');
   expectIncludes(integrationsHtml, 'href="./comparison.html"', 'integrations should link to comparison');
   expectIncludes(integrationsHtml, 'href="./knowledge-base.html"', 'integrations page should link to knowledge base');
   expectIncludes(integrationsHtml, 'href="./architecture-diagrams.html"', 'integrations page should link to architecture diagrams');

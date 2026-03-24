@@ -492,26 +492,27 @@
             </div>
 
             <div class="sidebar-group">
-                <div class="sidebar-title">Runtime Contract</div>
+                <div class="sidebar-title">Operator Jobs</div>
                 <ul class="sidebar-nav">
+                    <li><a href="#introduction">How Memory Works Across Clients</a></li>
                     <li><a href="#agent-language">Client Operating Guideline</a></li>
-                    <li><a href="#telemetry">Session Telemetry</a></li>
+                    <li><a href="#telemetry">Inspect a Run</a></li>
                 </ul>
             </div>
 
             <div class="sidebar-group">
-                <div class="sidebar-title">API Reference</div>
+                <div class="sidebar-title">Operator Surfaces</div>
                 <ul class="sidebar-nav">
-                    <li><a href="#api-memory">Memory Operations</a></li>
-                    <li><a href="#api-intelligence">Intelligence Ops</a></li>
-                    <li><a href="#api-parallel">Parallel Workers</a></li>
+                    <li><a href="#api-memory">Memory and Context Sources</a></li>
+                    <li><a href="#api-intelligence">What Stays Local</a></li>
+                    <li><a href="#api-parallel">Advanced Controls</a></li>
                 </ul>
             </div>
 
             <div class="sidebar-group">
-                <div class="sidebar-title">Guardrails</div>
+                <div class="sidebar-title">Trust</div>
                 <ul class="sidebar-nav">
-                    <li><a href="#mindkit">MindKit Verification</a></li>
+                    <li><a href="#mindkit">Trust, Quarantine, and Guardrails</a></li>
                 </ul>
             </div>
         </aside>
@@ -519,21 +520,22 @@
         <!-- CONTENT -->
         <main>
             <h1>Operator Knowledge Base</h1>
-            <p>This page is for operators and integrators who need to understand how Nexus Prime behaves at runtime, how the MCP path should be used, and what the dashboard is actually reporting.</p>
+            <p>This guide is organized around the jobs an operator actually performs in the console: understand current state, inspect memory, inspect runs, trust the system, and only then open advanced controls.</p>
 
             <!-- INTRO -->
             <section id="introduction">
-                <h2>1. Introduction</h2>
+                <h2>1. How Memory Works Across Clients</h2>
                 <p>Nexus Prime runs as a local-first MCP control plane. It sits between the driving client and the repo,
-                    providing memory recall, orchestration, runtime selection, verification, and persisted dashboard truth.</p>
+                    providing shared memory recall, orchestration, runtime selection, verification, and persisted dashboard truth across Codex, Claude Code, Windsurf, and other connected clients.</p>
 
                 <div class="callout">
                     <div class="callout-title" style="color: var(--cyan)">Mental Model</div>
-                    <p>Treat Nexus Prime as a control plane. Start non-trivial work with
+                    <p>Treat Nexus Prime as an operator console backed by a local memory layer. Start non-trivial work with
                         <code>nexus_session_bootstrap</code>, let <code>nexus_orchestrate</code> choose the runtime
-                        path by default, and inspect the packet, ledger, token telemetry, and usage snapshots when you
-                        need to understand what actually happened.</p>
+                        path by default, and inspect the packet, ledger, memory trace, token telemetry, and usage snapshots when you
+                        need to understand what actually happened. Shared memory is designed to survive client switches; repo state, approvals, and destructive actions remain local to the active workspace.</p>
                 </div>
+                <p>Memory is now split into four operator-facing lanes: <strong>workspace</strong> for repo and project knowledge, <strong>profile</strong> for stable user preferences, <strong>shared</strong> for explicitly shared verified learnings, and <strong>inbox</strong> for noisy or unverified candidates. Workspace memory is repo-scoped by default, so architecture decisions from one repository do not silently leak into another.</p>
             </section>
 
             <!-- AGENT LANGUAGE -->
@@ -541,7 +543,7 @@
                 <h2>2. Client Operating Guideline</h2>
                 <p>External clients should follow a compact sequence instead of manually chaining every subsystem. The
                     default path is bootstrap first, orchestrate second, with explicit low-level tools reserved for
-                    diagnostics and expert override cases.</p>
+                    diagnostics, trust review, and advanced override cases.</p>
 
                 <div class="lang-block">
                     <h3>Mandatory Client Lifecycle</h3>
@@ -559,7 +561,7 @@
 
             <!-- TELEMETRY -->
             <section id="telemetry">
-                <h2>3. Reading Session Telemetry</h2>
+                <h2>3. Inspect a Run</h2>
                 <p>Nexus Prime automatically formats its log outputs back to the MCP Client using Grain primitives.
                     Every successful MCP action appends a state header to the response:</p>
                 <pre>&lt;state type="telemetry"&gt;
@@ -567,7 +569,8 @@
 3 calls │ 20.3k tokens saved │ 2 stored │ 5 recalled
 &lt;/state&gt;</pre>
                 <p>Operators do not need to parse this by hand. The dashboard and runtime snapshot persist the same
-                    state so you can inspect lifetime totals and per-run details even after restart.</p>
+                    state so you can inspect current runtime health, the latest run, lifetime totals, and per-run details even after restart.</p>
+                <p>The run surfaces now expose per-gate evidence instead of one global pass/fail bit. That means you can see which review gates were ready, blocked, planned, or skipped, why a specialist or workflow was selected or rejected, and how token optimization changed the prompt budget before execution.</p>
 
                 <div class="console-proof">
                     <span class="console-proof-label">Operator transcript example</span>
@@ -583,9 +586,9 @@ Session bootstrap ready.
 
             <!-- MCP API REFERENCE -->
             <section id="api-memory">
-                <h2>4. API Reference</h2>
+                <h2>4. Memory, Local State, and Advanced Controls</h2>
 
-                <h3>Memory Operations</h3>
+                <h3>Memory and Context Sources</h3>
                 <table>
                     <thead>
                         <tr>
@@ -598,14 +601,13 @@ Session bootstrap ready.
                         <tr>
                             <td>nexus_recall_memory</td>
                             <td><code>query</code> (str), <code>k</code> (num)</td>
-                            <td>Performs a Vector/TF-IDF similarity search across the SQLite Cortex database. Retrieves
+                            <td>Performs a Vector/TF-IDF similarity search across the local SQLite memory database and retrieves
                                 historical context.</td>
                         </tr>
                         <tr>
                             <td>nexus_store_memory</td>
                             <td><code>content</code> (str), <code>priority</code> (num), <code>tags</code> (arr)</td>
-                            <td>Persists an insight to the Cortex. Priority > 0.8 keeps the memory active in the
-                                Hippocampus cache.</td>
+                            <td>Persists an insight to local memory. Durable storage defaults to user plus repo/workspace context; low-confidence or contradictory memory is routed to inbox or quarantine instead of polluting active recall.</td>
                         </tr>
                         <tr>
                             <td>nexus_memory_stats</td>
@@ -616,7 +618,9 @@ Session bootstrap ready.
                     </tbody>
                 </table>
 
-                <h3 id="api-intelligence">Intelligence Ops</h3>
+                <h3 id="api-intelligence">What Stays Local</h3>
+                <p>By default, Nexus Prime remains single-binary and local-first. Memory lives in the configured local state directory. If the requested memory database path is readonly, Nexus Prime falls back to a writable Nexus state location and reports that fallback in dashboard health so operators can see it instead of silently losing writes.</p>
+                <p>Before any compaction or model summary step, Nexus Prime writes an immutable pre-compaction backup bundle. Operators can inspect that backup path in the Trust surface to prove that raw evidence was preserved before summarization or forgetting logic ran.</p>
                 <table>
                     <thead>
                         <tr>
@@ -641,13 +645,15 @@ Session bootstrap ready.
                         <tr>
                             <td>nexus_mindkit_check</td>
                             <td><code>action</code>, <code>filesToModify</code></td>
-                            <td>Strict policy evaluation. Returns PASS/FAIL based on Token Budgets and the Destructive
-                                Guard filters.</td>
+                            <td>Strict policy evaluation. Returns PASS/FAIL based on token budgets and destructive
+                                guard filters.</td>
                         </tr>
                     </tbody>
                 </table>
 
-                <h3 id="api-parallel">Parallel Workers</h3>
+                <h3 id="api-parallel">Advanced Controls</h3>
+                <p>The operator console now keeps advanced controls behind an explicit fold. The default path is: search memory, inspect a run, launch a guided task, then open advanced controls only when you need asset selection, backend override, or worker tuning.</p>
+                <p>Parallel execution remains guarded. Nexus Prime caps default autonomous worker fan-out, shows the bounded worker plan in the Runs surface, and keeps the selection audit visible so operators can explain why a given specialist, skill, or workflow was chosen for investor demos or production debugging.</p>
                 <table>
                     <thead>
                         <tr>
@@ -660,7 +666,7 @@ Session bootstrap ready.
                         <tr>
                             <td>nexus_spawn_workers</td>
                             <td><code>goal</code> (str), <code>files</code> (arr)</td>
-                            <td>Spawns headless Phantom Workers into isolated `git worktrees`. Evaluates differing
+                            <td>Spawns headless Phantom Workers into isolated <code>git worktrees</code>. Evaluates differing
                                 solutions via Byzantine Merge Oracle.</td>
                         </tr>
                         <tr>
@@ -671,12 +677,19 @@ Session bootstrap ready.
                         </tr>
                     </tbody>
                 </table>
+
+                <h3>Investor-Proof Use Cases</h3>
+                <ul>
+                    <li><strong>Repo-scoped engineering memory:</strong> architecture decisions, bug fixes, and file-boundary knowledge stay attached to the active repository.</li>
+                    <li><strong>Cross-session investigation:</strong> root causes and verified fixes recall cleanly while chat noise and orchestration chatter stay out of the active working set.</li>
+                    <li><strong>Explainable autonomy:</strong> runs show token savings, gate evidence, selected assets, rejected assets, and bounded parallel execution before any advanced override is opened.</li>
+                </ul>
             </section>
 
             <section id="mindkit">
-                <h2>5. MindKit Guardrails & Sync</h2>
+                <h2>5. Trust, Quarantine, and Guardrails</h2>
                 <p>Nexus Prime acts as the enforcement layer for the policies defined by the <code>sir-ad/mindkit</code>
-                    repository.</p>
+                    repository. Trust surfaces explain quarantine, guardrails, worktree health, and federation state without forcing operators to inspect the full control plane first.</p>
 
                 <div class="callout warning">
                     <div class="callout-title" style="color: var(--amber)">Destructive File Protection</div>
@@ -684,6 +697,11 @@ Session bootstrap ready.
                         automatically trigger the <strong>BULK_FILE_GUARD</strong>. The MCP server will respond with a
                         warning exception requesting a fallback to a <code>nexus_ghost_pass</code>.</p>
                 </div>
+
+                <p>Trust surfaces also show MCP interpretation issues explicitly. When low-confidence selector matches are rejected, when noisy memory is quarantined, or when a stale runtime would make mutation unsafe, the dashboard exposes that reasoning directly instead of leaving operators to infer it from logs.</p>
+
+                <h3>When to Open Advanced Controls</h3>
+                <p>Open advanced controls when you need explicit worker counts, backend overrides, deploy/revoke actions, or direct trust review. Keep the default console path simple for routine operation; escalate only when the surface data tells you a run, memory, or trust condition actually needs intervention.</p>
 
                 <h3>Bidirectional MindKit Sync</h3>
                 <p>When the <code>nexus_audit_evolution</code> tool runs, Nexus Prime pushes analytical telemetry
