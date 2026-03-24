@@ -206,7 +206,7 @@ function buildInstructionFiles(clientId: SetupClientId): Array<{ path: string; c
       content: artifact.content,
     }));
   }
-  const fileName = clientId === 'claude' ? 'claude-code.md' : 'opencode.md';
+  const fileName = clientId === 'claude' || clientId === 'claude-code' || clientId === 'claude-desktop' ? 'claude-code.md' : 'opencode.md';
   return bundle.artifacts.map((artifact: ClientBootstrapArtifact, index) => ({
     path: join(workspaceRoot, '.agent', 'client-bootstrap', index === 0 ? fileName : `${fileName.replace(/\.md$/, '')}-${index + 1}.md`),
     content: artifact.content,
