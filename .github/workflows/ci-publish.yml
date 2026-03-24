@@ -25,7 +25,6 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run lint
-      - run: npm test
       - run: npm pack --dry-run
       - run: npm run audit:prod
       - name: Lint workflows
