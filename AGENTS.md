@@ -21,6 +21,18 @@ Session end is REQUIRED:
 
 Memory persists under ~/.nexus-prime/. Full operating protocol: docs/nexus-protocol.md
 
+## Git Commit Policy
+
+All commits made by AI agents (Claude, Copilot, or any automated tool) MUST include the following co-author trailer:
+
+```
+Co-Authored-By: nexus-prime <33547839+sir-ad@users.noreply.github.com>
+```
+
+- Do NOT use any other identity (e.g. `claude-flow`, `ruv`, etc.) as co-author.
+- The only acceptable co-author for automated/AI commits is `nexus-prime`.
+- This applies to all branches, PRs, and release commits.
+
 <!-- nexus-prime:codex-bootstrap:start -->
 ## Nexus Prime Bootstrap (managed)
 
@@ -69,6 +81,15 @@ IF ARCHITECTS_OPERATIVE_ID is set:
 6. Use `nexus_architects_relay_send(...)` for operative-to-operative messages
 7. Escalate 2+ sortie blockers to ward via relay instead of waiting silently
 <!-- nexus-prime:architects:end -->
+
+
+
+
+
+
+
+
+
 
 
 
