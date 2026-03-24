@@ -632,6 +632,17 @@ Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 
 ## 📜 Release History
 
 <details open>
+<summary><b>v4.3.0</b> · 2026-03-24 · Sparse n-gram index engine and reactor core stabilization</summary>
+
+- **Sparse n-gram index engine**: Forged a sparse n-gram index engine using trigram decomposition with probabilistic masks and CRC32-weighted variable-length n-gram extraction.
+- **Six core engines routed via lattice**: Queries are now channeled through the lattice before full scoring for memory recall, graph traversal, skill resolution, pattern search, hybrid retrieval, and knowledge fabric operations.
+- **Reactor Core Stabilization**: Client bootstrap now scans for present vessels, session locks via PID tracking purge stale phantom sessions, dashboard telemetry separation, and hook dispatch containment fields.
+- **Dormant Operative Signals & New CLI**: Synapse and Architects modules are dormant until operative signal received, plus new `cleanup` and `doctor` commands.
+
+Full notes: [releases/v4.3.0.md](./releases/v4.3.0.md) · Full history: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
 <summary><b>v4.2.0</b> · 2026-03-24 · Orchestration reliability, scoped memory, and investor-ready runtime truth</summary>
 
 - **Task-aware orchestration**: Review gates now apply per run and per gate, low-confidence cross-domain artifact picks are rejected, and bounded worker parallelism stays visible instead of hiding behind one blocked verification state.
@@ -639,7 +650,6 @@ Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 
 - **Operator-facing trust signals**: The dashboard now surfaces token optimization, gate reasoning, memory container counts, interpretation issues, selection audits, and pre-compaction backup status as first-class runtime truth.
 - **Investor-ready public release path**: README, changelog, landing-page changelog, and canonical release notes now describe the same reliability release without drifting between surfaces.
 
-Full notes: [releases/v4.2.0.md](./releases/v4.2.0.md) · Full history: [CHANGELOG.md](./CHANGELOG.md)
 </details>
 
 <details>

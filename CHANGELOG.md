@@ -2,7 +2,24 @@
 
 All notable changes to Nexus Prime are documented here.
 
-Release Index: [v4.2.0](#v420--2026-03-24) · [v4.1.0](#v410--2026-03-23) · [v4.0.0](#v400--2026-03-22) · [v3.18.0](#v3180--2026-03-21) · [v3.17.0](#v3170--2026-03-20) · [v3.16.0](#v3160--2026-03-20)
+Release Index: [v4.3.0](#v430--2026-03-24) · [v4.2.0](#v420--2026-03-24) · [v4.1.0](#v410--2026-03-23) · [v4.0.0](#v400--2026-03-22) · [v3.18.0](#v3180--2026-03-21) · [v3.17.0](#v3170--2026-03-20)
+
+<details open>
+<summary><b>v4.3.0</b> · 2026-03-24 · Sparse n-gram index engine and reactor core stabilization</summary>
+
+### Added
+- **Sparse n-gram index engine**: Forged a sparse n-gram index engine using trigram decomposition with probabilistic masks (locMask + nextMask bloom filters) and CRC32-weighted variable-length n-gram extraction.
+- **Six core engines routed via lattice**: Queries are now channeled through the lattice before full scoring for memory recall, graph traversal, skill resolution, pattern search, hybrid retrieval, and knowledge fabric operations.
+
+### Changed
+- **Client bootstrap validation**: Client bootstrap now scans for present vessels before installation.
+- **Session locks via PID tracking**: Session locks with PID tracking automatically purge stale phantom sessions.
+- **Dashboard telemetry separation**: Dashboard now separates core runtime telemetry from optional capabilities telemetry.
+- **Containment fields for hooks**: Hook dispatch is now wrapped in containment fields with proper error propagation limits.
+- **Dormant Operative Signals**: Synapse and Architects modules are now correctly dormant until an operative signal is explicitly received.
+- **New CLI commands**: Added `cleanup` (purge config drift) and `doctor` (diagnostic scan).
+
+</details>
 
 <details open>
 <summary><b>v4.2.0</b> · 2026-03-24 · Orchestration reliability, scoped memory, and investor-ready runtime truth</summary>
