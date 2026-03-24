@@ -14,6 +14,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import { EntityExtractor } from './entity-extractor.js';
+import { NgramIndex, getSharedNgramIndex } from './ngram-index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -62,6 +63,7 @@ export interface IMemoryStore {
 export class GraphMemoryEngine implements IMemoryStore {
     private db: Database.Database;
     private extractor: EntityExtractor;
+    private ngramIndex: NgramIndex | null = null;
 
     constructor(dbPath?: string) {
         const dbDir = path.join(os.homedir(), '.nexus-prime');
@@ -71,6 +73,12 @@ export class GraphMemoryEngine implements IMemoryStore {
         this.db = new Database(resolvedPath);
         this.db.pragma('foreign_keys = ON');
         this.extractor = new EntityExtractor();
+
+        try {
+            this.ngramIndex = getSharedNgramIndex();
+        } catch {
+            // N-gram index unavailable — fall back to SQL LIKE
+        }
 
         this.initSchema();
     }
@@ -141,6 +149,8 @@ export class GraphMemoryEngine implements IMemoryStore {
             'INSERT INTO entities (id, name, type, properties, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
         ).run(id, name, type, JSON.stringify(properties), now, now);
 
+        try { this.ngramIndex?.addDocument(id, name); } catch { /* n-gram index error — non-fatal */ }
+
         return { id, name, type, properties, createdAt: now, updatedAt: now };
     }
 
@@ -153,6 +163,25 @@ export class GraphMemoryEngine implements IMemoryStore {
 
     /** Find entities by name (partial match) */
     findEntities(query: string, limit: number = 20): Entity[] {
+        // Try n-gram index first for faster candidate filtering
+        try {
+            if (this.ngramIndex) {
+                const candidates = this.ngramIndex.search(query, limit);
+                if (candidates.length > 0) {
+                    const ids = candidates.map(c => c.docId);
+                    const placeholders = ids.map(() => '?').join(',');
+                    const rows = this.db.prepare(
+                        `SELECT * FROM entities WHERE id IN (${placeholders}) ORDER BY updated_at DESC LIMIT ?`
+                    ).all(...ids, limit) as any[];
+                    if (rows.length > 0) {
+                        return rows.map(r => this.rowToEntity(r));
+                    }
+                }
+            }
+        } catch {
+            // Fall through to LIKE query
+        }
+
         const rows = this.db.prepare(
             'SELECT * FROM entities WHERE name LIKE ? ORDER BY updated_at DESC LIMIT ?'
         ).all(`%${query}%`, limit) as any[];
@@ -230,6 +259,8 @@ export class GraphMemoryEngine implements IMemoryStore {
             'INSERT INTO fact_versions (id, entity_id, content, version, valid_from) VALUES (?, ?, ?, ?, ?)'
         ).run(id, entityId, content, version, now);
 
+        try { this.ngramIndex?.addDocument(id, content); } catch { /* n-gram index error — non-fatal */ }
+
         return { id, entityId, content, version, validFrom: now, validUntil: null, supersededBy: null };
     }
 
@@ -297,15 +328,41 @@ export class GraphMemoryEngine implements IMemoryStore {
     async recall(query: string, k: number = 5): Promise<string[]> {
         const queryLower = query.toLowerCase();
 
-        // Search facts by content
-        const factRows = this.db.prepare(`
-      SELECT fv.content, e.name, e.type
-      FROM fact_versions fv
-      JOIN entities e ON fv.entity_id = e.id
-      WHERE fv.valid_until IS NULL
-      ORDER BY fv.valid_from DESC
-      LIMIT 200
-    `).all() as any[];
+        // Try n-gram index to narrow candidate facts before scoring
+        let factRows: any[] | null = null;
+        try {
+            if (this.ngramIndex) {
+                const candidates = this.ngramIndex.search(query, 200);
+                if (candidates.length > 0) {
+                    const ids = candidates.map(c => c.docId);
+                    const placeholders = ids.map(() => '?').join(',');
+                    const rows = this.db.prepare(`
+                        SELECT fv.content, e.name, e.type
+                        FROM fact_versions fv
+                        JOIN entities e ON fv.entity_id = e.id
+                        WHERE fv.valid_until IS NULL AND fv.id IN (${placeholders})
+                        ORDER BY fv.valid_from DESC
+                    `).all(...ids) as any[];
+                    if (rows.length > 0) {
+                        factRows = rows;
+                    }
+                }
+            }
+        } catch {
+            // Fall through to full scan
+        }
+
+        // Fall back to full scan if n-gram returned nothing
+        if (!factRows) {
+            factRows = this.db.prepare(`
+                SELECT fv.content, e.name, e.type
+                FROM fact_versions fv
+                JOIN entities e ON fv.entity_id = e.id
+                WHERE fv.valid_until IS NULL
+                ORDER BY fv.valid_from DESC
+                LIMIT 200
+            `).all() as any[];
+        }
 
         const scored = factRows.map(row => {
             const content = row.content as string;

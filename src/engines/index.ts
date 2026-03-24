@@ -11,6 +11,7 @@ export { ContextCompressor, type CompressionOptions, type CompressionStats } fro
 
 export { MemoryEngine, createMemoryEngine } from './memory.js';
 export type { MemoryItem } from './memory.js';
+export { NgramIndex, getSharedNgramIndex } from './ngram-index.js';
 
 export { OrchestratorEngine, createOrchestrator } from './orchestrator.js';
 export type { Agent, AgentType, Task } from './orchestrator.js';

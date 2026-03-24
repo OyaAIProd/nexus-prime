@@ -11,6 +11,7 @@ import {
     type SkillRiskClass,
     type SkillScope,
 } from './runtime-assets.js';
+import { nexusEventBus } from './event-bus.js';
 
 export interface HookArtifact {
     hookId: string;
@@ -211,36 +212,42 @@ export class HookRuntime {
         let blocked = false;
 
         for (const hook of selected) {
-            const mutateBlocked = hook.riskClass === 'mutate' && !context.allowMutateHooks;
-            hook.effectiveness.fired += 1;
-            if (mutateBlocked) {
-                hook.effectiveness.blocked += 1;
-                blocked = true;
-                notes.push(`Blocked mutate hook ${hook.name} at ${trigger}.`);
+            try {
+                const mutateBlocked = hook.riskClass === 'mutate' && !context.allowMutateHooks;
+                hook.effectiveness.fired += 1;
+                if (mutateBlocked) {
+                    hook.effectiveness.blocked += 1;
+                    blocked = true;
+                    notes.push(`Blocked mutate hook ${hook.name} at ${trigger}.`);
+                    events.push({
+                        type: 'hook.blocked',
+                        hookId: hook.hookId,
+                        name: hook.name,
+                        trigger,
+                        reason: 'mutate-hooks-disabled',
+                    });
+                    continue;
+                }
+
+                hook.workflowSelectors.forEach((selector) => workflowSelectors.add(selector));
+                hook.skillSelectors.forEach((selector) => skillSelectors.add(selector));
+                toolBindings.push(...hook.toolBindings);
+                hook.effectiveness.queued += hook.workflowSelectors.length + hook.skillSelectors.length + hook.toolBindings.length;
+                notes.push(`Hook ${hook.name} fired at ${trigger}.`);
                 events.push({
-                    type: 'hook.blocked',
+                    type: 'hook.fired',
                     hookId: hook.hookId,
                     name: hook.name,
                     trigger,
-                    reason: 'mutate-hooks-disabled',
+                    domain: hook.domain,
+                    riskClass: hook.riskClass,
                 });
-                continue;
+                this.persistArtifact(hook);
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                notes.push(`Hook ${hook.name} errored: ${message}`);
+                nexusEventBus.emit('hook.error', { hookId: hook.hookId, error: message });
             }
-
-            hook.workflowSelectors.forEach((selector) => workflowSelectors.add(selector));
-            hook.skillSelectors.forEach((selector) => skillSelectors.add(selector));
-            toolBindings.push(...hook.toolBindings);
-            hook.effectiveness.queued += hook.workflowSelectors.length + hook.skillSelectors.length + hook.toolBindings.length;
-            notes.push(`Hook ${hook.name} fired at ${trigger}.`);
-            events.push({
-                type: 'hook.fired',
-                hookId: hook.hookId,
-                name: hook.name,
-                trigger,
-                domain: hook.domain,
-                riskClass: hook.riskClass,
-            });
-            this.persistArtifact(hook);
         }
 
         return {

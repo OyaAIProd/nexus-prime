@@ -483,7 +483,14 @@ export function installSetup(
         ensureParentDir(file.path);
         if (file.mode === 'codex-managed-agents') {
             const existing = existsSync(file.path) ? readFileSync(file.path, 'utf8') : null;
-            writeFileSync(file.path, mergeCodexAgentsContent(existing, file.content), 'utf8');
+            const merged = mergeCodexAgentsContent(existing, file.content);
+            if (existing !== merged) {
+                writeFileSync(file.path, merged, 'utf8');
+            }
+            continue;
+        }
+        // Skip write if content is already current
+        if (existsSync(file.path) && readFileSync(file.path, 'utf8') === file.content) {
             continue;
         }
         writeFileSync(file.path, file.content, 'utf8');
@@ -586,7 +593,53 @@ function workspaceEligible(workspaceRoot: string): boolean {
         || existsSync(join(workspaceRoot, 'AGENTS.md'));
 }
 
+/**
+ * Detect whether a given client is actually installed on this machine.
+ * Checks for the client binary and/or its well-known config directory.
+ */
+function isClientPresent(clientId: SetupClientId): boolean {
+    const home = homedir();
+    const checks: Record<SetupClientId, () => boolean> = {
+        'claude-code': () => hasBinary('claude') || existsSync(join(home, '.claude')),
+        'claude': () => hasBinary('claude') || existsSync(join(home, '.claude')),
+        'claude-desktop': () => {
+            if (process.platform === 'darwin') {
+                return existsSync(join(home, 'Library', 'Application Support', 'Claude'));
+            }
+            if (process.platform === 'win32') {
+                return existsSync(join(process.env.APPDATA || '', 'Claude'));
+            }
+            return existsSync(join(home, '.config', 'claude'));
+        },
+        'cursor': () => hasBinary('cursor') || existsSync(join(home, '.cursor')),
+        'opencode': () => hasBinary('opencode') || existsSync(join(home, '.config', 'opencode')),
+        'windsurf': () => hasBinary('windsurf') || existsSync(join(home, '.windsurf')),
+        'codex': () => hasBinary('codex'),
+        'aider': () => hasBinary('aider') || existsSync(join(home, '.aider')),
+        'continue': () => existsSync(join(home, '.continue')),
+        'cline': () => existsSync(join(home, '.vscode')),
+        'antigravity': () => hasBinary('antigravity') || existsSync(join(home, '.antigravity')),
+        'openclaw': () => hasBinary('openclaw') || existsSync(join(home, '.openclaw')),
+    };
+    try {
+        return checks[clientId]?.() ?? false;
+    } catch {
+        return false;
+    }
+}
+
+function hasBinary(name: string): boolean {
+    try {
+        execSync(`which ${name}`, { stdio: 'ignore', timeout: 2000 });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 function ensureWorkspaceAgentScaffold(workspaceRoot: string): void {
+    const agentDir = join(workspaceRoot, '.agent');
+    const isFirstRun = !existsSync(agentDir);
     const directories = [
         '.agent',
         '.agent/client-bootstrap',
@@ -596,16 +649,17 @@ function ensureWorkspaceAgentScaffold(workspaceRoot: string): void {
         '.agent/workflows',
         '.agent/hooks',
         '.agent/automations',
-        '.agent/crews',
-        '.agent/specialists',
     ];
     directories.forEach((relativeDir) => {
         mkdirSync(join(workspaceRoot, relativeDir), { recursive: true });
     });
-    for (const seed of WORKSPACE_SEED_FILES) {
-        const target = join(workspaceRoot, seed.relativePath);
-        if (!existsSync(target)) {
-            writeFileSync(target, seed.content, 'utf8');
+    // Only seed files on first run to avoid re-creating deleted content
+    if (isFirstRun) {
+        for (const seed of WORKSPACE_SEED_FILES) {
+            const target = join(workspaceRoot, seed.relativePath);
+            if (!existsSync(target)) {
+                writeFileSync(target, seed.content, 'utf8');
+            }
         }
     }
 }
@@ -686,9 +740,10 @@ export function ensureBootstrap(options: EnsureBootstrapOptions): BootstrapManif
     }
 
     for (const clientId of SUPPORTED_CLIENTS) {
+        if (!isClientPresent(clientId)) continue;
         try {
             const definition = getSetupDefinition(clientId, { packageRoot, workspaceRoot });
-            
+
             const configPath = definition.configPath;
             if (configPath) {
                 try {
@@ -702,7 +757,7 @@ export function ensureBootstrap(options: EnsureBootstrapOptions): BootstrapManif
                     // File doesn't exist or other error - proceed with write
                 }
             }
-            
+
             installSetup(definition, { scope });
         } catch (error) {
             console.warn(`Bootstrap failed for client ${clientId}: ${error}`);

@@ -16,6 +16,7 @@ import {
     type SkillScope,
 } from './runtime-assets.js';
 import { createEmbedder, type Embedder } from './embedder.js';
+import { getSharedNgramIndex, type NgramIndex } from './ngram-index.js';
 
 function tokenize(text: string): Set<string> {
     return new Set(
@@ -43,7 +44,18 @@ function computeSkillRelevance(goal: string, artifact: { name: string; instructi
     const instructionScore = jaccardSimilarity(goalTokens, instructionTokens);
     const domainScore = jaccardSimilarity(goalTokens, domainTokens);
     
-    return Math.max(nameScore, instructionScore * 0.7, domainScore * 0.5);
+    // Substring boost: if any goal token appears as a substring of the skill name or domain, add +0.2
+    const nameLower = artifact.name.toLowerCase();
+    const domainLower = (artifact.domain || '').toLowerCase();
+    let substringBoost = 0;
+    for (const token of goalTokens) {
+        if (nameLower.includes(token) || domainLower.includes(token)) {
+            substringBoost = 0.2;
+            break;
+        }
+    }
+
+    return Math.max(nameScore, instructionScore * 0.7, domainScore * 0.5) + substringBoost;
 }
 
 async function computeSemanticRelevance(goal: string, goalVector: number[], artifact: SkillArtifact, embedder: Embedder): Promise<number> {
@@ -116,17 +128,28 @@ export class SkillRuntime {
     private artifacts = new Map<string, SkillArtifact>();
     private bootstrapped = false;
     private embedder?: Embedder;
+    private ngramIndex: NgramIndex | null = null;
 
     constructor(private registry?: SkillCardRegistry, rootDir?: string, workspaceRoot?: string) {
         this.rootDir = rootDir ?? path.join(os.tmpdir(), 'nexus-prime-runtime-skills');
         this.workspaceRoot = workspaceRoot ?? process.cwd();
         fs.mkdirSync(this.rootDir, { recursive: true });
+        try {
+            this.ngramIndex = getSharedNgramIndex();
+        } catch {
+            this.ngramIndex = null;
+        }
         this.ensureBootstrapped();
     }
 
     private getEmbedder(): Embedder {
         if (!this.embedder) {
-            this.embedder = createEmbedder();
+            try {
+                this.embedder = createEmbedder();
+            } catch (err) {
+                console.warn('Embedder initialization failed:', (err as Error).message);
+                throw err;
+            }
         }
         return this.embedder;
     }
@@ -226,7 +249,7 @@ export class SkillRuntime {
         this.ensureBootstrapped();
         const selectors = new Set(names.map((name) => name.toLowerCase()));
         const domains = detectDomains(goal, names);
-        const RELEVANCE_THRESHOLD = 0.3;
+        const RELEVANCE_THRESHOLD = 0.4;
 
         const exactMatches = this.listArtifacts().filter((artifact) =>
             selectors.has(artifact.name.toLowerCase()) ||
@@ -234,7 +257,23 @@ export class SkillRuntime {
             (artifact.domain ? domains.includes(artifact.domain) : false)
         );
 
-        const candidates = this.listArtifacts().filter((artifact) => !exactMatches.includes(artifact));
+        const allCandidates = this.listArtifacts().filter((artifact) => !exactMatches.includes(artifact));
+
+        // N-gram pre-filter: narrow candidates before expensive semantic scoring
+        let candidates = allCandidates;
+        try {
+            const ngramHits = this.ngramIndex?.search(goal, 10);
+            if (ngramHits && ngramHits.length > 0) {
+                const hitIds = new Set(ngramHits.map((h) => h.docId));
+                const filtered = allCandidates.filter((a) => hitIds.has(a.skillId));
+                if (filtered.length > 0) {
+                    candidates = filtered;
+                }
+            }
+        } catch {
+            // n-gram search failed; fall back to full scan
+        }
+
         const embedder = this.getEmbedder();
         const goalVector = await embedder.embed(goal);
 
@@ -246,7 +285,7 @@ export class SkillRuntime {
         const fuzzyCandidates = scoredCandidates
             .filter((candidate) => candidate.relevance >= RELEVANCE_THRESHOLD)
             .sort((a, b) => b.relevance - a.relevance)
-            .slice(0, 5)
+            .slice(0, 3)
             .map((candidate) => candidate.artifact);
 
         return dedupeSkills([...exactMatches, ...fuzzyCandidates]);
@@ -374,6 +413,14 @@ export class SkillRuntime {
         this.artifacts.set(artifact.skillId, artifact);
         this.persistArtifact(artifact);
         this.registerSkillCard(artifact);
+        try {
+            this.ngramIndex?.addDocument(
+                artifact.skillId,
+                artifact.name + ' ' + artifact.instructions + ' ' + (artifact.domain ?? ''),
+            );
+        } catch {
+            // n-gram indexing is best-effort; fall back silently
+        }
         return artifact;
     }
 

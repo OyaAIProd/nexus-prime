@@ -14,6 +14,19 @@ import * as path from 'path';
 import * as os from 'os';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function isPidAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -81,6 +94,107 @@ export class SessionDNAManager {
         this.startTime = Date.now();
         this.sessionsDir = sessionsDir ?? path.join(os.homedir(), '.nexus-prime', 'sessions');
         fs.mkdirSync(this.sessionsDir, { recursive: true });
+        this.writeLock();
+        this.cleanStaleSessions();
+    }
+
+    /** Write a lock file for this session with PID for stale detection */
+    private writeLock(): void {
+        try {
+            const lockPath = path.join(this.sessionsDir, `${this.sessionId}.lock`);
+            fs.writeFileSync(lockPath, JSON.stringify({
+                pid: process.pid,
+                sessionId: this.sessionId,
+                startedAt: this.startTime,
+            }));
+        } catch { /* best-effort */ }
+    }
+
+    /** Remove the lock file for this session */
+    removeLock(): void {
+        try {
+            const lockPath = path.join(this.sessionsDir, `${this.sessionId}.lock`);
+            if (fs.existsSync(lockPath)) fs.unlinkSync(lockPath);
+        } catch { /* best-effort */ }
+    }
+
+    /** Clean up stale sessions from dead processes */
+    private cleanStaleSessions(): void {
+        try {
+            const files = fs.readdirSync(this.sessionsDir);
+            const lockFiles = files.filter(f => f.endsWith('.lock'));
+            const now = Date.now();
+            const STALE_THRESHOLD = 24 * 60 * 60 * 1000; // 24 hours
+
+            for (const lockFile of lockFiles) {
+                const lockPath = path.join(this.sessionsDir, lockFile);
+                try {
+                    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+                    const isAlive = isPidAlive(lock.pid);
+                    const isOld = now - (lock.startedAt ?? 0) > STALE_THRESHOLD;
+
+                    if (!isAlive || isOld) {
+                        // Remove lock
+                        fs.unlinkSync(lockPath);
+                        // Remove corresponding session JSON
+                        const sessionFile = lockFile.replace('.lock', '.json');
+                        const sessionPath = path.join(this.sessionsDir, sessionFile);
+                        if (fs.existsSync(sessionPath)) {
+                            fs.unlinkSync(sessionPath);
+                        }
+                    }
+                } catch {
+                    // Corrupted lock file - remove it
+                    try { fs.unlinkSync(lockPath); } catch { /* ignore */ }
+                }
+            }
+
+            // Also clean orphaned session JSONs older than 24h with no lock
+            const jsonFiles = files.filter(f => f.endsWith('.json') && !f.endsWith('.lock'));
+            for (const jsonFile of jsonFiles) {
+                const lockExists = fs.existsSync(path.join(this.sessionsDir, jsonFile.replace('.json', '.lock')));
+                if (!lockExists) {
+                    const jsonPath = path.join(this.sessionsDir, jsonFile);
+                    try {
+                        const stat = fs.statSync(jsonPath);
+                        if (now - stat.mtimeMs > STALE_THRESHOLD) {
+                            fs.unlinkSync(jsonPath);
+                        }
+                    } catch { /* ignore */ }
+                }
+            }
+        } catch { /* best-effort cleanup */ }
+    }
+
+    /** Static cleanup for use from CLI commands */
+    static cleanStale(sessionsDir?: string): number {
+        const dir = sessionsDir ?? path.join(os.homedir(), '.nexus-prime', 'sessions');
+        if (!fs.existsSync(dir)) return 0;
+        let cleaned = 0;
+        const files = fs.readdirSync(dir);
+        const now = Date.now();
+        const STALE_THRESHOLD = 24 * 60 * 60 * 1000;
+
+        for (const lockFile of files.filter(f => f.endsWith('.lock'))) {
+            try {
+                const lock = JSON.parse(fs.readFileSync(path.join(dir, lockFile), 'utf8'));
+                if (!isPidAlive(lock.pid) || now - (lock.startedAt ?? 0) > STALE_THRESHOLD) {
+                    fs.unlinkSync(path.join(dir, lockFile));
+                    const sessionPath = path.join(dir, lockFile.replace('.lock', '.json'));
+                    if (fs.existsSync(sessionPath)) { fs.unlinkSync(sessionPath); cleaned++; }
+                }
+            } catch { try { fs.unlinkSync(path.join(dir, lockFile)); } catch { /* ignore */ } }
+        }
+
+        for (const jsonFile of files.filter(f => f.endsWith('.json'))) {
+            if (!fs.existsSync(path.join(dir, jsonFile.replace('.json', '.lock')))) {
+                try {
+                    const stat = fs.statSync(path.join(dir, jsonFile));
+                    if (now - stat.mtimeMs > STALE_THRESHOLD) { fs.unlinkSync(path.join(dir, jsonFile)); cleaned++; }
+                } catch { /* ignore */ }
+            }
+        }
+        return cleaned;
     }
 
     getSessionId(): string {
@@ -204,11 +318,12 @@ export class SessionDNAManager {
 
     // ── Persistence ────────────────────────────────────────────────────────
 
-    /** Save the current SessionDNA to disk */
+    /** Save the current SessionDNA to disk and release the session lock */
     flush(): SessionDNA {
         const dna = this.generate();
         const filePath = path.join(this.sessionsDir, `${this.sessionId}.json`);
         fs.writeFileSync(filePath, JSON.stringify(dna, null, 2));
+        this.removeLock();
         return dna;
     }
 

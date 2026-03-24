@@ -13,7 +13,8 @@ import Database from 'better-sqlite3';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
+import { execSync } from 'child_process';
 import {
   Embedder,
   HyperbolicMath,
@@ -21,6 +22,7 @@ import {
   type PersistentVocabularyStatus,
 } from './embedder.js';
 import { GraphMemoryEngine } from './graph-memory.js';
+import { NgramIndex } from './ngram-index.js';
 import { podNetwork } from './pod-network.js';
 import { nexusEventBus } from './event-bus.js';
 import { SECRET_PATTERNS } from './security-shield.js';
@@ -35,6 +37,26 @@ import {
   type MemoryReconciliationEntry,
   type MemoryReconciliationSummary,
 } from './memory-control-plane.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _cachedRepoId: string | undefined;
+
+/** Derive a stable repoId from git remote URL or workspace path */
+function resolveCurrentRepoId(): string {
+  if (_cachedRepoId) return _cachedRepoId;
+  try {
+    const remote = execSync('git config --get remote.origin.url', { timeout: 2000, encoding: 'utf8' }).trim();
+    if (remote) {
+      _cachedRepoId = createHash('sha256').update(remote).digest('hex').slice(0, 12);
+      return _cachedRepoId;
+    }
+  } catch { /* not a git repo or no remote */ }
+  _cachedRepoId = createHash('sha256').update(process.cwd()).digest('hex').slice(0, 12);
+  return _cachedRepoId;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -419,6 +441,7 @@ export class MemoryEngine {
   private storageFallbackApplied = false;
   private storageFallbackReason?: string;
   private graphMirror?: GraphMemoryEngine;
+  private ngramIndex?: NgramIndex;
   private sessionId: string;
   private vaultDir: string;
   private vaultItemsDir: string;
@@ -472,6 +495,11 @@ export class MemoryEngine {
     } catch {
       this.graphMirror = undefined;
     }
+    try {
+      this.ngramIndex = new NgramIndex(path.join(path.dirname(this.dbPath), 'ngram-index.db'));
+    } catch {
+      this.ngramIndex = undefined;
+    }
     this.sessionId = randomUUID();
     this.vaultDir = path.join(this.stateRoot, 'memory-vault');
     this.vaultItemsDir = path.join(this.vaultDir, 'items');
@@ -493,6 +521,10 @@ export class MemoryEngine {
     this.prepareStatements();
     this.load();
     this.loadBackupMetadata();
+  }
+
+  getNgramIndex(): NgramIndex | undefined {
+    return this.ngramIndex;
   }
 
   getStorageStatus(): MemoryStorageStatus {
@@ -756,6 +788,16 @@ export class MemoryEngine {
     this.primeGraphMirror(rows);
     this.syncVault(true);
     this.checkGraphCoverage();
+
+    // Backfill n-gram index for memories not yet indexed
+    if (this.ngramIndex) {
+      try {
+        const unindexed = rows.filter((row) => !this.ngramIndex!.isIndexed(row.id));
+        if (unindexed.length > 0) {
+          this.ngramIndex.addDocuments(unindexed.map((row) => ({ id: row.id, text: row.content })));
+        }
+      } catch { /* best-effort backfill */ }
+    }
   }
 
   private loadBackupMetadata(): void {
@@ -1088,7 +1130,7 @@ export class MemoryEngine {
       runId: options.provenance?.runId,
       workerId: options.provenance?.workerId,
       workspaceId: options.provenance?.workspaceId,
-      repoId: options.provenance?.repoId,
+      repoId: options.provenance?.repoId ?? resolveCurrentRepoId(),
       projectId: options.provenance?.projectId,
       lane: options.provenance?.lane ?? lane,
       containerTags: options.provenance?.containerTags ?? normalizedTags.filter((tag) => /^#(?:repo|project|workspace|hidden|profile|inbox)/.test(tag)),
@@ -1151,6 +1193,9 @@ export class MemoryEngine {
     // Update vocabulary and add to vector index
     this.fitVocabularyWithRecovery([content]);
     this.indexMemory(id, content);
+
+    // Index in n-gram index for fast text search
+    try { this.ngramIndex?.addDocument(id, content); } catch { /* best-effort */ }
 
     // Auto-link to semantically similar recent memories
     this.autoLink(item);
@@ -1265,14 +1310,49 @@ export class MemoryEngine {
   async recall(query: string, k: number = 5, filters: MemoryRecallFilters = {}): Promise<string[]> {
     this.expireMemories();
     const now = Date.now();
-    const candidateRows = this.db.prepare(`
-      SELECT *
-      FROM memories
-      WHERE state = 'active'
-        AND (expires_at IS NULL OR expires_at > ?)
-      ORDER BY priority DESC, timestamp DESC
-      LIMIT ?
-    `).all(now, this.config.recallCandidateLimit) as any[];
+
+    // ── N-gram pre-filter: narrow candidates before full scan ─────────────
+    let candidateRows: any[];
+    const ngramCandidates = this.ngramIndex?.search(query, this.config.recallCandidateLimit);
+    if (ngramCandidates && ngramCandidates.length > 0) {
+      const ids = ngramCandidates.map((c) => c.docId);
+      const placeholders = ids.map(() => '?').join(',');
+      candidateRows = this.db.prepare(`
+        SELECT *
+        FROM memories
+        WHERE id IN (${placeholders})
+          AND state = 'active'
+          AND (expires_at IS NULL OR expires_at > ?)
+        ORDER BY priority DESC, timestamp DESC
+      `).all(...ids, now) as any[];
+      // If n-gram returned too few, supplement with priority-based scan
+      if (candidateRows.length < k * 2) {
+        const existingIds = new Set(candidateRows.map((r: any) => r.id));
+        const supplement = this.db.prepare(`
+          SELECT *
+          FROM memories
+          WHERE state = 'active'
+            AND (expires_at IS NULL OR expires_at > ?)
+          ORDER BY priority DESC, timestamp DESC
+          LIMIT ?
+        `).all(now, this.config.recallCandidateLimit) as any[];
+        for (const row of supplement) {
+          if (!existingIds.has(row.id)) {
+            candidateRows.push(row);
+            existingIds.add(row.id);
+          }
+        }
+      }
+    } else {
+      candidateRows = this.db.prepare(`
+        SELECT *
+        FROM memories
+        WHERE state = 'active'
+          AND (expires_at IS NULL OR expires_at > ?)
+        ORDER BY priority DESC, timestamp DESC
+        LIMIT ?
+      `).all(now, this.config.recallCandidateLimit) as any[];
+    }
     const candidateItems = candidateRows
       .map((row) => this.rowToItem(row))
       .filter((item) => this.matchesRecallFilters(item, filters));
@@ -1343,6 +1423,32 @@ export class MemoryEngine {
     }
 
     return top.map(r => r.content);
+  }
+
+  /** Promote a memory to 'shared' scope so it becomes visible across all repos */
+  shareMemory(id: string): boolean {
+    const item = this.getById(id);
+    if (!item) return false;
+    this.db.prepare(`UPDATE memories SET scope = 'shared' WHERE id = ?`).run(id);
+    this.markVaultDirty(id);
+    return true;
+  }
+
+  /** Compact vault by merging individual item files into a single snapshot */
+  compactVault(): { itemsMerged: number; snapshotPath: string } | null {
+    if (!fs.existsSync(this.vaultItemsDir)) return null;
+    const files = fs.readdirSync(this.vaultItemsDir).filter(f => f.endsWith('.json'));
+    if (files.length <= 10) return null;
+    const consolidated: any[] = [];
+    for (const file of files) {
+      try {
+        consolidated.push(JSON.parse(fs.readFileSync(path.join(this.vaultItemsDir, file), 'utf8')));
+        fs.unlinkSync(path.join(this.vaultItemsDir, file));
+      } catch { /* skip corrupted files */ }
+    }
+    const snapshotPath = path.join(this.vaultDir, `vault-snapshot-${Date.now()}.json`);
+    fs.writeFileSync(snapshotPath, JSON.stringify(consolidated, null, 2));
+    return { itemsMerged: consolidated.length, snapshotPath };
   }
 
   checkContent(content: string, options: {

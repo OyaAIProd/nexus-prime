@@ -10,6 +10,7 @@
 
 import { GraphMemoryEngine, type Entity } from './graph-memory.js';
 import { GraphTraversalEngine, type TraversalResult } from './graph-traversal.js';
+import { getSharedNgramIndex, type NgramIndex } from './ngram-index.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -41,10 +42,16 @@ export interface HybridResult {
 export class HybridRetriever {
     private graph: GraphMemoryEngine;
     private traversal: GraphTraversalEngine;
+    private ngramIndex: NgramIndex | null = null;
 
     constructor(graph: GraphMemoryEngine) {
         this.graph = graph;
         this.traversal = new GraphTraversalEngine(graph.getDb());
+        try {
+            this.ngramIndex = getSharedNgramIndex();
+        } catch {
+            this.ngramIndex = null;
+        }
     }
 
     /**
@@ -59,11 +66,25 @@ export class HybridRetriever {
         const queryLower = query.toLowerCase();
         const keywords = queryLower.split(/\s+/).filter(w => w.length > 2);
 
+        // ── Stage 0: N-gram pre-filter ──────────────────────────────────
+        let ngramCandidateIds: Set<string> | null = null;
+        try {
+            const ngramHits = this.ngramIndex?.search(query, k * 3);
+            if (ngramHits && ngramHits.length > 0) {
+                ngramCandidateIds = new Set(ngramHits.map((h) => h.docId));
+            }
+        } catch {
+            // n-gram search failed; proceed with full scan
+        }
+
         // ── Stage 1: Direct entity search ────────────────────────────────
         const matchedEntities = this.graph.findEntities(query, k * 2);
 
         const directMatches: HybridResult['directMatches'] = [];
         for (const entity of matchedEntities) {
+            // If n-gram candidates are available, skip entities not in the candidate set
+            if (ngramCandidateIds && !ngramCandidateIds.has(entity.id)) continue;
+
             const fact = this.graph.getCurrentFact(entity.id);
             const nameScore = this.scoreMatch(entity.name, keywords);
             const factScore = fact ? this.scoreMatch(fact.content, keywords) * 0.7 : 0;

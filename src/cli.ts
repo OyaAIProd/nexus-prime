@@ -12,13 +12,17 @@ import {
   formatReadingPlan
 } from './engines/token-supremacy.js';
 import { summarizeExecution, type ExecutionRun } from './phantom/index.js';
+import fs from 'fs';
 import { statSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
+import os from 'os';
 import { homedir } from 'os';
+import path from 'path';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { PODNetwork } from './engines/pod-network.js';
 import { InstructionGateway, type ClientBootstrapArtifact } from './engines/instruction-gateway.js';
 import { ensureBootstrap, collectBootstrapManifest, validateTargetPath } from './engines/client-bootstrap.js';
+import { SessionDNAManager } from './engines/session-dna.js';
 import { nexusEventBus } from './engines/event-bus.js';
 import { buildRuntimeSetupCommand } from './cli-setup.js';
 
@@ -1124,5 +1128,169 @@ program
         console.log(`   Generated: ${new Date(manifest.generatedAt).toISOString()}`);
       })
   );
+
+program
+  .command('cleanup')
+  .description('Remove temp files, stale sessions, and configs for non-detected clients')
+  .option('--dry-run', 'Preview what would be removed')
+  .action((options) => {
+    const dryRun = !!options.dryRun;
+    const cwd = process.cwd();
+    let totalCleaned = 0;
+
+    console.log(dryRun ? '🔍 Cleanup preview (dry run):\n' : '🧹 Running cleanup...\n');
+
+    // 1. Remove tmp-control-plane-* directories
+    try {
+      const entries = fs.readdirSync(cwd);
+      const tmpDirs = entries.filter(e => e.startsWith('tmp-control-plane-'));
+      for (const dir of tmpDirs) {
+        const fullPath = path.join(cwd, dir);
+        try {
+          if (fs.statSync(fullPath).isDirectory()) {
+            console.log(`  ${dryRun ? 'Would remove' : 'Removing'}: ${dir}/`);
+            if (!dryRun) fs.rmSync(fullPath, { recursive: true, force: true });
+            totalCleaned++;
+          }
+        } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+
+    // 2. Clean stale sessions
+    try {
+      const cleaned = SessionDNAManager.cleanStale();
+      if (cleaned > 0) {
+        console.log(`  ${dryRun ? 'Would clean' : 'Cleaned'}: ${cleaned} stale session(s)`);
+        totalCleaned += cleaned;
+      }
+    } catch { /* ignore */ }
+
+    // 3. Remove empty .agent/ subdirectories
+    const agentDir = path.join(cwd, '.agent');
+    if (fs.existsSync(agentDir)) {
+      try {
+        const subdirs = fs.readdirSync(agentDir);
+        for (const sub of subdirs) {
+          const subPath = path.join(agentDir, sub);
+          try {
+            if (fs.statSync(subPath).isDirectory()) {
+              const contents = fs.readdirSync(subPath);
+              if (contents.length === 0) {
+                console.log(`  ${dryRun ? 'Would remove' : 'Removing'}: .agent/${sub}/ (empty)`);
+                if (!dryRun) fs.rmdirSync(subPath);
+                totalCleaned++;
+              }
+            }
+          } catch { /* ignore */ }
+        }
+      } catch { /* ignore */ }
+    }
+
+    // 4. Compact memory vault
+    try {
+      const vaultDir = path.join(os.homedir(), '.nexus-prime', 'memory-vault', 'items');
+      if (fs.existsSync(vaultDir)) {
+        const items = fs.readdirSync(vaultDir).filter(f => f.endsWith('.json'));
+        if (items.length > 10) {
+          console.log(`  ${dryRun ? 'Would compact' : 'Compacting'}: ${items.length} vault item files`);
+          if (!dryRun) {
+            const consolidated: any[] = [];
+            for (const item of items) {
+              try {
+                consolidated.push(JSON.parse(fs.readFileSync(path.join(vaultDir, item), 'utf8')));
+                fs.unlinkSync(path.join(vaultDir, item));
+              } catch { /* skip corrupted */ }
+            }
+            const snapshotPath = path.join(os.homedir(), '.nexus-prime', 'memory-vault', `vault-snapshot-${Date.now()}.json`);
+            fs.writeFileSync(snapshotPath, JSON.stringify(consolidated, null, 2));
+            console.log(`  Consolidated to: ${snapshotPath}`);
+          }
+          totalCleaned++;
+        }
+      }
+    } catch { /* ignore */ }
+
+    console.log(`\n✅ ${dryRun ? 'Would clean' : 'Cleaned'} ${totalCleaned} item(s)`);
+  });
+
+program
+  .command('doctor')
+  .description('Diagnose system health and report issues with recommendations')
+  .action(() => {
+    console.log('🏥 Nexus Prime Health Check\n');
+    const issues: string[] = [];
+    const ok: string[] = [];
+
+    // 1. Check memory DB
+    const memoryDbPath = path.join(os.homedir(), '.nexus-prime', 'memory.db');
+    if (fs.existsSync(memoryDbPath)) {
+      const size = fs.statSync(memoryDbPath).size;
+      ok.push(`Memory DB: ${(size / 1024).toFixed(0)}KB`);
+      if (size > 50 * 1024 * 1024) {
+        issues.push(`Memory DB is large (${(size / 1024 / 1024).toFixed(1)}MB). Consider running: nexus-prime cleanup`);
+      }
+    } else {
+      issues.push('Memory DB not found at ~/.nexus-prime/memory.db');
+    }
+
+    // 2. Check stale sessions
+    const sessionsDir = path.join(os.homedir(), '.nexus-prime', 'sessions');
+    if (fs.existsSync(sessionsDir)) {
+      const locks = fs.readdirSync(sessionsDir).filter(f => f.endsWith('.lock'));
+      const sessions = fs.readdirSync(sessionsDir).filter(f => f.endsWith('.json'));
+      ok.push(`Sessions: ${sessions.length} saved, ${locks.length} active lock(s)`);
+      if (locks.length > 3) {
+        issues.push(`${locks.length} session locks found. Some may be stale. Run: nexus-prime cleanup`);
+      }
+    }
+
+    // 3. Check vault sprawl
+    const vaultItemsDir = path.join(os.homedir(), '.nexus-prime', 'memory-vault', 'items');
+    if (fs.existsSync(vaultItemsDir)) {
+      const itemCount = fs.readdirSync(vaultItemsDir).filter(f => f.endsWith('.json')).length;
+      if (itemCount > 50) {
+        issues.push(`Memory vault has ${itemCount} individual item files. Run: nexus-prime cleanup`);
+      } else {
+        ok.push(`Vault items: ${itemCount}`);
+      }
+    }
+
+    // 4. Check temp directories
+    const tmpDirs = fs.readdirSync(process.cwd()).filter(e => e.startsWith('tmp-control-plane-'));
+    if (tmpDirs.length > 0) {
+      issues.push(`${tmpDirs.length} temp control-plane directories found. Run: nexus-prime cleanup`);
+    }
+
+    // 5. Check synapse/architects env vars
+    if (process.env.SYNAPSE_OPERATIVE_ID) {
+      ok.push(`Synapse: operative ${process.env.SYNAPSE_OPERATIVE_ID}`);
+    } else {
+      issues.push('SYNAPSE_OPERATIVE_ID not set. Synapse operative mode is inactive.');
+    }
+    if (process.env.ARCHITECTS_OPERATIVE_ID) {
+      ok.push(`Architects: operative ${process.env.ARCHITECTS_OPERATIVE_ID}`);
+    } else {
+      issues.push('ARCHITECTS_OPERATIVE_ID not set. Architects operative mode is inactive.');
+    }
+
+    // 6. Check detected clients
+    const manifest = collectBootstrapManifest({ packageRoot: PACKAGE_ROOT, workspaceRoot: process.cwd() });
+    const installed = manifest.clients.filter(c => c.state === 'installed');
+    const drifted = manifest.clients.filter(c => c.state === 'drifted');
+    ok.push(`Clients: ${installed.length} installed, ${drifted.length} drifted`);
+    if (drifted.length > 0) {
+      issues.push(`${drifted.length} client(s) have drifted configs: ${drifted.map(c => c.label).join(', ')}. Run: nexus-prime setup <client>`);
+    }
+
+    // Report
+    console.log('✅ Healthy:');
+    for (const item of ok) console.log(`  • ${item}`);
+    if (issues.length > 0) {
+      console.log('\n⚠️  Issues:');
+      for (const issue of issues) console.log(`  • ${issue}`);
+    } else {
+      console.log('\n🎉 No issues detected!');
+    }
+  });
 
 program.parse();

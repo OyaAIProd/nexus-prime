@@ -34,6 +34,7 @@ export type NexusEventType =
     | 'hook.deploy'
     | 'hook.revoke'
     | 'hook.fire'
+    | 'hook.error'
     | 'workflow.deploy'
     | 'workflow.run'
     | 'automation.deploy'
@@ -154,6 +155,7 @@ export interface NexusEventPayloads {
     'hook.deploy': { hookId: string; scope: string; status: string };
     'hook.revoke': { hookId: string; status: string };
     'hook.fire': { hookId: string; name: string; trigger: string; blocked: boolean };
+    'hook.error': { hookId: string; error: string };
     'workflow.deploy': { workflowId: string; scope: string; status: string };
     'workflow.run': { workflowId: string; runId: string; status: string };
     'automation.deploy': { automationId: string; scope: string; status: string };

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolveNexusStateDir } from './runtime-registry.js';
+import { getSharedNgramIndex, type NgramIndex } from './ngram-index.js';
 
 export interface PatternCard {
     patternId: string;
@@ -122,10 +123,30 @@ const BUILTIN_PATTERNS: PatternCard[] = [
 export class PatternRegistry {
     private readonly statePath: string;
     private readonly cards: PatternCard[];
+    private ngramIndex: NgramIndex | null = null;
 
     constructor(stateRoot: string = resolveNexusStateDir()) {
         this.statePath = path.join(stateRoot, 'pattern-registry.json');
+        try {
+            this.ngramIndex = getSharedNgramIndex();
+        } catch {
+            this.ngramIndex = null;
+        }
         this.cards = this.loadCards();
+        this.indexAllCards();
+    }
+
+    private indexAllCards(): void {
+        try {
+            for (const card of this.cards) {
+                this.ngramIndex?.addDocument(
+                    card.patternId,
+                    card.name + ' ' + card.summary + ' ' + card.instructions,
+                );
+            }
+        } catch {
+            // n-gram indexing is best-effort
+        }
     }
 
     list(): PatternCard[] {
@@ -138,7 +159,23 @@ export class PatternRegistry {
 
     search(query: string, limit: number = 5): PatternSearchResult[] {
         const keywords = extractKeywords(query);
-        return this.cards
+
+        // N-gram pre-filter: narrow to likely candidates before keyword scoring
+        let pool = this.cards;
+        try {
+            const ngramHits = this.ngramIndex?.search(query, 10);
+            if (ngramHits && ngramHits.length > 0) {
+                const hitIds = new Set(ngramHits.map((h) => h.docId));
+                const filtered = this.cards.filter((c) => hitIds.has(c.patternId));
+                if (filtered.length > 0) {
+                    pool = filtered;
+                }
+            }
+        } catch {
+            // n-gram search failed; fall back to full scan
+        }
+
+        return pool
             .map((card) => {
                 const successBias = Math.max(0, card.successCount - card.failureCount);
                 const score = scoreText(`${card.name}\n${card.summary}\n${card.instructions}\n${card.tags.join(' ')}`, keywords)

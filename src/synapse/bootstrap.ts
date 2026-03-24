@@ -49,9 +49,10 @@ export function initSynapse(options: InitSynapseOptions): SynapseRuntime | null 
   const providers = createProviders(options);
   restoreSynapseFromLedger(db, options.repoRoot);
   const stopCompaction = registerCompactionListener(db, providers);
-  const watchdogTimer = startWatchdogPatrol(db);
-  const scheduler = startSortieScheduler(db, providers);
-  startLedgerBatchCommitter();
+  const hasOperative = !!process.env.SYNAPSE_OPERATIVE_ID;
+  const watchdogTimer = hasOperative ? startWatchdogPatrol(db) : undefined;
+  const scheduler = hasOperative ? startSortieScheduler(db, providers) : undefined;
+  if (hasOperative) startLedgerBatchCommitter();
 
   const blockedListener = (payload: { operativeId?: string; reason?: string }) => {
     if (payload.operativeId) {
@@ -80,6 +81,7 @@ export function initSynapse(options: InitSynapseOptions): SynapseRuntime | null 
   const unsubZombie = nexusEventBus.on('architects.sentinel.zombie', zombieListener);
   const unsubConvergence = nexusEventBus.on('architects.convergence.failed', failedConvergenceListener);
   nexusEventBus.emit('synapse.ready', { version: '5.0.0' });
+  console.log('[Synapse] Initialized. Set SYNAPSE_OPERATIVE_ID to activate operative mode.');
 
   return {
     db,

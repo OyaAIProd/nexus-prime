@@ -25,13 +25,18 @@ const DEFAULT_PORT = parseInt(process.env.NEXUS_DASHBOARD_PORT || '3377', 10);
 const MAX_PORT_SCAN = 24;
 const DASHBOARD_API_VERSION = '4';
 const DASHBOARD_SCHEMA_VERSION = 1;
-const REQUIRED_CAPABILITIES = {
+const CORE_CAPABILITIES = {
     runs: true,
     memory: true,
     pod: true,
     clients: true,
     events: true,
     stream: true,
+    tokens: true,
+    tokenSources: true,
+} as const;
+
+const OPTIONAL_CAPABILITIES = {
     hooks: true,
     automations: true,
     federation: true,
@@ -39,8 +44,6 @@ const REQUIRED_CAPABILITIES = {
     crews: true,
     planner: true,
     orchestration: true,
-    tokens: true,
-    tokenSources: true,
     clientPrimary: true,
     instructionPacket: true,
     orchestrationLedger: true,
@@ -1713,7 +1716,34 @@ export class DashboardServer {
 
         return {
             dashboardApiVersion: DASHBOARD_API_VERSION,
-            capabilities: { ...REQUIRED_CAPABILITIES },
+            capabilities: {
+                ...CORE_CAPABILITIES,
+                hooks: !!runtime,
+                automations: !!runtime,
+                federation: !!runtime?.getNetworkStatus,
+                specialists: !!runtime,
+                crews: !!runtime,
+                planner: !!this.orchestratorProvider?.(),
+                orchestration: !!this.orchestratorProvider?.(),
+                clientPrimary: !!primaryClient,
+                instructionPacket: !!this.orchestratorProvider?.(),
+                orchestrationLedger: !!this.orchestratorProvider?.(),
+                knowledgeFabric: !!memory,
+                ragCollections: !!memory,
+                patterns: !!runtime,
+                modelTiers: !!runtime,
+                workerPlan: !!runtime,
+                artifactOutcomes: !!runtime,
+                memoryTrace: !!memory,
+                memoryShared: !!memory,
+                worktreeHealth: !!runtime,
+                featureRegistry: true,
+                synapse: !!this.synapseProvider?.(),
+                architects: !!this.architectsProvider?.(),
+                dashboardSummary: true,
+                dashboardSurfaces: true,
+                nexusLayer: true,
+            },
             dashboardUrl: this.getAddress(),
             dashboardMode: this.dashboardMode,
             connection: {
@@ -1825,7 +1855,7 @@ export class DashboardServer {
             return false;
         }
 
-        return Object.entries(REQUIRED_CAPABILITIES).every(([key, expected]) => payload.capabilities?.[key] === expected);
+        return Object.entries(CORE_CAPABILITIES).every(([key, expected]) => payload.capabilities?.[key] === expected);
     }
 
     private isFreePortProbeError(error: unknown): boolean {

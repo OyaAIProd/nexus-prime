@@ -36,7 +36,8 @@ export function initArchitects(options: InitArchitectsOptions): ArchitectsRuntim
   const knownOperatives = new Set<string>();
   const implicitWorklistByTeam = new Map<string, string>();
   const ward = new ArchitectsWard(db, options.repoRoot, operativeActivity);
-  ward.start();
+  const hasOperative = !!process.env.ARCHITECTS_OPERATIVE_ID;
+  if (hasOperative) ward.start();
   const dispatchGovernor = new DispatchGovernor(db);
 
   const ensureImplicitWorklist = (strikeTeamId: string) => {
@@ -108,6 +109,7 @@ export function initArchitects(options: InitArchitectsOptions): ArchitectsRuntim
   const unsubStanddown = nexusEventBus.on('synapse.compaction.standdown', onStanddown);
   const unsubResumed = nexusEventBus.on('synapse.compaction.resumed', onResumed);
   nexusEventBus.emit('architects.ready', { version: '5.0.0' });
+  console.log('[Architects] Initialized. Set ARCHITECTS_OPERATIVE_ID to activate operative mode.');
 
   return {
     db,
@@ -155,7 +157,7 @@ export function initArchitects(options: InitArchitectsOptions): ArchitectsRuntim
     getDispatchStatus: () => dispatchGovernor.getStatus(),
     getWardEscalations: () => ward.getEscalations(),
     stop: () => {
-      ward.stop();
+      if (hasOperative) ward.stop();
       unsubOperative();
       unsubMission();
       unsubSortie();
