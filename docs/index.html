@@ -810,6 +810,118 @@
         overflow-x: auto;
       }
     }
+
+    /* Telemetry Stripe */
+    .telemetry-stripe {
+      background: rgba(0, 255, 136, 0.03);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      padding: 40px 20px;
+      margin: 40px 0 80px 0;
+    }
+    .metrics-grid {
+      display: flex;
+      justify-content: space-around;
+      flex-wrap: wrap;
+      gap: 32px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .metric-item {
+      text-align: center;
+      flex: 1;
+      min-width: 250px;
+    }
+    .metric-value {
+      font-size: 2.5rem;
+      font-weight: 900;
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      margin-bottom: 8px;
+    }
+    .metric-label {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    /* Nexus Matrix Stack */
+    .matrix-stack-container {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-top: 40px;
+      max-width: 700px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .matrix-layer {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 32px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      position: relative;
+      transition: all 0.3s;
+    }
+    .matrix-layer:hover {
+      border-color: var(--green);
+      transform: translateX(10px);
+      box-shadow: -10px 10px 30px rgba(0, 255, 136, 0.1);
+    }
+    .matrix-step {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 1.5rem;
+      color: rgba(0, 255, 136, 0.3);
+      font-weight: 700;
+      min-width: 40px;
+    }
+    .matrix-content h3 {
+      margin-bottom: 4px;
+      font-size: 1.25rem;
+    }
+    .matrix-content p {
+      color: var(--text-dim);
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    /* Comparison Grid */
+    .comparison-grid {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 40px 0;
+      background: var(--surface);
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .comparison-grid th, .comparison-grid td {
+      padding: 24px;
+      text-align: center;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .comparison-grid th:first-child, .comparison-grid td:first-child {
+      text-align: left;
+      font-weight: 600;
+    }
+    .comparison-grid th {
+      background: rgba(0, 255, 136, 0.05);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .comparison-grid .highlight-col {
+      background: rgba(0, 255, 136, 0.02);
+      border-left: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+      color: var(--green);
+      font-weight: 700;
+    }
   </style>
 </head>
 
@@ -848,30 +960,100 @@
   <main>
     <section id="hero" aria-labelledby="hero-title">
       <div class="hero-glow"></div>
-      <div class="hero-badge">🧬 Orchestrator-first · Bootstrap + Orchestrate · Runtime Truth</div>
-      <h1 id="hero-title">A local-first MCP control plane for<br><span class="accent">coding agents that need real runtime discipline.</span></h1>
+      <div class="hero-badge">🧬 Context Infrastructure for AI Agents</div>
+      <h1 id="hero-title">Bring your Repo.<br><span class="accent">Nexus Contextualizes.</span></h1>
       <p class="hero-sub">
-        Nexus Prime gives Codex, Cursor, Claude Code, Opencode, Windsurf, and Antigravity a default path that starts
-        with memory/bootstrap context, routes file reads through token-aware planning, and executes through a bounded,
-        verified runtime.
+        The orchestrator-first MCP control plane that gives your coding agents absolute runtime truth. Stop prompt stuffing and context limit crashes. Start executing with Source-Aware Token Budgets.
       </p>
 
-      <div class="showcase-image hero-proof">
+      <div class="hero-actions">
+        <a class="btn-primary" href="#install">
+          Setup in 5 Minutes →
+        </a>
+      </div>
+
+      <div class="hero-badges" style="margin-top: 32px; display: flex; align-items: center; justify-content: center; gap: 24px; opacity: 0.7;">
+          <a href="https://github.com/sir-ad/nexus-prime/stargazers" target="_blank" rel="noopener noreferrer" style="color: var(--text-dim); text-decoration: none; font-size: 0.9rem; display: flex; align-items: center; gap: 8px;">
+            <svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.75.75 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.719-4.192L.82 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"></path></svg>
+            Star History
+          </a>
+          <a href="https://www.npmjs.com/package/nexus-prime" target="_blank" rel="noopener noreferrer">
+            <img src="https://img.shields.io/npm/d18m/nexus-prime?style=flat&color=00d4ff" alt="npm downloads" style="height: 20px;" />
+          </a>
+          <a href="https://www.producthunt.com/products/nexus-prime?utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-nexus-prime" target="_blank" rel="noopener noreferrer">
+            <img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1096831&theme=dark" alt="Nexus Prime - Product Hunt" style="height: 34px;" />
+          </a>
+        </div>
+
+      <div class="showcase-image hero-proof" style="margin-top: 60px;">
         <img src="./assets/screenshots/dashboard_cockpit_hero.png"
           alt="Nexus Prime dashboard showing a graph-centered cockpit with memory topology, token telemetry, and runtime controls"
           width="1024" height="586">
       </div>
       <div class="showcase-caption">Inspect the live runtime naturally: one wide cockpit band for graph context, token telemetry, runtime truth, and operator actions.</div>
-
-      <div class="hero-actions">
-        <a class="btn-primary" href="#install">
-          $ npm install -g nexus-prime
-        </a>
-        <a class="btn-secondary" href="./integrations.html">
-          Setup Clients →
-        </a>
-      </div>
     </section>
+
+    <div class="telemetry-stripe">
+      <div class="metrics-grid">
+        <div class="metric-item">
+          <div class="metric-value">>85%</div>
+          <div class="metric-label">Token Compression</div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-value">< 15ms</div>
+          <div class="metric-label">Lattice Routing Latency</div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-value">100M+</div>
+          <div class="metric-label">Tokens Saved Monthly</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- NEXUS MATRIX SECTION -->
+    <article id="architecture">
+      <span class="section-label">The Nexus Matrix</span>
+      <h2 class="section-title">Knowledge that evolves,<br>not just stores.</h2>
+      <p class="section-sub">Not just another vector database or flat memory file. A pure runtime truth engine built for coding agents.</p>
+
+      <div class="matrix-stack-container">
+        <div class="matrix-layer">
+          <div class="matrix-step">01</div>
+          <div class="matrix-content">
+            <h3>Induction (Session Bootstrap)</h3>
+            <p>Inject critical repo constraints and current developer intent before the agent acts.</p>
+          </div>
+        </div>
+        <div class="matrix-layer">
+          <div class="matrix-step">02</div>
+          <div class="matrix-content">
+            <h3>Filtering (Ghost Pass & Budget)</h3>
+            <p>Calculate strict source-aware token budgets to dynamically drop irrelevant files.</p>
+          </div>
+        </div>
+        <div class="matrix-layer">
+          <div class="matrix-step">03</div>
+          <div class="matrix-content">
+            <h3>Memory (Fabric & Recall)</h3>
+            <p>Reconcile persistent cross-session graph facts to preserve long-term architecture context.</p>
+          </div>
+        </div>
+        <div class="matrix-layer">
+          <div class="matrix-step">04</div>
+          <div class="matrix-content">
+            <h3>Grounding (RAG Gate)</h3>
+            <p>Semantically attach internal documentation or API references precisely when needed.</p>
+          </div>
+        </div>
+        <div class="matrix-layer">
+          <div class="matrix-step">05</div>
+          <div class="matrix-content">
+            <h3>Execution (Swarms & Truth)</h3>
+            <p>Spawn verified workers on Git worktrees, preserving execution snapshots and ledger truth.</p>
+          </div>
+        </div>
+      </div>
+    </article>
 
     <article id="documentation">
       <span class="section-label">Documentation</span>
@@ -1061,43 +1243,54 @@
       </details>
 
       <!-- BENCHMARKS -->
-      <details>
-        <summary>📊 Operational Comparison</summary>
+      <details open>
+        <summary>📊 Feature Comparison</summary>
         <div class="details-content">
-          <p>What changes when the client follows the bootstrap-to-orchestrate path instead of directly browsing and mutating.</p>
-          <table class="data-table">
+          <table class="comparison-grid">
             <thead>
               <tr>
-                <th>Metric</th>
-                <th>Standard Agent</th>
-                <th>Nexus Prime</th>
+                <th>Feature</th>
+                <th class="highlight-col">Nexus Prime</th>
+                <th>Standard Agents (Cursor/Claude)</th>
+                <th>Basic MCP Servers</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td>Context Retention</td>
-                <td>Session-bound (Ephemeral)</td>
-                <td><strong>Persistent (Cross-Session)</strong></td>
+                <td>Source-Aware Token Budgets</td>
+                <td class="highlight-col">✅</td>
+                <td>❌</td>
+                <td>❌</td>
               </tr>
               <tr>
-                <td>Session Start</td>
-                <td>Repo docs and ad-hoc exploration</td>
-                <td><strong>nexus_session_bootstrap</strong></td>
+                <td>Cross-Session Memory Graph</td>
+                <td class="highlight-col">✅</td>
+                <td>Partial</td>
+                <td>❌</td>
               </tr>
               <tr>
-                <td>Execution Control</td>
-                <td>Manual tool chaining</td>
-                <td><strong>nexus_orchestrate</strong></td>
+                <td>Worktree-Backed Playgrounds</td>
+                <td class="highlight-col">✅</td>
+                <td>❌</td>
+                <td>❌</td>
               </tr>
               <tr>
-                <td>Token Telemetry</td>
-                <td>Often stream-only or absent</td>
-                <td><strong>Persisted totals + per-run analyzer</strong></td>
+                <td>Orchestrator-First Control Plane</td>
+                <td class="highlight-col">✅</td>
+                <td>❌</td>
+                <td>❌</td>
               </tr>
               <tr>
-                <td>Runtime Truth</td>
-                <td>Depends on the active host process</td>
-                <td><strong>Shared runtime snapshots</strong></td>
+                <td>Persistent Runtime Truth</td>
+                <td class="highlight-col">✅</td>
+                <td>Ephemeral</td>
+                <td>❌</td>
+              </tr>
+              <tr>
+                <td>Zero-Config Universal Integrations</td>
+                <td class="highlight-col">✅</td>
+                <td>N/A</td>
+                <td>Partial</td>
               </tr>
             </tbody>
           </table>
@@ -1184,30 +1377,143 @@
     </article>
 
     <article id="install">
-      <span class="section-label">Deployment</span>
-      <h2 class="section-title">Get from install to useful behavior quickly.</h2>
-      <p class="section-sub">Install the MCP server, let Nexus auto-establish bootstrap artifacts, then verify the bootstrap-orchestrate path. `setup` remains the explicit refresh path when you want to force regeneration for a client.</p>
+      <style>
+        .setup-container {
+          max-width: 800px;
+          margin: 0 auto;
+          text-align: center;
+        }
+        .setup-tabs {
+          display: flex;
+          flex-wrap: wrap;
+          margin-top: 40px;
+        }
+        .setup-tabs label {
+          flex: 1;
+          padding: 16px 20px;
+          cursor: pointer;
+          background: var(--surface);
+          border: 1px solid var(--border);
+          color: var(--text-dim);
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 0.9rem;
+          transition: all 0.2s;
+          text-align: center;
+        }
+        .setup-tabs label:first-of-type {
+          border-radius: 12px 0 0 0;
+        }
+        .setup-tabs label:last-of-type {
+          border-radius: 0 12px 0 0;
+        }
+        .setup-tabs input[type="radio"] {
+          display: none;
+        }
+        .setup-tabs input[type="radio"]:checked + label {
+          background: rgba(0,255,136,0.05);
+          color: var(--green);
+          border-bottom: 2px solid var(--green);
+        }
+        .tab-content {
+          display: none;
+          width: 100%;
+          padding: 30px;
+          border: 1px solid var(--border);
+          border-top: none;
+          background: #050505;
+          border-radius: 0 0 12px 12px;
+          text-align: left;
+          font-family: 'JetBrains Mono', monospace;
+          color: var(--text);
+          font-size: 0.95rem;
+          line-height: 1.8;
+        }
+        #tab1:checked ~ #content1,
+        #tab2:checked ~ #content2,
+        #tab3:checked ~ #content3 {
+          display: block;
+        }
+        .plugin-grid {
+          display: flex;
+          justify-content: center;
+          gap: 16px;
+          margin-top: 60px;
+          flex-wrap: wrap;
+        }
+        .plugin-card {
+           padding: 12px 24px;
+           border: 1px solid var(--border);
+           border-radius: 8px;
+           background: var(--surface);
+           color: var(--text);
+           font-family: 'Inter', sans-serif;
+           font-weight: 600;
+           font-size: 0.95rem;
+           transition: all 0.3s;
+           display: inline-flex;
+           align-items: center;
+           gap: 10px;
+        }
+        .plugin-card:hover {
+           border-color: var(--green);
+           box-shadow: 0 0 15px rgba(0,255,136,0.2);
+           transform: translateY(-2px);
+        }
+      </style>
 
-      <div class="terminal-console">
-        <p class="terminal-comment"># Global installation</p>
-        <p class="terminal-command">npm install -g nexus-prime</p>
+      <div class="setup-container">
+        <h2 class="section-title">Setup in 5 Minutes.</h2>
+        <p class="section-sub" style="margin: 0 auto;">Install the MCP server, let Nexus auto-establish bootstrap artifacts, and verify the orchestrate path. Included profiles bypass manual JSON wiring.</p>
 
-        <p class="terminal-comment"># Start the MCP server</p>
-        <p class="terminal-command-alt">npx nexus-prime mcp</p>
+        <div class="setup-tabs">
+          <input type="radio" id="tab1" name="setup-tab" checked>
+          <label for="tab1">Global CLI</label>
 
-        <p class="terminal-comment"># Install/start auto-creates home bootstrap; first repo run writes workspace files</p>
-        <p class="terminal-command-alt">nexus-prime bootstrap status</p>
+          <input type="radio" id="tab2" name="setup-tab">
+          <label for="tab2">Docker Container</label>
 
-        <br>
-        <p class="terminal-comment"># Automated Client Integrations</p>
-        <p class="terminal-command">nexus-prime setup codex</p>
-        <p class="terminal-command">nexus-prime setup cursor</p>
-        <p class="terminal-command">nexus-prime setup claude</p>
-        <p class="terminal-command">nexus-prime setup opencode</p>
-        <p class="terminal-command">nexus-prime setup windsurf</p>
-        <p class="terminal-command">nexus-prime setup antigravity</p>
-        <p class="terminal-command">nexus-prime setup all</p>
-        <p class="terminal-command-alt">nexus-prime setup status</p>
+          <input type="radio" id="tab3" name="setup-tab">
+          <label for="tab3">Integrations</label>
+
+          <div id="content1" class="tab-content">
+            <span style="color:var(--text-muted)">// Install the control plane globally</span><br>
+            <span style="color:var(--magenta)">npm install -g nexus-prime</span><br><br>
+            
+            <span style="color:var(--text-muted)">// Start the MCP server daemon</span><br>
+            <span style="color:var(--magenta)">npx nexus-prime mcp</span><br><br>
+
+            <span style="color:var(--text-muted)">// Autogenerate workspace bootstrap files</span><br>
+            <span style="color:var(--magenta)">nexus-prime setup codex</span>
+          </div>
+
+          <div id="content2" class="tab-content">
+            <span style="color:var(--text-muted)"># Bind your local .nexus-prime identity directory</span><br>
+            <span style="color:var(--green)">docker run -d \</span><br>
+            &nbsp;&nbsp;<span style="color:var(--green)">--name nexus-prime \</span><br>
+            &nbsp;&nbsp;<span style="color:var(--green)">-v ~/.nexus-prime:/root/.nexus-prime \</span><br>
+            &nbsp;&nbsp;<span style="color:var(--green)">sirad/nexus-prime:latest mcp</span>
+          </div>
+
+          <div id="content3" class="tab-content">
+            <span style="color:var(--text-muted)">// Use our included profiles to bypass manual JSON wiring</span><br>
+            <span style="color:var(--magenta)">nexus-prime setup cursor</span><br>
+            <span style="color:var(--magenta)">nexus-prime setup claude</span><br>
+            <span style="color:var(--magenta)">nexus-prime setup windsurf</span><br>
+            <span style="color:var(--magenta)">nexus-prime setup all</span>
+          </div>
+        </div>
+
+        <div style="margin-top: 80px;">
+          <span class="section-label">ONE CONTROL PLANE. EVERY TOOL.</span>
+          <div class="plugin-grid">
+             <div class="plugin-card">Cursor</div>
+             <div class="plugin-card">Claude Code</div>
+             <div class="plugin-card">Windsurf</div>
+             <div class="plugin-card">OpenClaw</div>
+             <div class="plugin-card">Cline</div>
+             <div class="plugin-card">Codex</div>
+          </div>
+        </div>
       </div>
     </article>
 
