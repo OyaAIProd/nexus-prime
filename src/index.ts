@@ -200,6 +200,7 @@ export class NexusPrime {
     this.sessionDNA.flush();
 
     this.running = false;
+    podNetwork.destroy();
     console.error('✅ Nexus Prime stopped');
   }
 

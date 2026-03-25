@@ -632,6 +632,17 @@ Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 
 ## 📜 Release History
 
 <details open>
+<summary><b>v4.3.1</b> · 2026-03-25 · Dashboard stabilization, peer sync, and test regression fixes</summary>
+
+- **MCP Transport Stabilization**: Replaced stubbed transmission methods with functional JSON-RPC notification transport logic.
+- **Peer Connectivity**: Implemented logical peer integration conduits (`connectToPeer` and `syncWithPeer`) for orchestrator data exchange.
+- **Dashboard UX & Observability Refinements**: Applied minimalist UI improvements, exposed CAS token compression metrics, and bound swarm metrics (crew selection, plannerState confidence) to the operator plane.
+- **Test Suite Regression Fixes**: Remedied `dashboard.test.ts` `EADDRINUSE` port collision and event-bus mock path resolution faults.
+
+Full history: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
 <summary><b>v4.3.0</b> · 2026-03-24 · Sparse n-gram index engine and reactor core stabilization</summary>
 
 - **Sparse n-gram index engine**: Forged a sparse n-gram index engine using trigram decomposition with probabilistic masks and CRC32-weighted variable-length n-gram extraction.

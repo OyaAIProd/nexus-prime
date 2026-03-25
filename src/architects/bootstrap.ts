@@ -116,7 +116,7 @@ export function initArchitects(options: InitArchitectsOptions): ArchitectsRuntim
   const unsubStanddown = nexusEventBus.on('synapse.compaction.standdown', onStanddown);
   const unsubResumed = nexusEventBus.on('synapse.compaction.resumed', onResumed);
   nexusEventBus.emit('architects.ready', { version: '5.0.0' });
-  console.log('[Architects] Initialized. Set ARCHITECTS_OPERATIVE_ID to activate operative mode.');
+  console.error('[Architects] Initialized. Set ARCHITECTS_OPERATIVE_ID to activate operative mode.');
 
   return {
     db,

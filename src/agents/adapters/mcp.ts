@@ -3486,6 +3486,23 @@ export class MCPAdapter implements Adapter {
         console.error('[MCP Adapter] Disconnected');
     }
 
-    async send(message: NetworkMessage): Promise<void> { void message; }
-    receive(message: NetworkMessage): void { void message; }
+    async send(message: NetworkMessage): Promise<void> { 
+        if (!this.connected) return;
+        try {
+            await this.server.notification({
+                method: 'nexus/network_message',
+                params: { message }
+            });
+        } catch (e) {
+            console.error('[MCP Adapter] Failed to route outbound message', e);
+        }
+    }
+
+    receive(message: NetworkMessage): void { 
+        try {
+            console.error(`[MCP Adapter] Received network message from ${message.sender} of type ${message.type}`);
+        } catch (e) {
+            console.error('[MCP Adapter] Failed to process incoming network message:', e);
+        }
+    }
 }

@@ -154,7 +154,9 @@ async function test() {
   fs.mkdirSync(process.env.HOME, { recursive: true });
   process.env.CODEX_HOME = path.join(stateDir, '.codex');
   fs.mkdirSync(process.env.CODEX_HOME, { recursive: true });
-  const eventsDir = path.join(process.env.HOME, '.nexus-prime');
+  fs.mkdirSync(path.join(process.env.HOME, '.antigravity'), { recursive: true });
+  fs.mkdirSync(path.join(process.env.HOME, '.openclaw'), { recursive: true });
+  const eventsDir = stateDir;
   const eventsFile = path.join(eventsDir, 'events.jsonl');
   fs.mkdirSync(eventsDir, { recursive: true });
   fs.writeFileSync(eventsFile, `${JSON.stringify({
@@ -251,12 +253,31 @@ async function test() {
     ]
   });
 
+  const synapseStubbedProvider = () => ({
+    db: null,
+    providers: null,
+    getStrikeTeamStatus: () => [],
+    getOperativeHealth: () => [],
+    getPendingApprovals: () => [],
+    stop: () => {},
+  } as any);
+  const architectsStubbedProvider = () => ({
+    db: null,
+    providers: null,
+    getDispatchStatus: () => ({}),
+    getWardEscalations: () => [],
+    getWorklist: () => ({ worklist: null, items: [] }),
+    stop: () => {},
+  } as any);
+
   const makeServer = (runtimeProvider: any, orchestratorProvider: any) => new DashboardServer({
     runtimeProvider,
     orchestratorProvider,
     memoryProvider: () => memory,
     adaptersProvider: () => [],
     clientRegistryProvider: () => clientRegistry,
+    synapseProvider: synapseStubbedProvider,
+    architectsProvider: architectsStubbedProvider,
     repoRoot: process.cwd(),
   });
 
@@ -277,13 +298,17 @@ async function test() {
     await closeHttpServer(occupied);
   }
 
+  // Use a fresh port for the primary server tests to avoid TIME_WAIT / EADDRINUSE flakiness from the previous tests
+  const freshPort = port + 10;
+  process.env.NEXUS_DASHBOARD_PORT = String(freshPort);
+
   const primaryServer = makeServer(() => runtime, () => orchestrator);
   const reuseServer = makeServer(() => runtimeTwo, () => orchestratorTwo);
   primaryServer.start();
 
   try {
     const primaryAddress = await waitForAddress(primaryServer);
-    assert.strictEqual(primaryAddress, `http://127.0.0.1:${port}`, 'primary dashboard should bind to the configured default port when free');
+    assert.strictEqual(primaryAddress, `http://127.0.0.1:${freshPort}`, 'primary dashboard should bind to the configured default port when free');
 
     reuseServer.start();
     const reusedAddress = await waitForAddress(reuseServer);
@@ -761,7 +786,9 @@ async function test() {
   }
 }
 
-test().catch((error) => {
+test().then(() => {
+  process.exit(0);
+}).catch((error) => {
   console.error(error);
-  process.exitCode = 1;
+  process.exit(1);
 });

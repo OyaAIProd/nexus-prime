@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "nexus-prime": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "nexus-prime",
+        "mcp"
+      ],
+      "env": {
+        "NEXUS_MCP_TOOL_PROFILE": "autonomous"
+      }
+    }
+  }
+}

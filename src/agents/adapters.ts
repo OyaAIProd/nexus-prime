@@ -32,12 +32,12 @@ abstract class RenderedInstructionAdapter implements Adapter {
 
   async connect(): Promise<void> {
     this.connected = true;
-    console.log(`[${this.name} Adapter] Connected`);
+    console.error(`[${this.name} Adapter] Connected`);
   }
 
   async disconnect(): Promise<void> {
     this.connected = false;
-    console.log(`[${this.name} Adapter] Disconnected`);
+    console.error(`[${this.name} Adapter] Disconnected`);
   }
 
   async send(message: NetworkMessage): Promise<void> {
@@ -47,20 +47,20 @@ abstract class RenderedInstructionAdapter implements Adapter {
     const packet = extractInstructionPacket(message);
     if (packet) {
       this.lastEnvelope = this.gateway.renderEnvelope(packet, familyForAdapter(this.type));
-      console.log(`[${this.name} Adapter] Rendered ${this.lastEnvelope.format} packet ${this.lastEnvelope.packetHash}`);
+      console.error(`[${this.name} Adapter] Rendered ${this.lastEnvelope.format} packet ${this.lastEnvelope.packetHash}`);
       return;
     }
-    console.log(`[${this.name} Adapter] Sending generic message:`, message.type);
+    console.error(`[${this.name} Adapter] Sending generic message:`, message.type);
   }
 
   receive(message: NetworkMessage): void {
-    console.log(`[${this.name} Adapter] Received:`, message.type);
+    console.error(`[${this.name} Adapter] Received:`, message.type);
   }
 
   async spawnAgent(type: string, config?: unknown): Promise<string> {
     const agentId = `${this.name}_${type}_${Date.now()}`;
     this.agents.push(agentId);
-    console.log(`[${this.name} Adapter] Spawned agent: ${agentId}`);
+    console.error(`[${this.name} Adapter] Spawned agent: ${agentId}`);
     if (config && typeof config === 'object') {
       const maybePacket = (config as Record<string, unknown>).instructionPacket as InstructionPacket | undefined;
       if (maybePacket) {

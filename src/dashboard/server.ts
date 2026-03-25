@@ -237,18 +237,19 @@ export class DashboardServer {
     private async initialize(): Promise<void> {
         this.migrateDashboardState();
 
-        const probe = await this.probeDashboard(DEFAULT_PORT);
+        const targetPort = process.env.NEXUS_DASHBOARD_PORT ? parseInt(process.env.NEXUS_DASHBOARD_PORT, 10) : DEFAULT_PORT;
+        const probe = await this.probeDashboard(targetPort);
 
         if (probe.status === 'compatible') {
             this.dashboardMode = 'reused';
             this.dashboardUrl = probe.url;
-            this.activePort = DEFAULT_PORT;
+            this.activePort = targetPort;
             console.error(`[Dashboard] Reusing compatible dashboard at ${probe.url}`);
             return;
         }
 
-        const startPort = probe.status === 'incompatible' ? DEFAULT_PORT + 1 : DEFAULT_PORT;
-        const fallbackPort = await this.bindFirstAvailablePort(startPort, DEFAULT_PORT + MAX_PORT_SCAN);
+        const startPort = probe.status === 'incompatible' ? targetPort + 1 : targetPort;
+        const fallbackPort = await this.bindFirstAvailablePort(startPort, targetPort + MAX_PORT_SCAN);
 
         this.dashboardMode = 'bound';
         this.activePort = fallbackPort;

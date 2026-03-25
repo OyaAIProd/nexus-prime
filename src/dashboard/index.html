@@ -32,9 +32,9 @@
             --shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
             --rail-left: 284px;
             --rail-right: 344px;
-            --panel-pad: 0.66rem;
-            --panel-pad-compact: 0.56rem;
-            --card-pad: 0.62rem;
+            --panel-pad: 1.25rem;
+            --panel-pad-compact: 0.85rem;
+            --card-pad: 1rem;
             --token-dial-size: 136px;
         }
 
@@ -1795,6 +1795,11 @@
                                 <div class="meta">Forwarded into runtime and workers after selection.</div>
                             </div>
                             <div class="hero-metric">
+                                <label>CAS Compression</label>
+                                <strong id="cas-ratio">--</strong>
+                                <div class="meta">Reduction ratio from the Continuous Attention Stream.</div>
+                            </div>
+                            <div class="hero-metric">
                                 <label>Latest Runtime</label>
                                 <strong id="latest-token-run">n/a</strong>
                                 <div class="meta" id="latest-token-meta">No token-producing run recorded yet.</div>
@@ -1909,7 +1914,7 @@
             <div class="panel-body">
                 <div class="focusable-shell" data-widget-id="memory-graph" data-widget-title="Memory Graph" data-widget-subtitle="Graph-first topology view with runtime stats and direct inspection links.">
                     <div id="graph-stage">
-                        <svg id="graph-canvas" viewBox="0 0 980 620" preserveAspectRatio="xMidYMid meet"></svg>
+                        <svg id="graph-canvas" viewBox="0 0 980 620" preserveAspectRatio="xMidYMid meet" style="width: 100%; height: 100%;"></svg>
                         <div id="graph-memory-explorer" class="hidden"></div>
                         <div id="graph-empty" class="graph-empty hidden">No topology data yet.</div>
                     </div>
@@ -3669,7 +3674,11 @@
             $('clients-list').innerHTML = resourceFailed('clients') && !state.clients.length
                 ? emptyState('Clients endpoint unavailable.')
                 : state.clients.length
-                ? state.clients.map((client) => `
+                ? [...state.clients].sort((a,b) => {
+                    const weightA = a.state === 'primaryActive' ? 3 : a.state === 'active' ? 2 : a.state === 'installed' ? 1 : 0;
+                    const weightB = b.state === 'primaryActive' ? 3 : b.state === 'active' ? 2 : b.state === 'installed' ? 1 : 0;
+                    return weightB - weightA || a.displayName.localeCompare(b.displayName);
+                }).map((client) => `
                     <div class="client-row card interactive ${state.selected?.kind === 'client' && state.selected.id === client.clientId ? 'active' : ''}" data-kind="client" data-id="${escapeHtml(client.clientId)}">
                         <div class="client-info">
                             <span class="client-dot ${escapeHtml(client.state)}"></span>
@@ -3696,8 +3705,8 @@
             if (tokenMetrics.events === 0 && tokenMetrics.totalRuns === 0 && !tokenMetrics.gross && !tokenMetrics.saved && !tokenMetrics.forwarded) {
                 $('token-summary').textContent = resourceFailed('tokensSummary') ? 'telemetry unavailable' : 'No persisted token telemetry for this runtime yet';
                 $('gross-tokens').textContent = '--';
-                $('saved-tokens').textContent = '--';
                 $('net-tokens').textContent = '--';
+                $('cas-ratio').textContent = '--';
                 $('dial-value').textContent = '--';
                 $('latest-token-run').textContent = 'n/a';
                 $('latest-token-meta').textContent = state.streamConnected
@@ -3719,6 +3728,10 @@
                 $('gross-tokens').textContent = formatNumber(tokenMetrics.gross);
                 $('saved-tokens').textContent = formatNumber(tokenMetrics.saved);
                 $('net-tokens').textContent = formatNumber(tokenMetrics.forwarded);
+                
+                // Expose CAS ratio if available
+                const ratio = tokenMetrics.casCompression?.compressionRatio || (tokenMetrics.gross > 0 ? (tokenMetrics.saved / tokenMetrics.gross) : 0);
+                $('cas-ratio').textContent = ratio > 0 ? (ratio * 100).toFixed(1) + '%' : '--';
                 $('dial-value').textContent = `${tokenMetrics.ratio}%`;
                 $('latest-token-run').textContent = latestTokenRun ? `${Number(latestTokenRun.compressionPct || 0)}%` : 'n/a';
                 $('latest-token-meta').textContent = latestTokenRun
@@ -4485,6 +4498,11 @@
                             <label>Latest Run</label>
                             <strong>${escapeHtml(latestRun?.runId || 'No run yet')}</strong>
                             <div class="meta">${escapeHtml(latestRun?.goal || 'Use Run Controls to launch a guided task.')}</div>
+                        </div>
+                        <div class="hero-metric">
+                            <label>Swarm Tactics</label>
+                            <strong>${escapeHtml(latestRun?.plannerState?.swarmDecision?.mode || latestRun?.plannerResult?.swarmDecision?.mode || 'sequential')}</strong>
+                            <div class="meta">Crew: ${escapeHtml(latestRun?.plannerState?.selectedCrew?.name || latestRun?.plannerResult?.selectedCrew?.name || 'None')} · Score: ${(latestRun?.plannerState?.confidence?.score || latestRun?.plannerResult?.confidence?.score || 0).toFixed(2)}</div>
                         </div>
                         <div class="hero-metric">
                             <label>Optimization</label>
