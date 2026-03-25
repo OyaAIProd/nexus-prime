@@ -45,7 +45,13 @@ function createProviders(options: InitSynapseOptions): SynapseProviders {
 export function initSynapse(options: InitSynapseOptions): SynapseRuntime | null {
   if (!SynapseConfig.enabled) return null;
 
-  const db = openSynapseDb(options.repoRoot);
+  let db: ReturnType<typeof openSynapseDb>;
+  try {
+    db = openSynapseDb(options.repoRoot);
+  } catch (err: any) {
+    console.error('[Synapse] DB unavailable — Synapse disabled:', err?.message);
+    return null;
+  }
   const providers = createProviders(options);
   restoreSynapseFromLedger(db, options.repoRoot);
   const stopCompaction = registerCompactionListener(db, providers);

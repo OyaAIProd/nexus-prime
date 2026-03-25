@@ -165,12 +165,13 @@ export class NexusPrime {
     }
 
     const stateDir = resolveNexusStateDir();
+    const repoRoot = process.cwd();
     this.architects = initArchitects({
-      repoRoot: stateDir,
+      repoRoot,
     });
     const coordination = this.createSynapseCoordinationBridge();
     this.synapse = initSynapse({
-      repoRoot: stateDir,
+      repoRoot,
       orchestrator: this.orchestrator,
       memory: this.memoryEngine,
       sessionDNA: this.sessionDNA,
