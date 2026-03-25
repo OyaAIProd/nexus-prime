@@ -1,37 +1,147 @@
 # AGENTS.md
 
+## Core Execution Protocol
+
 IMPORTANT: Before starting ANY task, call `nexus_session_bootstrap` first.
 After bootstrap, call `nexus_orchestrate` with the user's request.
 Do NOT skip these steps. Do NOT manually explore files instead.
 
+```bash
 nexus_session_bootstrap(goal="<user request>", files=[optional candidate files])
 nexus_orchestrate(prompt="<user request>")
-
-During work, these lifecycle steps are REQUIRED:
-- Before reading 3+ files: `nexus_optimize_tokens(goal="<what you're doing>", files=["src/foo.ts", ...])`
-- Before any file modification or destructive operation: `nexus_mindkit_check(action="<what you're about to do>", filesToModify=["path/to/file"])`
-- Before refactoring 3+ files: `nexus_ghost_pass(goal="<what you're changing>", files=["path/to/file"])`
-- After significant findings: `nexus_store_memory(content="<specific learning>", priority=0.8, tags=["#bug", "#architecture", "#decision"])`
-
-Session end is REQUIRED:
-- `nexus_store_memory(content="Session YYYY-MM-DD: <what changed, why, and what remains>", priority=0.85, tags=["#session-summary"])`
-- `nexus_session_dna(action="generate")`
-
-`nexus_orchestrate` does NOT replace during-work or end-of-session lifecycle steps. Let Nexus choose the crew, specialists, skills, workflows, hooks, automations, worker count, and token strategy for orchestration itself.
-
-Memory persists under ~/.nexus-prime/. Full operating protocol: docs/nexus-protocol.md
-
-## Git Commit Policy
-
-All commits made by AI agents (Claude, Copilot, or any automated tool) MUST include the following co-author trailer:
-
-```
-Co-Authored-By: nexus-prime <33547839+sir-ad@users.noreply.github.com>
 ```
 
-- Do NOT use any other identity (e.g. `claude-flow`, `ruv`, etc.) as co-author.
-- The only acceptable co-author for automated/AI commits is `nexus-prime`.
-- This applies to all branches, PRs, and release commits.
+### Lifecycle Hooks (required)
+- **Before reading 3+ files**: `nexus_optimize_tokens(goal="<what you're doing>", files=[...])`
+- **Before any file modification or destructive operation**: `nexus_mindkit_check(action="<what you're about to do>", filesToModify=[...])`
+- **Before refactoring 3+ files**: `nexus_ghost_pass(goal="<what you're changing>", files=[...])`
+- **After significant findings**: `nexus_store_memory(content="<learning>", priority=0.8, tags=["#bug", "#architecture"])`
+- **Session end**: `nexus_store_memory(content="Session YYYY-MM-DD: <summary>", priority=0.85, tags=["#session-summary"])`
+  `nexus_session_dna(action="generate")`
+
+---
+
+## Build / Lint / Test Commands
+
+| Target | Command | Description |
+|--------|---------|-------------|
+| **Build** | `npm run build` | Produces production bundle. Must exit with zero errors. |
+| **Type‑check** | `npx tsc --noEmit` | Ensures TypeScript compiles cleanly. |
+| **Lint** | `npm run lint` | Runs ESLint with `--max-warnings=0`. Fails on any warning. |
+| **All tests** | `npm test` | Runs Jest/Vitest test suite. All tests must pass. |
+| **Single test** | `npm test -- -t "<test name>"` | Executes a single test matching the provided name (regex). |
+| **Coverage** | `npm test -- --coverage` | Generates coverage report; project rule: ≥80% total coverage. |
+| **Watch mode** | `npm test -- --watch` | Continuous testing during development. |
+
+---
+
+## Code Style Guidelines
+
+### General Principles
+- Write **readable**, **self‑documenting** code.
+- Keep functions ≤ **50 lines**; long functions should be split.
+- Limit files to **500 lines**; consider module boundaries.
+- Prefer **explicit types**; avoid `any` unless a comment justifies it.
+- All exported symbols must have **JSDoc**/**TSDoc** comments describing purpose, params, and return types.
+- Use **strict mode** (`"use strict"`) and enable `strict` in `tsconfig.json`.
+
+### Imports & Ordering
+1. **Side‑effect imports** (e.g., polyfills) → top.
+2. **External packages** – sorted alphabetically.
+3. **Internal aliases** (e.g., `@/utils/*`) – grouped together.
+4. **Relative imports** – sorted by path depth.
+5. Separate each group with a blank line.
+
+```ts
+// side‑effects
+import "reflect-metadata";
+
+// external
+import type { Request, Response } from "express";
+import { mapValues } from "lodash";
+
+// internal
+import { logger } from "@/utils/logger";
+import { getUser } from "@/services/user";
+
+// relative
+import config from "./config";
+```
+
+### Formatting
+- Use **Prettier** with 2‑space indentation.
+- **Semicolons** are required.
+- **Trailing commas** in multi‑line objects/arrays.
+- **Single quotes** for strings, backticks only for interpolation.
+
+### Naming Conventions
+- **Variables & functions**: `camelCase`.
+- **Constants**: `UPPER_SNAKE_CASE`.
+- **Classes & Types**: `PascalCase`.
+- **Enums**: `PascalCase` with `UPPER_SNAKE_CASE` members.
+- **Files**: kebab-case (`user-service.ts`).
+
+### Types & Interfaces
+- Prefer **interfaces** for object shapes used in multiple places.
+- Use **type aliases** for unions, tuples, and primitives.
+- All public functions must declare **return types** explicitly.
+- Mark async functions with `Promise<...>` return type.
+- Avoid using `any`; if unavoidable, add a comment explaining why.
+
+### Error Handling
+- Wrap all **async/await** calls in `try/catch` blocks.
+- Create custom error classes extending `Error` for domain‑specific failures.
+- Log errors with stack trace and context before re‑throwing.
+- Never swallow errors silently; always propagate or handle.
+
+```ts
+try {
+  const user = await getUser(id);
+  return user;
+} catch (err) {
+  logger.error('Failed to fetch user', { id, err });
+  throw new UserNotFoundError(id);
+}
+```
+
+### Testing Guidelines
+- Place tests alongside source files in `__tests__` folders or with `.test.ts` suffix.
+- Use **describe** blocks to group related tests.
+- Aim for **unit‑test coverage ≥80%**; integration tests cover critical flows.
+- Mock external services; never hit real APIs in unit tests.
+- Use **snapshot testing** sparingly; only for stable UI output.
+
+### Lint / Formatter Configuration
+- **ESLint**: extends `eslint:recommended`, `plugin:@typescript-eslint/recommended`, `prettier`.
+- **Prettier**: 2‑space indent, single‑quote, trailing‑comma all.
+- Enforce `no-var`, `prefer-const`, `no-console` (except in dev scripts).
+
+---
+
+## Cursor / Copilot Rules (if present)
+
+- **.cursor/rules/**: The repository includes `nexus‑prime.mdc` which defines the build, lint, and test commands above and enforces:
+  - Functions < 50 lines, files < 500 lines.
+  - No `any` types unless justified.
+  - Error handling on all async ops.
+  - Strict commit co‑author trailer (`Co‑Authored‑By: nexus‑prime <33547839+sir-ad@users.noreply.github.com>`).
+- **.github/copilot‑instructions.md**: not present; if added in future, incorporate its guidelines here.
+
+---
+
+## Git Commit Policy (re‑stated)
+
+All AI‑generated commits must include the co‑author trailer:
+
+```
+Co-Authored-By: nexus‑prime <33547839+sir-ad@users.noreply.github.com>
+```
+
+Commit messages follow Conventional Commits (`type(scope): description`).
+
+---
+
+*End of AGENTS.md*
 
 <!-- nexus-prime:codex-bootstrap:start -->
 ## Nexus Prime Bootstrap (managed)
@@ -52,60 +162,4 @@ Co-Authored-By: nexus-prime <33547839+sir-ad@users.noreply.github.com>
 - REQUIRED before ending the session: call `nexus_session_dna(action="generate")`.
 - Worker context lives in `.agent/runtime/context.json`; the compiled packet lives in `.agent/runtime/packet.json`.
 <!-- nexus-prime:codex-bootstrap:end -->
-
-<!-- nexus-prime:synapse:start -->
-## Synapse Operative Protocol
-> Only active when env SYNAPSE_OPERATIVE_ID is set.
-
-IF SYNAPSE_OPERATIVE_ID is set:
-1. `nexus_synapse_sortie_start(operativeId)` first in every session
-2. `nexus_synapse_echo(missionTitle)` before work
-3. `nexus_synapse_cost_report(...)` after significant LLM usage
-4. `nexus_synapse_mission_progress(...)` after meaningful findings
-5. `nexus_synapse_request_approval(...)` before delete/overwrite/reset and wait
-6. `nexus_synapse_sortie_end(...)` last in every session
-7. Check `nexus_architects_relay_inbox(...)` at session start
-8. Do not call `nexus_session_bootstrap` directly inside a Synapse sortie
-<!-- nexus-prime:synapse:end -->
-
-<!-- nexus-prime:architects:start -->
-## Architects Operative Protocol
-> Only active when env ARCHITECTS_OPERATIVE_ID is set.
-
-IF ARCHITECTS_OPERATIVE_ID is set:
-1. `nexus_architects_worklist_get(worklistId)` at session start
-2. `nexus_architects_workitem_claim(workItemId, operativeId)` before any work
-3. Work only on the branch assigned to that WorkItem
-4. `nexus_architects_workitem_complete(...)` when done or blocked
-5. Never push directly to main
-6. Use `nexus_architects_relay_send(...)` for operative-to-operative messages
-7. Escalate 2+ sortie blockers to ward via relay instead of waiting silently
-<!-- nexus-prime:architects:end -->
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

@@ -1790,6 +1790,11 @@
                                 <div class="meta">Saved by compression, recall, and selective reads.</div>
                             </div>
                             <div class="hero-metric">
+                                <label>Lifetime Tokens Saved</label>
+                                <strong id="lifetime-tokens-saved">—</strong>
+                                <div class="meta" id="lifetime-tokens-runs">loading...</div>
+                            </div>
+                            <div class="hero-metric">
                                 <label>Net Forwarded</label>
                                 <strong id="net-tokens">0</strong>
                                 <div class="meta">Forwarded into runtime and workers after selection.</div>
@@ -2109,6 +2114,7 @@
             tokensSummary: null,
             tokensTimeline: [],
             tokensBySource: {},
+            lifetimeTokens: null,
             primaryClient: null,
             skills: [],
             specialists: [],
@@ -2193,6 +2199,7 @@
                 tokensSummary: createResourceState(),
                 tokensTimeline: createResourceState(),
                 tokensBySource: createResourceState(),
+                lifetimeTokens: createResourceState(),
                 skills: createResourceState(),
                 specialists: createResourceState(),
                 crews: createResourceState(),
@@ -2414,6 +2421,12 @@
                     state.tokensBySource = value || {};
                 },
             },
+            lifetimeTokens: {
+                url: '/api/tokens/lifetime',
+                assign(value) {
+                    state.lifetimeTokens = value?.ok ? (value.data || null) : null;
+                },
+            },
             specialists: {
                 url: '/api/specialists',
                 assign(value) {
@@ -2620,14 +2633,14 @@
 
         const CATEGORY_RESOURCE_MAP = {
             memory: ['memory', 'memoryHealth', 'memoryAudit', 'memoryQuarantine', 'memoryShared'],
-            tokens: ['tokensSummary', 'tokensTimeline', 'tokensBySource', 'events'],
-            runtime: ['runs', 'pod', 'usage', 'orchestrationSession', 'orchestrationLedger', 'instructionPacket', 'tokensSummary', 'tokensTimeline', 'tokensBySource'],
+            tokens: ['tokensSummary', 'tokensTimeline', 'tokensBySource', 'lifetimeTokens', 'events'],
+            runtime: ['runs', 'pod', 'usage', 'orchestrationSession', 'orchestrationLedger', 'instructionPacket', 'tokensSummary', 'tokensTimeline', 'tokensBySource', 'lifetimeTokens'],
             pod: ['pod'],
             skills: ['skills'],
             specialists: ['specialists'],
             crews: ['crews'],
             workflows: ['workflows'],
-            knowledge: ['knowledgeFabricSession', 'knowledgeProvenance', 'ragCollections', 'patterns', 'tokensSummary', 'tokensTimeline', 'tokensBySource', 'modelTiers', 'memoryShared', 'usage'],
+            knowledge: ['knowledgeFabricSession', 'knowledgeProvenance', 'ragCollections', 'patterns', 'tokensSummary', 'tokensTimeline', 'tokensBySource', 'lifetimeTokens', 'modelTiers', 'memoryShared', 'usage'],
             clients: ['clients', 'primaryClient'],
             hooks: ['hooks'],
             automations: ['automations'],
@@ -2843,7 +2856,7 @@
         }
 
         function getDefaultRefreshTargets(mode = state.surfaceMode) {
-            return ['dashboardSummary', getSurfaceLoaderName(mode), 'events'];
+            return ['dashboardSummary', getSurfaceLoaderName(mode), 'lifetimeTokens', 'events'];
         }
 
         function isRuntimeStale() {
@@ -3700,6 +3713,7 @@
 
             const tokenMetrics = computeTokenMetrics();
             const latestTokenRun = getLatestTokenRun();
+            const lifetimeRecord = state.lifetimeTokens;
             const dialEl = $('dial-progress');
             const circumference = 2 * Math.PI * 70;
             if (tokenMetrics.events === 0 && tokenMetrics.totalRuns === 0 && !tokenMetrics.gross && !tokenMetrics.saved && !tokenMetrics.forwarded) {
@@ -3708,6 +3722,10 @@
                 $('net-tokens').textContent = '--';
                 $('cas-ratio').textContent = '--';
                 $('dial-value').textContent = '--';
+                $('lifetime-tokens-saved').textContent = lifetimeRecord ? formatNumber(lifetimeRecord.totalSavedTokens || 0) : '--';
+                $('lifetime-tokens-runs').textContent = lifetimeRecord
+                    ? `across ${formatNumber(lifetimeRecord.totalRuns || 0)} runs`
+                    : (resourceFailed('lifetimeTokens') ? 'lifetime totals unavailable' : 'loading...');
                 $('latest-token-run').textContent = 'n/a';
                 $('latest-token-meta').textContent = state.streamConnected
                     ? 'Live stream connected, waiting for the first token-producing run.'
@@ -3727,6 +3745,8 @@
                     : `${tokenMetrics.totalRuns || 0} lifetime runs · ${tokenMetrics.events || 0} samples`;
                 $('gross-tokens').textContent = formatNumber(tokenMetrics.gross);
                 $('saved-tokens').textContent = formatNumber(tokenMetrics.saved);
+                $('lifetime-tokens-saved').textContent = formatNumber(lifetimeRecord?.totalSavedTokens || 0);
+                $('lifetime-tokens-runs').textContent = `across ${formatNumber(lifetimeRecord?.totalRuns || 0)} runs`;
                 $('net-tokens').textContent = formatNumber(tokenMetrics.forwarded);
                 
                 // Expose CAS ratio if available

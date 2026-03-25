@@ -541,13 +541,22 @@ export class InstructionGateway {
 
         let workspaceJsonPath: string | undefined;
         let workspaceMarkdownPath: string | undefined;
-        if (repoRoot) {
-            const workspaceRuntimeDir = path.join(repoRoot, '.agent', 'runtime');
-            fs.mkdirSync(workspaceRuntimeDir, { recursive: true });
-            workspaceJsonPath = path.join(workspaceRuntimeDir, 'packet.json');
-            workspaceMarkdownPath = path.join(workspaceRuntimeDir, 'packet.md');
-            fs.writeFileSync(workspaceJsonPath, JSON.stringify(packet, null, 2), 'utf8');
-            fs.writeFileSync(workspaceMarkdownPath, renderInstructionPacketMarkdown(packet), 'utf8');
+
+        const isRoot = repoRoot === '/' || (repoRoot && path.resolve(repoRoot) === path.resolve('/'));
+
+        if (repoRoot && !isRoot) {
+            try {
+                const workspaceRuntimeDir = path.join(repoRoot, '.agent', 'runtime');
+                fs.mkdirSync(workspaceRuntimeDir, { recursive: true });
+                workspaceJsonPath = path.join(workspaceRuntimeDir, 'packet.json');
+                workspaceMarkdownPath = path.join(workspaceRuntimeDir, 'packet.md');
+                fs.writeFileSync(workspaceJsonPath, JSON.stringify(packet, null, 2), 'utf8');
+                fs.writeFileSync(workspaceMarkdownPath, renderInstructionPacketMarkdown(packet), 'utf8');
+            } catch (err) {
+                console.error(`[nexus-prime] Failed to persist instruction packet to workspace: ${err}`);
+            }
+        } else if (isRoot) {
+            console.error('[nexus-prime] Persistence to system root is disabled for stability.');
         }
 
         return { stateJsonPath, stateMarkdownPath, workspaceJsonPath, workspaceMarkdownPath };

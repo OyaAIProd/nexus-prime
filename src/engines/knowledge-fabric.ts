@@ -192,7 +192,7 @@ export class KnowledgeFabricEngine {
             selectedPatterns,
             runtimeSnapshot,
         });
-        const recommendations = this.buildRecommendations(selectedPatterns, runtimeSnapshot, ragHits.length > 0);
+        const recommendations = this.buildRecommendations(selectedPatterns, runtimeSnapshot, ragHits.length > 0, input.task);
         const modelTierPolicy = this.buildModelTierPolicy();
         const modelTierTrace = this.buildModelTierTrace(input, sourceMix);
         const provenance = this.buildProvenance({
@@ -471,7 +471,7 @@ export class KnowledgeFabricEngine {
         };
     }
 
-    private buildRecommendations(selectedPatterns: PatternSearchResult[], runtimeSnapshot?: RuntimeRegistrySnapshot, hasRag: boolean = false): KnowledgeFabricBundle['recommendations'] {
+    private buildRecommendations(selectedPatterns: PatternSearchResult[], runtimeSnapshot?: RuntimeRegistrySnapshot, hasRag: boolean = false, task?: string): KnowledgeFabricBundle['recommendations'] {
         const recommendations = {
             skills: dedupeStrings(selectedPatterns.flatMap((pattern) => pattern.suggestedSkills)),
             workflows: dedupeStrings(selectedPatterns.flatMap((pattern) => pattern.suggestedWorkflows)),
@@ -480,6 +480,32 @@ export class KnowledgeFabricEngine {
             crews: dedupeStrings(selectedPatterns.flatMap((pattern) => pattern.suggestedCrews)),
             specialists: dedupeStrings(selectedPatterns.flatMap((pattern) => pattern.suggestedSpecialists)),
         };
+        const taskLower = task?.toLowerCase() ?? '';
+        if (recommendations.skills.length === 0) {
+            if (/\b(backend|api|server|runtime|orchestrat|synapse|architect)\b/.test(taskLower)) {
+                recommendations.skills.push('repo-architecture-scout');
+            }
+            if (/\b(research|rag|retriev|embed|document)\b/.test(taskLower)) {
+                recommendations.skills.push('browser-to-mission');
+            }
+            if (/\b(plan|roadmap|pm|spec|ticket|feature|scope)\b/.test(taskLower)) {
+                recommendations.skills.push('systematic-planning');
+            }
+            if (/\b(bug|fix|error|crash|broken|issue|debug)\b/.test(taskLower)) {
+                recommendations.skills.push('mission-postmortem');
+            }
+            if (/\b(workflow|automat|pipeline|ci|deploy|release)\b/.test(taskLower)) {
+                recommendations.skills.push('codex-real-workflow');
+            }
+        }
+        if (recommendations.workflows.length === 0) {
+            if (/\b(backend|api|implement|build|create|develop|extend)\b/.test(taskLower)) {
+                recommendations.workflows.push('backend-execution-loop');
+            }
+            if (/\b(release|ship|publish|tag|version|deploy)\b/.test(taskLower)) {
+                recommendations.workflows.push('release-pipeline');
+            }
+        }
         if (hasRag && !recommendations.workflows.includes('research-and-implement')) {
             recommendations.workflows = dedupeStrings(['research-and-implement', ...recommendations.workflows]);
         }

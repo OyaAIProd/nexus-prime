@@ -973,6 +973,16 @@ export class OrchestratorEngine {
       selectedAutomations: run.activeAutomations.map((automation) => automation.name),
     };
     this.persistSessionState();
+    try {
+      if (tokenPlan) {
+        const { accumulateLifetimeTokens } = await import('./lifetime-tokens.js');
+        accumulateLifetimeTokens({
+          savedTokens: tokenPlan.savings ?? 0,
+          grossInputTokens: (tokenPlan.totalEstimatedTokens ?? 0) + (tokenPlan.savings ?? 0),
+          compressedTokens: tokenPlan.totalEstimatedTokens ?? 0,
+        });
+      }
+    } catch { /* non-critical */ }
     this.runtime.recordOrchestrationSnapshot(this.toRuntimeOrchestrationSnapshot(this.sessionState));
     this.runtime.recordPrimaryClient(primaryClient, this.listDetectedClients());
     this.runtime.recordArtifactOutcome(artifactOutcome);
@@ -1766,7 +1776,7 @@ export class OrchestratorEngine {
   }): boolean {
     if (entry.source === 'explicit' || entry.source === 'planner') return true;
     if (entry.source === 'knowledge-fabric') return entry.score >= 0.72 || entry.confidence !== 'low';
-    return entry.confidence !== 'low' && entry.score >= 0.64;
+    return entry.score > 0;
   }
 
   private toArtifactAuditEntry(

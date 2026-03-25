@@ -175,7 +175,7 @@ export class PatternRegistry {
             // n-gram search failed; fall back to full scan
         }
 
-        return pool
+        const results = pool
             .map((card) => {
                 const successBias = Math.max(0, card.successCount - card.failureCount);
                 const score = scoreText(`${card.name}\n${card.summary}\n${card.instructions}\n${card.tags.join(' ')}`, keywords)
@@ -183,9 +183,16 @@ export class PatternRegistry {
                     + successBias;
                 return { ...card, score };
             })
-            .filter((card) => card.score > 0)
+            .filter((card) => card.score >= 0)
             .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name))
             .slice(0, Math.max(1, Math.min(12, limit)));
+        if (results.length === 0) {
+            return this.cards
+                .sort((a, b) => (b.confidence * 10 + b.successCount) - (a.confidence * 10 + a.successCount))
+                .slice(0, limit)
+                .map((card) => ({ ...card, score: Math.round(card.confidence * 10) }));
+        }
+        return results;
     }
 
     recordOutcome(patternId: string, success: boolean): void {

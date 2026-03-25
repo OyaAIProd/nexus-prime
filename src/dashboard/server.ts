@@ -34,6 +34,7 @@ const CORE_CAPABILITIES = {
     stream: true,
     tokens: true,
     tokenSources: true,
+    lifetimeTokens: true,
 } as const;
 
 const OPTIONAL_CAPABILITIES = {
@@ -417,6 +418,17 @@ export class DashboardServer {
             const snapshot = this.resolveRuntimeSnapshot(url);
             const timeline = snapshot?.tokens?.timeline ?? this.getRuntime()?.getTokenTelemetryTimeline(limit) ?? [];
             this.respondJson(res, timeline.slice(0, Math.max(1, limit)));
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/tokens/lifetime') {
+            try {
+                const { readLifetimeTokens } = await import('../engines/lifetime-tokens.js');
+                const record = readLifetimeTokens();
+                this.respondJson(res, { ok: true, data: record });
+            } catch (err: any) {
+                this.respondJson(res, { ok: false, error: err?.message ?? 'Failed to read lifetime tokens' });
+            }
             return;
         }
 

@@ -459,13 +459,15 @@ export function getSetupDefinition(
 
 export function installSetup(
     definition: SetupDefinition,
-    options: { scope?: 'all' | 'home' | 'workspace' } = {},
+    options: { scope?: 'all' | 'home' | 'workspace'; silent?: boolean } = {},
 ): void {
     const scope = options.scope ?? 'all';
     if (definition.configPath && scope !== 'workspace') {
         const configCheck = validateTargetPath(definition.configPath);
         if (!configCheck.valid) {
-            console.warn(`[nexus-prime] Skipping config for ${definition.label}: ${configCheck.reason}`);
+            if (!options.silent) {
+                console.warn(`[nexus-prime] Skipping config for ${definition.label}: ${configCheck.reason}`);
+            }
         } else if (definition.id === 'opencode') {
             writeOpencodeConfig(definition.configPath);
         } else {
@@ -477,7 +479,9 @@ export function installSetup(
         if (scope === 'workspace' && file.scope !== 'workspace') continue;
         const pathCheck = validateTargetPath(file.path);
         if (!pathCheck.valid) {
-            console.warn(`[nexus-prime] Skipping instruction file ${file.path}: ${pathCheck.reason}`);
+            if (!options.silent) {
+                console.warn(`[nexus-prime] Skipping instruction file ${file.path}: ${pathCheck.reason}`);
+            }
             continue;
         }
         ensureParentDir(file.path);
@@ -588,6 +592,7 @@ export function supportedSetupClients(): SetupClientId[] {
 }
 
 function workspaceEligible(workspaceRoot: string): boolean {
+    if (workspaceRoot === '/' || workspaceRoot === resolve('/')) return false;
     return existsSync(join(workspaceRoot, 'package.json'))
         || existsSync(join(workspaceRoot, '.git'))
         || existsSync(join(workspaceRoot, 'AGENTS.md'));
@@ -637,7 +642,13 @@ function hasBinary(name: string): boolean {
     }
 }
 
-function ensureWorkspaceAgentScaffold(workspaceRoot: string): void {
+function ensureWorkspaceAgentScaffold(workspaceRoot: string, options: { silent?: boolean } = {}): void {
+    if (workspaceRoot === '/' || workspaceRoot === resolve('/')) {
+        if (!options.silent) {
+            console.warn('[nexus-prime] Cannot create agent scaffold at system root. Skipping.');
+        }
+        return;
+    }
     const agentDir = join(workspaceRoot, '.agent');
     const isFirstRun = !existsSync(agentDir);
     const directories = [
@@ -651,7 +662,13 @@ function ensureWorkspaceAgentScaffold(workspaceRoot: string): void {
         '.agent/automations',
     ];
     directories.forEach((relativeDir) => {
-        mkdirSync(join(workspaceRoot, relativeDir), { recursive: true });
+        try {
+            mkdirSync(join(workspaceRoot, relativeDir), { recursive: true });
+        } catch (err) {
+            if (!options.silent) {
+                console.warn(`[nexus-prime] Failed to create directory ${relativeDir}: ${err}`);
+            }
+        }
     });
     // Only seed files on first run to avoid re-creating deleted content
     if (isFirstRun) {
@@ -724,7 +741,7 @@ export function ensureBootstrap(options: EnsureBootstrapOptions): BootstrapManif
     }
 
     if (allowWorkspace) {
-        ensureWorkspaceAgentScaffold(workspaceRoot);
+        ensureWorkspaceAgentScaffold(workspaceRoot, { silent: options.silent });
         
         // Phase 3F: Instant Aha Moment welcome memory
         try {
@@ -758,7 +775,7 @@ export function ensureBootstrap(options: EnsureBootstrapOptions): BootstrapManif
                 }
             }
 
-            installSetup(definition, { scope });
+            installSetup(definition, { scope, silent: options.silent });
         } catch (error) {
             console.warn(`Bootstrap failed for client ${clientId}: ${error}`);
         }
