@@ -632,7 +632,7 @@ Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 
 ## 📜 Release History
 
 <details open>
-<summary><b>v4.3.1</b> · 2026-03-25 · Dashboard stabilization, peer sync, and test regression fixes</summary>
+<summary><b>v4.3.2</b> · 2026-03-25 · Dashboard stabilization, peer sync, and test regression fixes</summary>
 
 - **MCP Transport Stabilization**: Replaced stubbed transmission methods with functional JSON-RPC notification transport logic.
 - **Peer Connectivity**: Implemented logical peer integration conduits (`connectToPeer` and `syncWithPeer`) for orchestrator data exchange.
