@@ -6,6 +6,7 @@
  */
 
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { MemoryEngine } from './memory.js';
@@ -202,6 +203,7 @@ interface OrchestratorOptions {
 
 const MAX_AUTONOMY_HISTORY = 24;
 const MAX_DISCOVERED_FILES = 32;
+const ABSOLUTE_SECONDARY_MIN = 0.3;
 const DISCOVERY_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.md', '.yml', '.yaml']);
 const DISCOVERY_IGNORES = new Set(['.git', 'node_modules', 'dist', 'coverage', '.next', '.playwright-cli', 'tmp']);
 
@@ -251,7 +253,16 @@ export class OrchestratorEngine {
       tokenEngine: this.tokenEngine,
     });
     this.sessionsDir = path.join(resolveNexusStateDir(), 'autonomy-sessions');
-    fs.mkdirSync(this.sessionsDir, { recursive: true });
+    try {
+      fs.mkdirSync(this.sessionsDir, { recursive: true });
+    } catch (err: any) {
+      if (['EROFS', 'ENOENT', 'EACCES'].includes(err?.code)) {
+        this.sessionsDir = path.join(os.tmpdir(), 'nexus-prime-sessions');
+        fs.mkdirSync(this.sessionsDir, { recursive: true });
+      } else {
+        throw err;
+      }
+    }
     this.sessionState = this.loadSessionState();
     
     this.memoryBackgroundWorker = new MemoryBackgroundWorker(this.memory);
@@ -448,7 +459,11 @@ export class OrchestratorEngine {
   }
 
   public async bootstrapSession(task: string, options: Partial<ExecutionTask> = {}): Promise<SessionBootstrapResult> {
-    const prepared = await this._prepareExecution(task, options);
+    const prepared = await new Promise<Awaited<ReturnType<OrchestratorEngine['_prepareExecution']>>>((resolve, reject) => {
+      setImmediate(() => {
+        this._prepareExecution(task, options).then(resolve, reject);
+      });
+    });
     const {
       intent,
       phases,
@@ -919,6 +934,13 @@ export class OrchestratorEngine {
         state: 'failed',
         ts: Date.now(),
       });
+      setTimeout(() => this.executionDedupeStore.delete(fingerprint), 120_000).unref();
+      const envErrors = ['EROFS', 'ENOENT', 'EACCES', 'EPERM'];
+      if (envErrors.includes((error as any)?.code)) {
+        console.error('[Orchestrator] Env error (not orchestration failure):', (error as any).code);
+      } else {
+        this.updateCircuitState('failed');
+      }
       throw error;
     }
     this.executionDedupeStore.set(fingerprint, {
@@ -926,6 +948,7 @@ export class OrchestratorEngine {
       state: run.state,
       ts: Date.now(),
     });
+    setTimeout(() => this.executionDedupeStore.delete(fingerprint), 120_000).unref();
     this.lastRun = run;
     const artifactOutcome = this.buildArtifactOutcome(selections.audit, run);
 
@@ -1121,7 +1144,13 @@ export class OrchestratorEngine {
       try {
         return JSON.parse(fs.readFileSync(target, 'utf8')) as SessionAutonomyState;
       } catch {
-        // fall through to new state
+        const corruptPath = target.replace(/\.json$/, `.corrupt-${Date.now()}.json`);
+        try {
+          fs.copyFileSync(target, corruptPath);
+        } catch {
+          // ignore backup failures
+        }
+        console.error('[Orchestrator] Corrupt session file backed up to:', corruptPath);
       }
     }
 
@@ -1149,7 +1178,11 @@ export class OrchestratorEngine {
   }
 
   private persistSessionState(): void {
-    fs.writeFileSync(this.sessionStatePath(), JSON.stringify(this.sessionState, null, 2), 'utf8');
+    try {
+      fs.writeFileSync(this.sessionStatePath(), JSON.stringify(this.sessionState, null, 2), 'utf8');
+    } catch (err: any) {
+      console.error('[Orchestrator] Failed to persist session state:', err?.message);
+    }
   }
 
   private sessionStatePath(): string {
@@ -1374,7 +1407,8 @@ export class OrchestratorEngine {
     const bestScore = sorted[0]?.[1] ?? 0;
     // Secondary intent: if 2nd place score >= 80% of 1st place, it's a meaningful secondary signal
     const secondaryThreshold = isTechnicalAudit ? 0.45 : 0.8;
-    const secondaryType = sorted[1]?.[1] > 0 && bestScore > 0 && sorted[1][1] >= bestScore * secondaryThreshold
+    const threshold = Math.max(secondaryThreshold * bestScore, ABSOLUTE_SECONDARY_MIN);
+    const secondaryType = sorted[1]?.[1] > 0 && bestScore > 0 && sorted[1][1] >= threshold
         ? sorted[1][0]
         : undefined;
 
@@ -1427,8 +1461,18 @@ export class OrchestratorEngine {
       return candidates;
     }
 
-    return ['README.md', 'AGENTS.md', 'package.json']
-      .map((entry) => path.join(this.repoRoot, entry))
+    const srcFiles = (() => {
+      try {
+        return fs.readdirSync(path.join(this.repoRoot, 'src'))
+          .filter((entry) => entry.endsWith('.ts'))
+          .map((entry) => path.join(this.repoRoot, 'src', entry));
+      } catch {
+        return [];
+      }
+    })();
+
+    return ['README.md', 'package.json', ...srcFiles]
+      .map((entry) => entry.startsWith(this.repoRoot) ? entry : path.join(this.repoRoot, entry))
       .filter((entry) => fs.existsSync(entry));
   }
 
@@ -2147,7 +2191,7 @@ export class OrchestratorEngine {
         `- **Mathematical Routing**: Applied strict TF-IDF/Vector heuristics weighted for the \`${intent.taskType}\` domain.`,
         '',
         '## 2. Swarm Topology (Parallel Sub-Agents)',
-        `- **Total Agents Allocated**: ${workerPlan?.workers?.length || 0}`,
+        `- **Total Agents Allocated**: ${workerPlan?.totalWorkers ?? 0}`,
         `- **Execution Mode**: ${workerPlan?.mode || 'default'}`,
         ...(workerPlan?.workers || []).map((w: any, idx: number) => `  - **Agent ${idx + 1}**: Uses isolated Git Worktree. Type: \`${w.type}\``),
         '',

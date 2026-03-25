@@ -69,6 +69,8 @@ export class NexusPrime {
   private dashboardServer: DashboardServer;
   private synapse: SynapseRuntime | null = null;
   private architects: ArchitectsRuntime | null = null;
+  private _cachedTokenStats: any = null;
+  private _cachedTokenStatsAt: number = 0;
 
   constructor(config?: Partial<NexusConfig>) {
     const memoryDbPath = config?.memory?.cortex?.path ?? process.env.NEXUS_MEMORY_DB_PATH;
@@ -176,7 +178,7 @@ export class NexusPrime {
     });
 
     this.dashboardServer.start();
-    nexusEventBus.emit('system.boot', { version: '5.0.0', toolsCount: 55 });
+    setImmediate(() => nexusEventBus.emit('system.boot', { version: '5.0.0', toolsCount: 55 }));
 
     this.running = true;
     console.error('✅ Nexus Prime running with engines!');
@@ -579,13 +581,18 @@ export class NexusPrime {
   }
 
   getStats(): any {
+    if (!this._cachedTokenStats || Date.now() - this._cachedTokenStatsAt > 30_000) {
+      this._cachedTokenStats = this.optimizeTokens('status check');
+      this._cachedTokenStatsAt = Date.now();
+    }
+    const tokens = this._cachedTokenStats;
     return {
       agents: this.agents.size,
       adapters: this.adapters.size,
       grammarRules: this.evolution.getGrammar().length,
       running: this.running,
       memory: this.getMemoryStats(),
-      tokens: this.optimizeTokens('status check')
+      tokens
     };
   }
 

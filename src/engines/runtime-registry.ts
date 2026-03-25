@@ -383,23 +383,21 @@ export function resolveNexusStateDir(): string {
     const candidates = [
         process.env.NEXUS_STATE_DIR?.trim(),
         path.join(os.homedir(), '.nexus-prime'),
-        path.join(os.tmpdir(), 'nexus-prime-state'),
-    ].filter((c): c is string => Boolean(c) && !c.startsWith('/.'));
+        path.join('/tmp', 'nexus-prime-state'),
+    ].filter((c): c is string => Boolean(c));
 
-    for (const candidate of candidates) {
+    const writable = candidates.filter((candidate) => {
         try {
-            fs.mkdirSync(candidate, { recursive: true });
             fs.accessSync(candidate, fs.constants.W_OK);
-            return candidate;
+            return true;
         } catch {
-            // Try next candidate
+            return false;
         }
-    }
+    });
 
-    // Last resort: tmpdir should always be writable
-    const fallback = path.join(os.tmpdir(), 'nexus-prime-state');
-    fs.mkdirSync(fallback, { recursive: true });
-    return fallback;
+    const selected = writable[0] ?? path.join('/tmp', 'nexus-prime-state');
+    fs.mkdirSync(selected, { recursive: true });
+    return selected;
 }
 
 export class RuntimeRegistry {
