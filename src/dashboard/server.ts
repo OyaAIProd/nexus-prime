@@ -215,7 +215,12 @@ export class DashboardServer {
     private migrateDashboardState(): void {
         const statePath = path.join(resolveNexusStateDir(), 'dashboard-state.json');
         if (!fs.existsSync(path.dirname(statePath))) {
-            fs.mkdirSync(path.dirname(statePath), { recursive: true });
+            try {
+                fs.mkdirSync(path.dirname(statePath), { recursive: true });
+            } catch (err: any) {
+                console.error('[Dashboard] Cannot create state dir:', err?.message);
+                return;
+            }
         }
         
         let state: any = { schemaVersion: 0 };
@@ -230,7 +235,11 @@ export class DashboardServer {
         if ((state.schemaVersion || 0) < DASHBOARD_SCHEMA_VERSION) {
             console.error(`[Dashboard] Migrating state from v${state.schemaVersion || 0} to v${DASHBOARD_SCHEMA_VERSION}`);
             state.schemaVersion = DASHBOARD_SCHEMA_VERSION;
-            fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+            try {
+                fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+            } catch (err: any) {
+                console.error('[Dashboard] Cannot write state migration:', err?.message);
+            }
         }
     }
 
@@ -715,7 +724,12 @@ export class DashboardServer {
             }
             const inputs = Array.isArray(body.inputs)
                 ? body.inputs.map((entry: any) => ({
-                    filePath: entry?.filePath ? String(entry.filePath) : undefined,
+                    filePath: (() => {
+                        if (!entry?.filePath) return undefined;
+                        const abs = path.resolve(String(entry.filePath));
+                        return abs.startsWith(process.cwd() + path.sep) || abs === process.cwd()
+                            ? String(entry.filePath) : undefined;
+                    })(),
                     url: entry?.url ? String(entry.url) : undefined,
                     text: entry?.text ? String(entry.text) : undefined,
                     label: entry?.label ? String(entry.label) : undefined,
@@ -1506,6 +1520,10 @@ export class DashboardServer {
             clients,
             primaryClient,
             nexusLayer: layer?.getSummary(snapshot?.orchestration?.sessionId) ?? null,
+            ragCollections: orchestrator?.listRagCollections?.() ?? [],
+            ragAttachedCount: (orchestrator?.listRagCollections?.() ?? [])
+                .filter((c: any) => c.attached).length,
+            patterns: orchestrator?.listPatterns?.()?.slice(0, 5) ?? [],
             alerts: this.buildDashboardAlerts({ health, usage, memoryHealth }),
         };
     }

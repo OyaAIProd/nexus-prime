@@ -80,7 +80,7 @@ export function initSynapse(options: InitSynapseOptions): SynapseRuntime | null 
   const unsubStall = nexusEventBus.on('architects.sentinel.stall', stallListener);
   const unsubZombie = nexusEventBus.on('architects.sentinel.zombie', zombieListener);
   const unsubConvergence = nexusEventBus.on('architects.convergence.failed', failedConvergenceListener);
-  nexusEventBus.emit('synapse.ready', { version: '5.0.0' });
+  setImmediate(() => nexusEventBus.emit('synapse.ready', { version: '5.0.0' }));
   console.error('[Synapse] Initialized. Set SYNAPSE_OPERATIVE_ID to activate operative mode.');
 
   return {

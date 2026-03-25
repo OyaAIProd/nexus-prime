@@ -60,4 +60,7 @@ async function runWithRetry(maxRetries = 3, delayMs = 1000) {
   }
 }
 
-void runWithRetry();
+runWithRetry().catch(err => {
+  console.error('[PostInstall] Bootstrap retry failed:', err?.message ?? err);
+  // non-fatal, process may already be exiting
+});
