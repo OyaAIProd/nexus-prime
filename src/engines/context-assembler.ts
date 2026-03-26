@@ -12,6 +12,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { createEmbedder, type Embedder } from './embedder.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -64,9 +65,12 @@ const DEFAULT_WEIGHTS: QualityWeights = {
 export class ContextAssembler {
     private weights: QualityWeights;
     private seenChunks: Set<string> = new Set(); // tracks chunks seen in session
+    private readonly embedder: Embedder;
+    private readonly vectorCache = new Map<string, number[]>();
 
     constructor(weights?: Partial<QualityWeights>) {
         this.weights = { ...DEFAULT_WEIGHTS, ...weights };
+        this.embedder = createEmbedder();
     }
 
     // ── Greedy Knapsack ────────────────────────────────────────────────────
@@ -170,7 +174,11 @@ export class ContextAssembler {
         }
 
         const jaccardScore = overlap / (taskSet.size + chunkSet.size - overlap);
-        return Math.min(1.0, jaccardScore * 3 + Math.min(pathBoost, 0.4));
+        const lexicalScore = Math.min(1.0, jaccardScore * 3 + Math.min(pathBoost, 0.4));
+        const taskVector = this.vectorFor(`task:${task}`, task);
+        const chunkVector = this.vectorFor(this.chunkKey(chunk), `${chunk.label}\n${chunk.source}\n${chunk.content.slice(0, 2000)}`);
+        const semanticScore = Math.max(0, this.embedder.cosineSimilarity(taskVector, chunkVector));
+        return Math.min(1.0, semanticScore * 0.7 + lexicalScore * 0.3);
     }
 
     /** Recency: how recently the file was modified (exponential decay) */
@@ -354,6 +362,14 @@ export class ContextAssembler {
     /** Unique key for a chunk (path + line range) */
     private chunkKey(chunk: ContextChunk): string {
         return `${chunk.source}:${chunk.startLine}-${chunk.endLine}`;
+    }
+
+    private vectorFor(key: string, value: string): number[] {
+        const cached = this.vectorCache.get(key);
+        if (cached) return cached;
+        const vector = this.embedder.embedSync(value);
+        this.vectorCache.set(key, vector);
+        return vector;
     }
 
     /** Reset session state (seen chunks) */

@@ -56,9 +56,11 @@ export interface WorkerResult {
     taskId: string;
     approach: string;
     diff: string;
-    outcome: 'success' | 'partial' | 'failed';
+    outcome: 'success' | 'partial' | 'failed' | 'budgetExceeded';
     confidence: number;   // 0-1
     tokensUsed: number;
+    tokenEstimateSource?: 'reported' | 'diff-estimate' | 'none';
+    budgetExceeded?: boolean;
     learnings: string[];  // Key insights to store in memory
     testsPassing?: number;
 }
@@ -196,10 +198,12 @@ export class PhantomWorker {
      */
     async spawn(
         task: WorkerTask,
-        executor: (worktreeDir: string, task: WorkerTask, worker: PhantomWorker) => Promise<{ learnings: string[]; confidence: number }>
+        executor: (
+            worktreeDir: string,
+            task: WorkerTask,
+            worker: PhantomWorker,
+        ) => Promise<{ learnings: string[]; confidence: number; tokensUsed?: number; tokenEstimateSource?: 'reported' | 'diff-estimate' }>
     ): Promise<WorkerResult> {
-        const startTime = Date.now();
-
         try {
             if ((task.entangledPeers?.length ?? 0) > 0) {
                 const state = entanglementEngine.entangle([this.workerId, ...task.entangledPeers!]);
@@ -211,19 +215,27 @@ export class PhantomWorker {
 
             // Execute the task in isolation
             // Pass the worker instance itself so the executor can call .broadcast()
-            const { learnings, confidence } = await executor(this.worktreeDir, task, this);
+            const execution = await executor(this.worktreeDir, task, this);
 
             // Capture the diff (what changed vs main)
             const diff = await this.captureDiff();
+            const reportedTokens = Number.isFinite(execution.tokensUsed) ? Math.max(0, Math.round(execution.tokensUsed as number)) : undefined;
+            const estimatedTokens = reportedTokens ?? this.estimateTokensUsed(diff, execution.learnings);
+            const budgetExceeded = task.tokenBudget > 0 && estimatedTokens > task.tokenBudget;
+            const learnings = budgetExceeded
+                ? [...execution.learnings, `Token budget exceeded: used ${estimatedTokens}, budget ${task.tokenBudget}`]
+                : execution.learnings;
 
             return {
                 workerId: this.workerId,
                 taskId: task.id,
                 approach: task.approach,
                 diff,
-                outcome: diff.trim().length > 0 ? 'success' : 'partial',
-                confidence,
-                tokensUsed: Math.round((Date.now() - startTime) / 100), // approx
+                outcome: budgetExceeded ? 'budgetExceeded' : diff.trim().length > 0 ? 'success' : 'partial',
+                confidence: budgetExceeded ? Math.min(execution.confidence, 0.25) : execution.confidence,
+                tokensUsed: estimatedTokens,
+                tokenEstimateSource: reportedTokens !== undefined ? (execution.tokenEstimateSource ?? 'reported') : 'diff-estimate',
+                budgetExceeded,
                 learnings
             };
         } catch (err) {
@@ -235,6 +247,8 @@ export class PhantomWorker {
                 outcome: 'failed',
                 confidence: 0,
                 tokensUsed: 0,
+                tokenEstimateSource: 'none',
+                budgetExceeded: false,
                 learnings: [`Worker ${this.workerId} failed: ${String(err)}`]
             };
         } finally {
@@ -285,6 +299,12 @@ export class PhantomWorker {
         } catch {
             // Best effort cleanup
         }
+    }
+
+    private estimateTokensUsed(diff: string, learnings: string[]): number {
+        const diffChars = diff.trim().length;
+        const learningsChars = learnings.join('\n').length;
+        return Math.max(1, Math.round((diffChars + learningsChars) / 4));
     }
 
     /** List all active phantom worktrees (for test/debug verification) */
@@ -341,7 +361,11 @@ export class PhantomOrchestrator {
     async run(
         goal: string,
         files: FileRef[],
-        executor: (worktreeDir: string, task: WorkerTask, worker: PhantomWorker) => Promise<{ learnings: string[]; confidence: number }>,
+        executor: (
+            worktreeDir: string,
+            task: WorkerTask,
+            worker: PhantomWorker,
+        ) => Promise<{ learnings: string[]; confidence: number; tokensUsed?: number; tokenEstimateSource?: 'reported' | 'diff-estimate' }>,
         nWorkers: number = 2
     ): Promise<{ report: GhostReport; decision: MergeDecision }> {
         // Phase 1: Ghost Pass

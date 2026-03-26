@@ -1,4 +1,5 @@
 import { listSpecialists } from '../../engines/specialist-roster.js';
+import { createEmbedder } from '../../engines/embedder.js';
 import type { SkillArtifact } from '../../engines/skill-runtime.js';
 import type { MandateSignals } from '../types.js';
 
@@ -19,15 +20,26 @@ function jaccard(left: Set<string>, right: Set<string>): number {
   return union === 0 ? 0 : overlap / union;
 }
 
+const specialistEmbeddings = new Map<string, number[]>();
+
 export function matchNPAssets(signals: MandateSignals, skills: SkillArtifact[]): {
   skills: SkillArtifact[];
   specialists: Array<{ specialistId: string; name: string }>;
 } {
-  const signalTokens = tokenize([signals.domains.join(' '), signals.subGoalHints.join(' ')].join(' '));
+  const embedder = createEmbedder();
+  const signalText = [signals.domains.join(' '), signals.subGoalHints.join(' ')].join(' ').trim();
+  const signalTokens = tokenize(signalText);
+  const signalVector = embedder.embedSync(signalText);
   const rankedSkills = [...skills]
     .map((skill) => ({
       skill,
-      score: jaccard(signalTokens, tokenize([skill.name, skill.domain ?? '', skill.instructions ?? ''].join(' '))),
+      score: scoreSemanticMatch(
+        signalTokens,
+        signalVector,
+        [skill.name, skill.domain ?? '', skill.instructions ?? ''].join(' '),
+        skill.embedding,
+        embedder,
+      ),
     }))
     .sort((left, right) => right.score - left.score)
     .map((entry) => entry.skill);
@@ -36,7 +48,14 @@ export function matchNPAssets(signals: MandateSignals, skills: SkillArtifact[]):
     .map((specialist) => ({
       specialistId: specialist.specialistId,
       name: specialist.name,
-      score: jaccard(signalTokens, tokenize([specialist.name, specialist.division, specialist.description].join(' '))),
+      score: scoreSemanticMatch(
+        signalTokens,
+        signalVector,
+        [specialist.name, specialist.division, specialist.description].join(' '),
+        specialistEmbeddings.get(specialist.specialistId),
+        embedder,
+        specialist.specialistId,
+      ),
     }))
     .sort((left, right) => right.score - left.score)
     .slice(0, 5)
@@ -46,4 +65,23 @@ export function matchNPAssets(signals: MandateSignals, skills: SkillArtifact[]):
     skills: rankedSkills,
     specialists: rankedSpecialists,
   };
+}
+
+function scoreSemanticMatch(
+  signalTokens: Set<string>,
+  signalVector: number[],
+  artifactText: string,
+  cachedEmbedding: number[] | undefined,
+  embedder: ReturnType<typeof createEmbedder>,
+  cacheKey?: string,
+): number {
+  const lexical = jaccard(signalTokens, tokenize(artifactText));
+  const embedding = Array.isArray(cachedEmbedding) && cachedEmbedding.length === signalVector.length
+    ? cachedEmbedding
+    : embedder.embedSync(artifactText);
+  if (cacheKey) {
+    specialistEmbeddings.set(cacheKey, embedding);
+  }
+  const semantic = Math.max(0, embedder.cosineSimilarity(signalVector, embedding));
+  return semantic * 0.8 + lexical * 0.2;
 }

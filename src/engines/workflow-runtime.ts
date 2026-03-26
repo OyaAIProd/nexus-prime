@@ -352,6 +352,38 @@ export class WorkflowRuntime {
         const dir = path.join(this.rootDir, artifact.workflowId, `v${artifact.version}`);
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(path.join(dir, 'artifact.json'), JSON.stringify(artifact, null, 2), 'utf-8');
+        this.persistCanonicalArtifact(artifact);
+    }
+
+    private persistCanonicalArtifact(artifact: WorkflowArtifact): void {
+        if (artifact.rolloutStatus !== 'promoted') return;
+        if (artifact.provenance === 'bundled' || artifact.provenance.startsWith('local:')) return;
+
+        const canonicalDir = path.join(this.workspaceRoot, '.agent', 'workflows', 'generated');
+        fs.mkdirSync(canonicalDir, { recursive: true });
+        const fileName = `${slugify(artifact.name).toLowerCase() || artifact.workflowId}.md`;
+        fs.writeFileSync(path.join(canonicalDir, fileName), this.renderMarkdown(artifact), 'utf-8');
+    }
+
+    private renderMarkdown(artifact: WorkflowArtifact): string {
+        const frontmatter = [
+            '---',
+            `name: ${artifact.name}`,
+            `domain: ${artifact.domain}`,
+            `description: ${artifact.description}`,
+            `triggers: [${artifact.triggerConditions.map((value) => JSON.stringify(value)).join(', ')}]`,
+            `outputs: [${artifact.expectedOutputs.map((value) => JSON.stringify(value)).join(', ')}]`,
+            `guardrails: [${artifact.guardrails.map((value) => JSON.stringify(value)).join(', ')}]`,
+            `verify: [${artifact.verifierHooks.map((value) => JSON.stringify(value)).join(', ')}]`,
+            `roles: [${artifact.roleAffinity.map((value) => JSON.stringify(value)).join(', ')}]`,
+            '---',
+            '',
+        ];
+        const steps = artifact.steps.map((step, index) => {
+            const command = step.command ? ` \`${step.command}\`` : '';
+            return `${index + 1}. ${step.title}${command}`;
+        });
+        return [...frontmatter, ...steps].join('\n');
     }
 }
 

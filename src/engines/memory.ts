@@ -351,7 +351,18 @@ interface MemoryDbSnapshot {
 }
 
 function resolvePreferredStateRoot(): string {
-  return process.env.NEXUS_STATE_DIR?.trim() || resolveNexusStateDir();
+  const explicit = process.env.NEXUS_STATE_DIR?.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const homeStateRoot = path.join(os.homedir(), '.nexus-prime');
+  try {
+    ensureWritableDirectory(homeStateRoot);
+    return homeStateRoot;
+  } catch {
+    return resolveNexusStateDir();
+  }
 }
 
 function isWritableStorageError(error: unknown): boolean {
@@ -547,6 +558,7 @@ export class MemoryEngine {
   private initSchema(): void {
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('synchronous = NORMAL');
+    this.db.pragma('busy_timeout = 5000');
     this.db.pragma('cache_size = -32000');
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('temp_store = MEMORY');

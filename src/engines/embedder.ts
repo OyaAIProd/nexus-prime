@@ -72,13 +72,23 @@ export const HyperbolicMath = {
      * Mobius addition: u ⊕ v
      * Used to translate points in hyperbolic space while staying in the unit ball.
      */
-    mobiusAdd(u: number[], v: number[]): never {
-        void u;
-        void v;
-        throw new Error(
-            'HyperbolicMath.mobiusAdd() is not implemented. ' +
-            'Do not call this method until a full Möbius addition is written and tested.'
-        );
+    mobiusAdd(u: number[], v: number[]): number[] {
+        if (u.length !== v.length) return HyperbolicMath.project([...u]);
+        const dotUV = u.reduce((sum, ui, index) => sum + ui * (v[index] ?? 0), 0);
+        const normU2 = u.reduce((sum, ui) => sum + ui * ui, 0);
+        const normV2 = v.reduce((sum, vi) => sum + vi * vi, 0);
+        const denominator = 1 + (2 * dotUV) + (normU2 * normV2);
+        if (Math.abs(denominator) < 1e-9) {
+            return HyperbolicMath.project(u.map((ui, index) => ui + (v[index] ?? 0)));
+        }
+
+        const result = u.map((ui, index) => {
+            const vi = v[index] ?? 0;
+            const left = (1 + (2 * dotUV) + normV2) * ui;
+            const right = (1 - normU2) * vi;
+            return (left + right) / denominator;
+        });
+        return HyperbolicMath.project(result);
     },
 
     /** Ensure vector is within unit ball (norm < 1) */
@@ -165,6 +175,11 @@ export class Embedder {
             }
         }
         
+        return this.localEmbed(text);
+    }
+
+    /** Synchronous local embedding for hot paths that cannot await remote providers. */
+    embedSync(text: string): number[] {
         return this.localEmbed(text);
     }
 

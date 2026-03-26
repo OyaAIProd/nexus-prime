@@ -145,7 +145,7 @@ export interface SessionBootstrapResult {
   artifactSelectionAudit: RuntimeArtifactSelectionAudit;
   taskGraphPreview: RuntimeTaskGraphSnapshot;
   workerPlanPreview: RuntimeWorkerPlanSnapshot;
-  knowledgeFabric?: {
+  knowledgeFabric: {
     summary: string;
     dominantSource: string;
     attachedCollections: string[];
@@ -326,7 +326,17 @@ export class OrchestratorEngine {
       sessionId: this.sessionState.sessionId,
       candidateFiles,
     });
-    const knowledgeFabric = this.composeKnowledgeFabric(task, candidateFiles, memoryMatches, intent);
+    let knowledgeFabric: KnowledgeFabricBundle;
+    try {
+      knowledgeFabric = this.composeKnowledgeFabric(task, candidateFiles, memoryMatches, intent);
+    } catch (error: any) {
+      console.warn('[Orchestrator] Knowledge Fabric compose failed, retrying:', error?.message ?? error);
+      try {
+        knowledgeFabric = this.composeKnowledgeFabric(task, candidateFiles, memoryMatches, intent);
+      } catch (retryError: any) {
+        throw new Error(`[Orchestrator] Knowledge Fabric unavailable: ${retryError?.message ?? retryError}`);
+      }
+    }
     const plannedFiles = options.files?.length
       ? options.files
       : (knowledgeFabric.repo.selectedFiles.length > 0 ? knowledgeFabric.repo.selectedFiles : candidateFiles);

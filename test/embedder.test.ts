@@ -1,5 +1,5 @@
 import test from 'node:test';
-import { equal, ok, throws } from 'node:assert/strict';
+import { equal, ok } from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -11,11 +11,11 @@ function createDbPath(prefix: string): string {
   return path.join(root, 'embedder.db');
 }
 
-test('HyperbolicMath.mobiusAdd is explicitly tombstoned', () => {
-  throws(
-    () => HyperbolicMath.mobiusAdd([0.1, 0.2], [0.3, 0.4]),
-    /not implemented/i,
-  );
+test('HyperbolicMath.mobiusAdd stays inside the unit ball', () => {
+  const result = HyperbolicMath.mobiusAdd([0.1, 0.2], [0.3, 0.4]);
+  equal(result.length, 2);
+  const norm = Math.sqrt(result.reduce((sum, value) => sum + value * value, 0));
+  ok(norm < 1, 'expected Möbius addition to remain projected inside the unit ball');
 });
 
 test('Embedder preserves vocabulary across batches with persistent stats', () => {

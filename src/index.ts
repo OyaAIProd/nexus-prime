@@ -6,7 +6,6 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { NexusConfig, Experience, Pattern, NetworkMessage, Agent, AgentType } from './core/types.js';
-import { MemorySystem, createMemory } from './core/memory.js';
 import { EvolutionEngine, FissionProtocol, createEvolutionEngine, createFissionProtocol } from './core/evolution.js';
 import { AttentionEconomics, InfiniteContext, createAttentionEconomics, createInfiniteContext } from './core/optimize.js';
 import { AgentCoordinator, createCoordinator } from './agents/coordinator.js';
@@ -37,6 +36,7 @@ import { ensureBootstrap } from './engines/client-bootstrap.js';
 import { initSynapse, type SynapseCoordinationBridge, type SynapseRuntime } from './synapse/index.js';
 import { initArchitects, type ArchitectsRuntime } from './architects/index.js';
 import { resolveNexusStateDir } from './engines/runtime-registry.js';
+import { createEmbedder } from './engines/embedder.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -44,11 +44,37 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PACKAGE_ROOT = path.join(__dirname, '..');
 
+class EngineBackedAgentMemory {
+  private readonly embedder = createEmbedder();
+
+  constructor(
+    private readonly agentId: string,
+    private readonly memoryEngine: {
+      store: (content: string, priority?: number, tags?: string[], parentId?: string, depth?: number) => string;
+    },
+  ) {}
+
+  learn(experience: Experience): Pattern | undefined {
+    const summary = `Agent ${this.agentId}: ${experience.action} -> ${experience.outcome}`;
+    this.memoryEngine.store(summary, Math.max(0.2, experience.value), ['#agent-experience', `#agent:${this.agentId}`]);
+    const pattern: Pattern = {
+      id: `pattern_${uuidv4()}`,
+      structure: this.embedder.embedSync(`${experience.action}\n${experience.outcome}`),
+      weight: experience.value,
+      confidence: Math.max(0.1, Math.min(1, experience.value)),
+      origin: this.agentId,
+      timestamp: experience.timestamp,
+      examples: [experience.action, experience.outcome],
+    };
+    return experience.value > 0.9 ? pattern : undefined;
+  }
+}
+
 export class NexusPrime {
   private config: NexusConfig;
   private adapters: Map<string, Adapter> = new Map();
   private agents: Map<string, Agent> = new Map();
-  private memories: Map<string, MemorySystem> = new Map();
+  private memories: Map<string, EngineBackedAgentMemory> = new Map();
 
   // NEW: Enhanced Engines
   private tokenOptimizer: any;
@@ -281,10 +307,7 @@ export class NexusPrime {
       }
     };
 
-    const memory = createMemory({
-      hippocampusWindowHours: 48,
-      prefrontalMaxItems: 7
-    });
+    const memory = new EngineBackedAgentMemory(id, this.memoryEngine);
     this.memories.set(id, memory);
     (agent as any).memory = memory;
 

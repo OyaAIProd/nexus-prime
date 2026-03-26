@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as http from 'http';
 import * as https from 'https';
 import { randomUUID } from 'crypto';
+import { createEmbedder, type Embedder } from './embedder.js';
 import { resolveNexusStateDir } from './runtime-registry.js';
 
 export interface RagCollectionSource {
@@ -20,6 +21,7 @@ export interface RagChunk {
     text: string;
     tokens: number;
     tags: string[];
+    embedding?: number[];
     score?: number;
 }
 
@@ -89,10 +91,14 @@ export interface RagCollectionStoreOptions {
 export class RagCollectionStore {
     private readonly rootDir: string;
     private readonly requestTimeoutMs: number;
+    private readonly embedder: Embedder;
+    private readonly embeddingDimensions: number;
 
     constructor(stateRoot: string = resolveNexusStateDir(), options: RagCollectionStoreOptions = {}) {
         this.rootDir = path.join(stateRoot, 'rag-collections');
         this.requestTimeoutMs = Math.max(100, options.requestTimeoutMs ?? DEFAULT_REMOTE_FETCH_TIMEOUT_MS);
+        this.embedder = createEmbedder();
+        this.embeddingDimensions = this.embedder.embedSync('nexus rag probe').length;
         fs.mkdirSync(this.rootDir, { recursive: true });
     }
 
@@ -111,7 +117,7 @@ export class RagCollectionStore {
         if (!fs.existsSync(target)) return undefined;
         try {
             const parsed = JSON.parse(fs.readFileSync(target, 'utf8')) as RagCollection;
-            return {
+            const collection: RagCollection = {
                 ...parsed,
                 tags: parsed.tags ?? [],
                 attachedRuntimeIds: parsed.attachedRuntimeIds ?? [],
@@ -119,6 +125,10 @@ export class RagCollectionStore {
                 sources: parsed.sources ?? [],
                 chunks: parsed.chunks ?? [],
             };
+            if (this.backfillCollectionEmbeddings(collection)) {
+                this.persist(collection);
+            }
+            return collection;
         } catch {
             return undefined;
         }
@@ -161,6 +171,7 @@ export class RagCollectionStore {
                 bytes: Buffer.byteLength(content, 'utf8'),
             };
             const chunks = chunkText(content, sourceId, dedupeStrings(input.tags ?? collection.tags));
+            await this.embedChunks(source.label, chunks);
             collection.sources.push(source);
             collection.chunks.push(...chunks);
             sourcesAdded += 1;
@@ -207,6 +218,7 @@ export class RagCollectionStore {
     retrieve(query: string, options: { runtimeId?: string; sessionId?: string; limit?: number; collectionIds?: string[] } = {}): RagRetrievalHit[] {
         const limit = Math.max(1, Math.min(20, options.limit ?? 6));
         const keywords = extractKeywords(query);
+        const queryVector = this.embedder.embedSync(query);
         const collections = options.collectionIds?.length
             ? options.collectionIds.map((collectionId) => this.getCollection(collectionId)).filter((collection): collection is RagCollection => Boolean(collection))
             : this.listCollections()
@@ -221,7 +233,12 @@ export class RagCollectionStore {
         return collections
             .flatMap((collection) => collection.chunks.map((chunk) => {
                 const source = collection.sources.find((entry) => entry.sourceId === chunk.sourceId);
-                const score = scoreText(chunk.text, keywords) + scoreText(source?.label ?? '', keywords);
+                const normalizedEmbedding = this.ensureChunkEmbedding(chunk, source?.label ?? '');
+                const semanticScore = normalizedEmbedding.length === queryVector.length
+                    ? Math.max(0, this.embedder.cosineSimilarity(queryVector, normalizedEmbedding))
+                    : 0;
+                const lexicalScore = scoreText(chunk.text, keywords) + scoreText(source?.label ?? '', keywords);
+                const score = semanticScore * 10 + lexicalScore;
                 return {
                     collectionId: collection.collectionId,
                     collectionName: collection.name,
@@ -234,7 +251,7 @@ export class RagCollectionStore {
                     score,
                 } satisfies RagRetrievalHit;
             }))
-            .filter((hit) => hit.score > 0)
+            .filter((hit) => hit.score > 0 || keywords.length === 0)
             .sort((left, right) => right.score - left.score || left.label.localeCompare(right.label))
             .slice(0, limit);
     }
@@ -293,6 +310,41 @@ export class RagCollectionStore {
             return fetchText(input.url, this.requestTimeoutMs);
         }
         return '';
+    }
+
+    private async embedChunks(sourceLabel: string, chunks: RagChunk[]): Promise<void> {
+        await Promise.all(chunks.map(async (chunk) => {
+            try {
+                chunk.embedding = await this.embedder.embed(`${sourceLabel}\n${chunk.text}`);
+            } catch {
+                chunk.embedding = undefined;
+            }
+            chunk.embedding = this.ensureChunkEmbedding(chunk, sourceLabel);
+        }));
+    }
+
+    private backfillCollectionEmbeddings(collection: RagCollection): boolean {
+        let changed = false;
+        const sourceLabels = new Map(collection.sources.map((source) => [source.sourceId, source.label]));
+        for (const chunk of collection.chunks) {
+            const normalized = this.ensureChunkEmbedding(chunk, sourceLabels.get(chunk.sourceId) ?? '');
+            if (chunk.embedding !== normalized) {
+                chunk.embedding = normalized;
+                changed = true;
+            } else if (!Array.isArray(chunk.embedding) || chunk.embedding.length !== this.embeddingDimensions) {
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private ensureChunkEmbedding(chunk: RagChunk, sourceLabel: string): number[] {
+        if (Array.isArray(chunk.embedding)
+            && chunk.embedding.length === this.embeddingDimensions
+            && chunk.embedding.every((value) => Number.isFinite(value))) {
+            return chunk.embedding;
+        }
+        return this.embedder.embedSync(`${sourceLabel}\n${chunk.text}`);
     }
 }
 

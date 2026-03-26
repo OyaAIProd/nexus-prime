@@ -410,6 +410,15 @@ export class SkillRuntime {
     }
 
     stage(artifact: SkillArtifact): SkillArtifact {
+        if (!artifact.embedding) {
+            try {
+                artifact.embedding = this.getEmbedder().embedSync(
+                    `${artifact.name} ${artifact.domain ?? ''} ${artifact.instructions ?? ''}`,
+                );
+            } catch {
+                // Semantic precomputation is best-effort.
+            }
+        }
         this.artifacts.set(artifact.skillId, artifact);
         this.persistArtifact(artifact);
         this.registerSkillCard(artifact);
@@ -551,6 +560,7 @@ export class SkillRuntime {
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(path.join(dir, 'artifact.json'), JSON.stringify(artifact, null, 2), 'utf-8');
         fs.writeFileSync(path.join(dir, 'skill.md'), this.renderMarkdown(artifact), 'utf-8');
+        this.persistCanonicalArtifact(artifact);
     }
 
     private renderMarkdown(artifact: SkillArtifact): string {
@@ -608,6 +618,16 @@ export class SkillRuntime {
         };
 
         this.registry.register(card);
+    }
+
+    private persistCanonicalArtifact(artifact: SkillArtifact): void {
+        if (artifact.rolloutStatus !== 'promoted') return;
+        if (artifact.provenance === 'bundled' || artifact.provenance.startsWith('local:')) return;
+
+        const canonicalDir = path.join(this.workspaceRoot, '.agent', 'skills', 'generated');
+        fs.mkdirSync(canonicalDir, { recursive: true });
+        const fileName = `${slugify(artifact.name).toLowerCase() || artifact.skillId}.md`;
+        fs.writeFileSync(path.join(canonicalDir, fileName), this.renderMarkdown(artifact), 'utf-8');
     }
 }
 

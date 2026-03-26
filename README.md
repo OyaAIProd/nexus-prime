@@ -632,6 +632,16 @@ Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 
 ## 📜 Release History
 
 <details open>
+<summary><b>v4.3.4</b> · 2026-03-26 · Semantic retrieval hardening, truthful worker budgets, and canonical promoted assets</summary>
+
+- **Semantic retrieval and matching**: RAG chunks now carry embeddings with semantic-first retrieval, Context Assembler relevance uses Embedder-backed scoring, and Synapse asset matching blends semantic and lexical signals instead of pure Jaccard hot paths.
+- **Truthful worker telemetry**: Phantom workers now report real or diff-estimated token usage, mark budget overruns explicitly, and stop treating wall-clock time as token consumption.
+- **Durable source-of-truth promotion**: Generated skills and workflows promoted by runtime now persist canonical repo-local copies under `.agent/.../generated`, while NexusPrime active agent memory routes through the SQLite `MemoryEngine` instead of the legacy in-memory path.
+
+Full history: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
 <summary><b>v4.3.2</b> · 2026-03-25 · Dashboard stabilization, peer sync, and test regression fixes</summary>
 
 - **MCP Transport Stabilization**: Replaced stubbed transmission methods with functional JSON-RPC notification transport logic.
