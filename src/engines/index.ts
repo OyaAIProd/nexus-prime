@@ -5,7 +5,7 @@
  */
 
 export { TokenSupremacyEngine as TokenOptimizer, createTokenSupremacyEngine as createTokenOptimizer } from './token-supremacy.js';
-export { SLERPCompressor, createSLERPCompressor } from './token-optimizer.js';
+export { TokenOptimizer as LegacyTokenOptimizer, createTokenOptimizer as createLegacyTokenOptimizer } from './token-optimizer.js';
 export { ContextEngine, createContextEngine } from './context.js';
 export { ContextCompressor, type CompressionOptions, type CompressionStats } from './context-compressor.js';
 

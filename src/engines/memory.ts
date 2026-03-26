@@ -30,14 +30,17 @@ import { resolveNexusStateDir } from './runtime-registry.js';
 import {
   createEmptyReconciliationSummary,
   createMemoryProvenance,
-  deriveCandidateFacts,
+  reconcileCandidateFact,
   type MemoryCandidateFact,
   type MemoryMaintenanceResult,
   type MemoryProvenance,
   type MemoryReconciliationAction,
+  type MemoryReconciliationCandidateSnapshot,
   type MemoryReconciliationEntry,
   type MemoryReconciliationSummary,
 } from './memory-control-plane.js';
+import { MemoryExtractor } from './memory-extractor.js';
+import { createMemoryContentFingerprint } from './memory-fingerprint.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -127,6 +130,17 @@ export interface MemoryRecallFilters {
   includeShared?: boolean;
   includeProfile?: boolean;
   includeHidden?: boolean;
+}
+
+export interface MemoryRecallMatch {
+  content: string;
+  id: string;
+  score: number;
+  confidence: number;
+  entropy: number;
+  trust: number;
+  tier: string;
+  priority: number;
 }
 
 export interface MemoryContainerSummary {
@@ -231,6 +245,15 @@ export interface MemoryConfig {
   priorityRetention?: number;
   flushEntropyThreshold?: number;
   recallCandidateLimit?: number;
+  vaultCompactionThreshold?: number;
+  expiredPurgeBatchSize?: number;
+  vacuumMinIntervalMs?: number;
+  /** Reconciliation: minimum word overlap to trigger contradiction check */
+  reconciliationContradictionThreshold?: number;
+  /** Reconciliation: minimum word overlap to trigger merge */
+  reconciliationMergeThreshold?: number;
+  /** Reconciliation: minimum word overlap to treat as duplicate */
+  reconciliationDuplicateThreshold?: number;
 }
 
 export interface MemoryAuditResult {
@@ -254,6 +277,7 @@ export interface MemoryHealthSummary {
 export interface MemoryExportItem {
   id: string;
   content: string;
+  contentFingerprint?: string;
   priority: number;
   timestamp: number;
   tags: string[];
@@ -274,13 +298,34 @@ export interface MemoryExportItem {
   provenance: MemoryProvenance;
 }
 
+export interface MemoryExportOrigin {
+  source: string;
+  tool: string;
+  repoId?: string;
+  workspaceId?: string;
+  projectId?: string;
+  sessionId?: string;
+}
+
 export interface MemoryExportBundle {
   version: number;
+  schemaVersion?: string;
   exportedAt: number;
   sessionId: string;
+  origin?: MemoryExportOrigin;
   stats: MemoryStats;
   health: MemoryHealthSummary;
   items: MemoryExportItem[];
+}
+
+export interface MemoryImportResult {
+  imported: number;
+  duplicates: number;
+  added: number;
+  updated: number;
+  skipped: number;
+  quarantined: number;
+  importedIds: string[];
 }
 
 export interface TokenTelemetryEntry {
@@ -472,6 +517,7 @@ export class MemoryEngine {
   private vaultDirty = new Set<string>();
   private vaultFlushTimer?: NodeJS.Timeout;
   private vaultNeedsFullSync = false;
+  private lastDatabaseVacuumAt = 0;
 
   // In-RAM working tiers (flushed to DB periodically)
   private prefrontal: MemoryItem[] = [];
@@ -480,10 +526,13 @@ export class MemoryEngine {
 
   // Vector index (in-memory TF-IDF) — rebuilt on load
   private embedder: Embedder;
+  private readonly extractor: MemoryExtractor;
   // Maps vector item id → memory id
   private vectorIdToMemoryId: Map<number, string> = new Map();
   private memoryIdToVectorId: Map<string, number> = new Map();
   private nextVectorId = 1;
+  private readonly sqliteRetryAttempts = 3;
+  private readonly sqliteRetryDelayMs = 25;
 
   constructor(dbPath?: string, config?: MemoryConfig) {
     this.config = {
@@ -491,6 +540,12 @@ export class MemoryEngine {
       priorityRetention: config?.priorityRetention ?? 0.95,
       flushEntropyThreshold: config?.flushEntropyThreshold ?? 0.9,
       recallCandidateLimit: Math.max(config?.recallCandidateLimit ?? 200, 1),
+      vaultCompactionThreshold: Math.max(config?.vaultCompactionThreshold ?? 50, 1),
+      expiredPurgeBatchSize: Math.max(config?.expiredPurgeBatchSize ?? 500, 1),
+      vacuumMinIntervalMs: Math.max(config?.vacuumMinIntervalMs ?? 12 * 60 * 60 * 1000, 1),
+      reconciliationContradictionThreshold: config?.reconciliationContradictionThreshold ?? 0.42,
+      reconciliationMergeThreshold: config?.reconciliationMergeThreshold ?? 0.68,
+      reconciliationDuplicateThreshold: config?.reconciliationDuplicateThreshold ?? 0.9,
     };
     
     const requestedDbPath = dbPath ?? path.join(resolvePreferredStateRoot(), 'memory.db');
@@ -530,6 +585,7 @@ export class MemoryEngine {
 
     this.initSchema();
     this.embedder = new Embedder(this.db);
+    this.extractor = new MemoryExtractor();
     this.prepareStatements();
     this.load();
     this.loadBackupMetadata();
@@ -575,6 +631,34 @@ export class MemoryEngine {
         this.incrementAccessStmt.run(id);
       }
     });
+  }
+
+  private withSqliteRetry<T>(operation: string, fn: () => T): T {
+    for (let attempt = 1; attempt <= this.sqliteRetryAttempts; attempt += 1) {
+      try {
+        return fn();
+      } catch (error) {
+        if (!this.isSqliteBusyError(error) || attempt === this.sqliteRetryAttempts) {
+          throw error;
+        }
+        const delayMs = this.sqliteRetryDelayMs * attempt;
+        nexusEventBus.emit('memory.sqlite.retry', {
+          operation,
+          attempt,
+          maxAttempts: this.sqliteRetryAttempts,
+          delayMs,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        const signal = new Int32Array(new SharedArrayBuffer(4));
+        Atomics.wait(signal, 0, 0, delayMs);
+      }
+    }
+    throw new Error(`SQLite retry exhausted for ${operation}`);
+  }
+
+  private isSqliteBusyError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    return /SQLITE_BUSY/i.test(message);
   }
 
   private runMigrations(): void {
@@ -1175,32 +1259,36 @@ export class MemoryEngine {
     };
 
     // Write to DB immediately (don't wait for flush)
-    this.db.prepare(`
-      INSERT INTO memories(id, content, priority, timestamp, tags, tier, scope, state, source, session_id, access_count, parent_id, depth, entropy, mass, trust, provenance_json, expires_at, supersedes, superseded_by)
-    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0.0, ?, ?, ?, ?, ?, ?)
-      `).run(
-        id,
-        content,
-        priority,
-        item.timestamp,
-        JSON.stringify(item.tags),
-        item.tier,
-        item.scope,
-        item.state,
-        item.source,
-        item.sessionId,
-        parentId,
-        depth,
-        priority,
-        item.trust,
-        JSON.stringify(item.provenance),
-        item.expiresAt ?? null,
-        item.supersedes ?? null,
-        item.supersededBy ?? null,
-      );
+    this.withSqliteRetry('store.insert', () => {
+      this.db.prepare(`
+        INSERT INTO memories(id, content, priority, timestamp, tags, tier, scope, state, source, session_id, access_count, parent_id, depth, entropy, mass, trust, provenance_json, expires_at, supersedes, superseded_by)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0.0, ?, ?, ?, ?, ?, ?)
+        `).run(
+          id,
+          content,
+          priority,
+          item.timestamp,
+          JSON.stringify(item.tags),
+          item.tier,
+          item.scope,
+          item.state,
+          item.source,
+          item.sessionId,
+          parentId,
+          depth,
+          priority,
+          item.trust,
+          JSON.stringify(item.provenance),
+          item.expiresAt ?? null,
+          item.supersedes ?? null,
+          item.supersededBy ?? null,
+        );
+    });
 
     if (item.supersedes) {
-      this.db.prepare('UPDATE memories SET superseded_by = ?, state = ? WHERE id = ?').run(id, 'expired', item.supersedes);
+      this.withSqliteRetry('store.supersede', () => {
+        this.db.prepare('UPDATE memories SET superseded_by = ?, state = ? WHERE id = ?').run(id, 'expired', item.supersedes);
+      });
     }
 
     // Update vocabulary and add to vector index
@@ -1257,9 +1345,11 @@ export class MemoryEngine {
       maxCandidates?: number;
     } = {},
   ): { storedIds: string[]; summary: MemoryReconciliationSummary } {
-    const candidates = deriveCandidateFacts(content, tags, options.maxCandidates ?? 2);
+    const extraction = this.extractor.extract(content, tags, options.maxCandidates ?? 2);
+    const candidates = extraction.facts;
     const summary = createEmptyReconciliationSummary();
     const storedIds: string[] = [];
+    const rawFingerprint = extraction.rawFingerprint;
 
     for (const candidate of candidates) {
       const decision = this.reconcileCandidate(candidate, {
@@ -1294,12 +1384,19 @@ export class MemoryEngine {
             tags: dedupeStrings([...(options.provenance?.tags ?? []), ...candidate.tags]),
             references: dedupeStrings([...(options.provenance?.references ?? []), ...decision.relatedIds]),
             lane: options.provenance?.lane ?? candidateLane,
+            rawContext: {
+              preview: content.slice(0, 240),
+              fingerprint: rawFingerprint,
+              extractionMode: candidate.extractionMode,
+            },
           },
         });
         storedIds.push(storedId);
       } else if (decision.action === 'DELETE') {
         decision.relatedIds.forEach((relatedId) => {
-          this.db.prepare('UPDATE memories SET state = ?, superseded_by = ? WHERE id = ?').run('expired', 'deleted-by-policy', relatedId);
+          this.withSqliteRetry('storeWithControlPlane.delete', () => {
+            this.db.prepare('UPDATE memories SET state = ?, superseded_by = ? WHERE id = ?').run('expired', 'deleted-by-policy', relatedId);
+          });
         });
       }
       summary.entries.push({
@@ -1309,6 +1406,9 @@ export class MemoryEngine {
         relatedIds: decision.relatedIds,
         storedId,
         expiresAt,
+        overlapScore: decision.overlapScore,
+        extractorMode: candidate.extractionMode,
+        resolutionReason: decision.resolutionReason,
       });
     }
 
@@ -1438,6 +1538,91 @@ export class MemoryEngine {
     return top.map(r => r.content);
   }
 
+  /** Recall with quality metadata for token budget allocation */
+  async recallWithMetadata(query: string, k: number = 5, filters: MemoryRecallFilters = {}): Promise<MemoryRecallMatch[]> {
+    this.expireMemories();
+    const now = Date.now();
+
+    let candidateRows: any[];
+    const ngramCandidates = this.ngramIndex?.search(query, this.config.recallCandidateLimit);
+    if (ngramCandidates && ngramCandidates.length > 0) {
+      const ids = ngramCandidates.map((c) => c.docId);
+      const placeholders = ids.map(() => '?').join(',');
+      candidateRows = this.db.prepare(`
+        SELECT * FROM memories WHERE id IN (${placeholders}) AND state = 'active'
+          AND (expires_at IS NULL OR expires_at > ?) ORDER BY priority DESC, timestamp DESC
+      `).all(...ids, now) as any[];
+      if (candidateRows.length < k * 2) {
+        const existingIds = new Set(candidateRows.map((r: any) => r.id));
+        const supplement = this.db.prepare(`
+          SELECT * FROM memories WHERE state = 'active' AND (expires_at IS NULL OR expires_at > ?)
+          ORDER BY priority DESC, timestamp DESC LIMIT ?
+        `).all(now, this.config.recallCandidateLimit) as any[];
+        for (const row of supplement) {
+          if (!existingIds.has(row.id)) { candidateRows.push(row); existingIds.add(row.id); }
+        }
+      }
+    } else {
+      candidateRows = this.db.prepare(`
+        SELECT * FROM memories WHERE state = 'active' AND (expires_at IS NULL OR expires_at > ?)
+        ORDER BY priority DESC, timestamp DESC LIMIT ?
+      `).all(now, this.config.recallCandidateLimit) as any[];
+    }
+    const candidateItems = candidateRows.map((row) => this.rowToItem(row)).filter((item) => this.matchesRecallFilters(item, filters));
+    const queryVector = await this.embedder.embed(query);
+    const scored = candidateItems.map((item) => {
+      const itemVector = this.embedder.localEmbed(item.content);
+      const hDist = HyperbolicMath.dist(queryVector, itemVector);
+      const vectorScore = 1 / (1 + hDist);
+      const recencyScore = Math.exp(-(now - item.timestamp) / (7 * 24 * 3600 * 1000));
+      const priorityScore = item.priority;
+      const accessBonus = Math.min(item.accessCount * 0.05, 0.3);
+      const massBoost = (item.mass ?? 1.0) * 0.2;
+      const qmdScore = this.computeQmdScore(item);
+      const finalScore = vectorScore * 0.4 + priorityScore * 0.15 + recencyScore * 0.1 + accessBonus * 0.05 + massBoost + qmdScore * 0.3;
+      return {
+        content: item.content,
+        id: item.id,
+        score: finalScore,
+        confidence: Math.min(1, vectorScore * 0.6 + priorityScore * 0.4),
+        entropy: item.entropy ?? 0,
+        trust: item.trust ?? 1.0,
+        tier: item.tier,
+        priority: item.priority,
+      };
+    });
+    const top = scored.sort((a, b) => b.score - a.score).slice(0, k);
+    if (top.length > 0) {
+      const ids = top.filter(e => e.id).map(e => e.id);
+      if (ids.length > 0) this.incrementAccessTxn(ids);
+    }
+    return top;
+  }
+
+  /**
+   * Compute file relevance boosts from memory content.
+   * Scans recent active memories for file path mentions and returns boost scores.
+   */
+  getFileBoosts(candidateFiles: string[]): Map<string, number> {
+    const boosts = new Map<string, number>();
+    if (candidateFiles.length === 0) return boosts;
+
+    const recentMemories = this.db.prepare(`
+      SELECT content FROM memories
+      WHERE state = 'active' AND tier IN ('prefrontal', 'hippocampus')
+      ORDER BY timestamp DESC LIMIT 50
+    `).all() as Array<{ content: string }>;
+
+    const contentBlock = recentMemories.map(r => r.content).join('\n').toLowerCase();
+    for (const filePath of candidateFiles) {
+      const basename = filePath.split('/').pop()?.replace(/\.[^.]+$/, '')?.toLowerCase() ?? '';
+      if (basename.length >= 3 && contentBlock.includes(basename)) {
+        boosts.set(filePath, 0.25);
+      }
+    }
+    return boosts;
+  }
+
   /** Promote a memory to 'shared' scope so it becomes visible across all repos */
   shareMemory(id: string): boolean {
     const item = this.getById(id);
@@ -1448,16 +1633,23 @@ export class MemoryEngine {
   }
 
   /** Compact vault by merging individual item files into a single snapshot */
-  compactVault(): { itemsMerged: number; snapshotPath: string } | null {
+  compactVault(items: MemoryItem[] = this.listVaultLiveItems()): { itemsMerged: number; snapshotPath: string } | null {
     if (!fs.existsSync(this.vaultItemsDir)) return null;
-    const files = fs.readdirSync(this.vaultItemsDir).filter(f => f.endsWith('.json'));
-    if (files.length <= 10) return null;
-    const consolidated: any[] = [];
-    for (const file of files) {
+    if (items.length <= this.config.vaultCompactionThreshold) return null;
+    const consolidated = items.map((item) => this.buildVaultItemPayload(item));
+    for (const snapshot of this.listVaultSnapshotPaths()) {
       try {
-        consolidated.push(JSON.parse(fs.readFileSync(path.join(this.vaultItemsDir, file), 'utf8')));
+        fs.unlinkSync(snapshot);
+      } catch {
+        // Ignore stale snapshot cleanup failures.
+      }
+    }
+    for (const file of fs.readdirSync(this.vaultItemsDir).filter((entry) => entry.endsWith('.json'))) {
+      try {
         fs.unlinkSync(path.join(this.vaultItemsDir, file));
-      } catch { /* skip corrupted files */ }
+      } catch {
+        // Ignore stale item cleanup failures.
+      }
     }
     const snapshotPath = path.join(this.vaultDir, `vault-snapshot-${Date.now()}.json`);
     fs.writeFileSync(snapshotPath, JSON.stringify(consolidated, null, 2));
@@ -1759,23 +1951,27 @@ export class MemoryEngine {
     this.markVaultDirty(item.id);
   }
 
-  /** Periodic cooling cycle: increases entropy and decays priority */
+  /** Periodic cooling cycle: increases entropy and decays priority with tier-specific rates */
   coolDown(): void {
-    const { decayRate, priorityRetention } = this.config;
-    
-    this.db.prepare(`
-      UPDATE memories
-      SET entropy = MAX(0.0, MIN(1.0, entropy + ?)),
-          priority = priority * ?
-      WHERE tier != 'cortex'
-    `).run(decayRate, priorityRetention);
+    const { priorityRetention } = this.config;
+    // Tier-specific decay: prefrontal decays fast, hippocampus moderate, cortex very slow
+    const tierDecay = { prefrontal: 0.15, hippocampus: 0.05, cortex: 0.01 };
 
-    // Apply access-frequency retention: frequently accessed memories decay slower
-    this.db.prepare(`
-      UPDATE memories
-      SET entropy = MAX(0.0, MIN(1.0, entropy - (? / (1.0 + CAST(access_count AS REAL) * 0.1))))
-      WHERE tier != 'cortex' AND access_count > 0
-    `).run(decayRate);
+    for (const [tier, rate] of Object.entries(tierDecay)) {
+      this.db.prepare(`
+        UPDATE memories
+        SET entropy = MAX(0.0, MIN(1.0, entropy + ?)),
+            priority = priority * ?
+        WHERE tier = ?
+      `).run(rate, tier === 'cortex' ? 1.0 : priorityRetention, tier);
+
+      // Apply access-frequency retention: frequently accessed memories decay slower
+      this.db.prepare(`
+        UPDATE memories
+        SET entropy = MAX(0.0, MIN(1.0, entropy - (? / (1.0 + CAST(access_count AS REAL) * 0.1))))
+        WHERE tier = ? AND access_count > 0
+      `).run(rate, tier);
+    }
 
     // Force flush high entropy items (this will promote/demote based on priority)
     this.consolidate();
@@ -1785,6 +1981,7 @@ export class MemoryEngine {
   /** Maintenance cycle: runs coolDown() then expires memories where entropy > threshold AND accessCount < 2 AND age > 7 days */
   maintenanceCycle(): void {
     this.coolDown();
+    this.expireMemories();
     this.backgroundLinkMaintenance();
     
     const { flushEntropyThreshold } = this.config;
@@ -1798,8 +1995,10 @@ export class MemoryEngine {
         AND access_count < 2
         AND timestamp < ?
     `).run(flushEntropyThreshold, sevenDaysAgo);
-    
-    this.syncVault(true);
+
+    const purgedCount = this.purgeExpiredMemories();
+    this.flushVaultSync();
+    this.optimizeDatabase(purgedCount);
   }
 
   backgroundLinkMaintenance(): void {
@@ -2032,7 +2231,7 @@ export class MemoryEngine {
     this.vaultDirty.clear();
     const items = ids
       .map((id) => this.getById(id))
-      .filter((item): item is MemoryItem => Boolean(item));
+      .filter((item): item is MemoryItem => Boolean(item) && item.state !== 'expired');
     const currentIds = new Set(items.map((item) => item.id));
 
     for (const item of items) {
@@ -2056,21 +2255,36 @@ export class MemoryEngine {
 
   private syncVaultFull(): void {
     this.expireMemories();
-    const items = this.getAllItems();
-    const seen = new Set<string>();
+    const items = this.listVaultLiveItems();
     const memoryNotesDir = path.join(this.vaultNotesDir, 'memories');
     const noteSeen = new Set<string>();
+    const shouldCompact = items.length > this.config.vaultCompactionThreshold;
     for (const item of items) {
-      seen.add(item.id);
-      this.writeVaultItem(item);
+      if (!shouldCompact) {
+        this.writeVaultItem(item);
+      } else {
+        this.writeVaultNote(item);
+      }
       const notePath = path.join(memoryNotesDir, `${item.id}.md`);
       noteSeen.add(notePath);
     }
-    for (const entry of fs.readdirSync(this.vaultItemsDir)) {
-      if (!entry.endsWith('.json')) continue;
-      const memoryId = entry.replace(/\.json$/, '');
-      if (!seen.has(memoryId)) {
-        fs.unlinkSync(path.join(this.vaultItemsDir, entry));
+    if (shouldCompact) {
+      this.compactVault(items);
+    } else {
+      for (const snapshot of this.listVaultSnapshotPaths()) {
+        try {
+          fs.unlinkSync(snapshot);
+        } catch {
+          // Ignore stale snapshot cleanup failures.
+        }
+      }
+      const seen = new Set<string>(items.map((item) => item.id));
+      for (const entry of fs.readdirSync(this.vaultItemsDir)) {
+        if (!entry.endsWith('.json')) continue;
+        const memoryId = entry.replace(/\.json$/, '');
+        if (!seen.has(memoryId)) {
+          fs.unlinkSync(path.join(this.vaultItemsDir, entry));
+        }
       }
     }
     for (const entry of fs.readdirSync(memoryNotesDir)) {
@@ -2093,16 +2307,13 @@ export class MemoryEngine {
   private writeVaultItem(item: MemoryItem): void {
     fs.writeFileSync(
       path.join(this.vaultItemsDir, `${item.id}.json`),
-      JSON.stringify({
-        ...item,
-        excerpt: item.content.length > 140 ? `${item.content.slice(0, 137)}...` : item.content,
-        relevanceScore: this.relevanceScore(item),
-        importanceScore: this.importanceScore(item),
-        freshnessScore: this.freshnessScore(item),
-        trustScore: item.trust,
-      }, null, 2),
+      JSON.stringify(this.buildVaultItemPayload(item), null, 2),
       'utf8',
     );
+    this.writeVaultNote(item);
+  }
+
+  private writeVaultNote(item: MemoryItem): void {
     fs.writeFileSync(
       path.join(this.vaultNotesDir, 'memories', `${item.id}.md`),
       this.renderMemoryNote(item),
@@ -2287,37 +2498,24 @@ export class MemoryEngine {
     parentId?: string;
     priority: number;
     sessionId?: string;
-  }): { action: MemoryReconciliationAction; reason: string; relatedIds: string[] } {
-    const related = this.listReconciliationCandidates()
-      .filter((item) => item.state !== 'expired')
-      .map((item) => ({
-        item,
-        overlap: this.wordOverlap(
-          candidate.content.toLowerCase().split(/\W+/).filter(Boolean),
-          item.content.toLowerCase().split(/\W+/).filter(Boolean),
-        ),
-      }))
-      .filter((entry) => entry.overlap >= 0.42)
-      .sort((left, right) => right.overlap - left.overlap)
-      .slice(0, 4);
-    const relatedIds = related.map((entry) => entry.item.id);
-    const contradiction = related.some((entry) => /\b(not|never|no longer|cannot|can't)\b/i.test(candidate.content) !== /\b(not|never|no longer|cannot|can't)\b/i.test(entry.item.content));
-    if (/delete|remove|obsolete|deprecated|no longer needed|superseded/i.test(candidate.content) && relatedIds.length > 0) {
-      return { action: 'DELETE', reason: 'Candidate indicates the prior memory should expire.', relatedIds };
-    }
-    if (contradiction && relatedIds.length > 0) {
-      return { action: 'UPDATE', reason: 'Candidate contradicts an existing memory and should supersede it.', relatedIds };
-    }
-    if (related.some((entry) => entry.overlap >= 0.9)) {
-      return { action: 'NONE', reason: 'Candidate duplicates an existing memory.', relatedIds };
-    }
-    if (related.some((entry) => entry.overlap >= 0.68)) {
-      return { action: 'MERGE', reason: 'Candidate overlaps strongly with an existing memory and should be linked.', relatedIds };
-    }
-    if (candidate.confidence < 0.52 || options.priority < 0.45) {
-      return { action: 'QUARANTINE', reason: 'Candidate has low confidence and should remain quarantined until validated.', relatedIds };
-    }
-    return { action: 'ADD', reason: 'Candidate is net new and worth storing.', relatedIds };
+  }): {
+    action: MemoryReconciliationAction;
+    reason: string;
+    relatedIds: string[];
+    overlapScore?: number;
+    resolutionReason: string;
+  } {
+    const related = this.listReconciliationCandidates().map((item) => ({
+      id: item.id,
+      content: item.content,
+      state: item.state,
+    })) as MemoryReconciliationCandidateSnapshot[];
+    return reconcileCandidateFact(candidate, related, {
+      priority: options.priority,
+      contradictionThreshold: this.config.reconciliationContradictionThreshold,
+      mergeThreshold: this.config.reconciliationMergeThreshold,
+      duplicateThreshold: this.config.reconciliationDuplicateThreshold,
+    });
   }
 
   private expireMemories(): void {
@@ -2409,6 +2607,7 @@ export class MemoryEngine {
     const rows = this.db.prepare(`
       SELECT id, tier, scope, state, source, priority, tags, trust
       FROM memories
+      WHERE state != 'expired'
       ORDER BY priority DESC, timestamp DESC
     `).all() as Array<{
       id: string;
@@ -2463,6 +2662,16 @@ export class MemoryEngine {
   private getAllItems(): MemoryItem[] {
     const rows = this.db.prepare('SELECT * FROM memories').all() as any[];
     return rows.map(row => this.rowToItem(row));
+  }
+
+  private listVaultLiveItems(): MemoryItem[] {
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM memories
+      WHERE state != 'expired'
+      ORDER BY priority DESC, timestamp DESC
+    `).all() as any[];
+    return rows.map((row) => this.rowToItem(row));
   }
 
   private toSnapshot(item: MemoryItem): MemorySnapshot {
@@ -2907,6 +3116,18 @@ export class MemoryEngine {
     });
   }
 
+  private deriveExportOrigin(items: MemoryExportItem[]): MemoryExportOrigin {
+    const first = items[0];
+    return {
+      source: 'nexus-prime',
+      tool: 'memory-engine',
+      repoId: first?.provenance?.repoId ?? resolveCurrentRepoId(),
+      workspaceId: first?.provenance?.workspaceId,
+      projectId: first?.provenance?.projectId,
+      sessionId: this.sessionId,
+    };
+  }
+
   exportBundle(options: {
     limit?: number;
     scope?: MemoryItem['scope'];
@@ -2922,6 +3143,10 @@ export class MemoryEngine {
       .map((item) => ({
         id: item.id,
         content: item.content,
+        contentFingerprint: createMemoryContentFingerprint(item.content, {
+          scope: item.scope,
+          provenance: item.provenance,
+        }),
         priority: item.priority,
         timestamp: item.timestamp,
         tags: item.tags,
@@ -2941,10 +3166,13 @@ export class MemoryEngine {
         supersededBy: item.supersededBy,
         provenance: item.provenance,
       }));
+    const origin = this.deriveExportOrigin(items);
     return {
-      version: 1,
+      version: 2,
+      schemaVersion: 'nexus-memory-bundle.v2',
       exportedAt: Date.now(),
       sessionId: this.sessionId,
+      origin,
       stats: this.getStats(),
       health: this.getHealthSummary(),
       items,
@@ -2963,30 +3191,118 @@ export class MemoryEngine {
     return { path: filePath, bundle };
   }
 
-  importBundle(input: { path?: string; bundle?: MemoryExportBundle }): {
-    imported: number;
-    duplicates: number;
-    quarantined: number;
-    importedIds: string[];
-  } {
+  importBundle(input: { path?: string; bundle?: MemoryExportBundle }): MemoryImportResult {
     const bundle = input.bundle ?? (input.path
       ? JSON.parse(fs.readFileSync(path.resolve(input.path), 'utf8')) as MemoryExportBundle
       : undefined);
     if (!bundle) {
-      return { imported: 0, duplicates: 0, quarantined: 0, importedIds: [] };
+      return { imported: 0, duplicates: 0, added: 0, updated: 0, skipped: 0, quarantined: 0, importedIds: [] };
     }
-    let imported = 0;
+    let added = 0;
+    let updated = 0;
     let duplicates = 0;
+    let skipped = 0;
     let quarantined = 0;
     const importedIds: string[] = [];
+    const existingItems = this.getAllItems().filter((item) => item.state !== 'expired');
+    const existingByFingerprint = new Map<string, MemoryItem>();
+    for (const item of existingItems) {
+      const fingerprint = createMemoryContentFingerprint(item.content, {
+        scope: item.scope,
+        provenance: item.provenance,
+      });
+      const current = existingByFingerprint.get(fingerprint);
+      if (!current || current.timestamp < item.timestamp) {
+        existingByFingerprint.set(fingerprint, item);
+      }
+    }
     for (const item of bundle.items) {
+      const fingerprint = item.contentFingerprint ?? createMemoryContentFingerprint(item.content, {
+        scope: item.scope,
+        provenance: item.provenance,
+      });
       const check = this.checkContent(item.content, {
         tags: item.tags,
         priority: item.priority,
         parentId: item.parentId,
       });
+      const existing = existingByFingerprint.get(fingerprint);
+      if (existing) {
+        const mergedTags = dedupeStrings([
+          ...existing.tags,
+          ...item.tags,
+          '#imported',
+          item.scope === 'shared' ? '#shared' : '',
+          item.scope === 'project' ? '#project' : '',
+          item.scope === 'user' ? '#user' : '',
+          item.scope === 'promoted' ? '#promoted' : '',
+          (item.state === 'quarantined' || check.action === 'quarantine' || check.action === 'block') ? '#quarantine' : '',
+        ].filter(Boolean));
+        const nextState = item.state === 'quarantined' || check.action === 'quarantine' || check.action === 'block'
+          ? 'quarantined'
+          : item.state;
+        const shouldUpdate = (
+          existing.timestamp < item.timestamp
+          || existing.priority < item.priority
+          || existing.trust < item.trust
+          || mergedTags.length !== existing.tags.length
+          || nextState !== existing.state
+        );
+        if (!shouldUpdate) {
+          duplicates += 1;
+          skipped += 1;
+          continue;
+        }
+        const mergedProvenance = createMemoryProvenance({
+          ...existing.provenance,
+          ...item.provenance,
+          source: 'imported',
+          tags: dedupeStrings([...(existing.provenance.tags ?? []), ...(item.provenance?.tags ?? []), ...mergedTags]),
+          references: dedupeStrings([...(existing.provenance.references ?? []), ...(item.provenance?.references ?? [])]),
+          summary: item.provenance?.summary ?? existing.provenance.summary,
+          rawContext: item.provenance?.rawContext ?? existing.provenance.rawContext,
+        });
+        this.withSqliteRetry('importBundle.update-existing', () => {
+          this.db.prepare(`
+            UPDATE memories
+            SET priority = ?, timestamp = ?, tags = ?, scope = ?, state = ?, source = ?, access_count = ?,
+                entropy = ?, mass = ?, trust = ?, provenance_json = ?, expires_at = ?, supersedes = ?, superseded_by = ?
+            WHERE id = ?
+          `).run(
+            Math.max(existing.priority, item.priority),
+            Math.max(existing.timestamp, item.timestamp),
+            JSON.stringify(mergedTags),
+            item.scope,
+            nextState,
+            'imported',
+            Math.max(existing.accessCount, item.accessCount),
+            Math.min(existing.entropy, item.entropy),
+            Math.max(existing.mass, item.mass),
+            Math.max(existing.trust, item.trust),
+            JSON.stringify(mergedProvenance),
+            item.expiresAt ?? existing.expiresAt ?? null,
+            item.supersedes ?? existing.supersedes ?? null,
+            item.supersededBy ?? existing.supersededBy ?? null,
+            existing.id,
+          );
+        });
+        updated += 1;
+        if (mergedTags.includes('#quarantine')) quarantined += 1;
+        importedIds.push(existing.id);
+        existingByFingerprint.set(fingerprint, {
+          ...existing,
+          priority: Math.max(existing.priority, item.priority),
+          timestamp: Math.max(existing.timestamp, item.timestamp),
+          tags: mergedTags,
+          state: nextState,
+          trust: Math.max(existing.trust, item.trust),
+          provenance: mergedProvenance,
+        });
+        continue;
+      }
       if (check.duplicateCluster.length > 0) {
         duplicates += 1;
+        skipped += 1;
         continue;
       }
       const tags = dedupeStrings([
@@ -3012,12 +3328,24 @@ export class MemoryEngine {
         supersededBy: item.supersededBy,
         provenance: item.provenance,
       });
-      imported += 1;
+      added += 1;
       if (tags.includes('#quarantine')) quarantined += 1;
       importedIds.push(id);
+      const storedItem = this.getAllItems().find((entry) => entry.id === id);
+      if (storedItem) {
+        existingByFingerprint.set(fingerprint, storedItem);
+      }
     }
     this.syncVault(true);
-    return { imported, duplicates, quarantined, importedIds };
+    return {
+      imported: added + updated,
+      duplicates,
+      added,
+      updated,
+      skipped,
+      quarantined,
+      importedIds,
+    };
   }
 
   /**
@@ -3038,9 +3366,89 @@ export class MemoryEngine {
 
   close(): void {
     this.flush();
+    this.expireMemories();
+    const purgedCount = this.purgeExpiredMemories();
     this.flushVaultSync();
+    this.optimizeDatabase(purgedCount, true);
+    this.ngramIndex?.close();
     this.db.close();
     this.graphMirror?.close();
+  }
+
+  private listVaultSnapshotPaths(): string[] {
+    if (!fs.existsSync(this.vaultDir)) return [];
+    return fs.readdirSync(this.vaultDir)
+      .filter((entry) => /^vault-snapshot-\d+\.json$/.test(entry))
+      .map((entry) => path.join(this.vaultDir, entry));
+  }
+
+  private buildVaultItemPayload(item: MemoryItem): Record<string, unknown> {
+    return {
+      ...item,
+      excerpt: item.content.length > 140 ? `${item.content.slice(0, 137)}...` : item.content,
+      relevanceScore: this.relevanceScore(item),
+      importanceScore: this.importanceScore(item),
+      freshnessScore: this.freshnessScore(item),
+      trustScore: item.trust,
+    };
+  }
+
+  private purgeExpiredMemories(): number {
+    let deleted = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const ids = this.db.prepare(`
+        SELECT id
+        FROM memories
+        WHERE state = 'expired'
+        ORDER BY timestamp ASC
+        LIMIT ?
+      `).all(this.config.expiredPurgeBatchSize) as Array<{ id: string }>;
+      if (ids.length === 0) {
+        hasMore = false;
+        continue;
+      }
+      const deleteStmt = this.db.prepare('DELETE FROM memories WHERE id = ?');
+      const deleteTxn = this.db.transaction((targetIds: string[]) => {
+        for (const id of targetIds) {
+          deleteStmt.run(id);
+        }
+      });
+      const targetIds = ids.map((row) => row.id);
+      deleteTxn(targetIds);
+      for (const id of targetIds) {
+        try {
+          this.ngramIndex?.removeDocument(id);
+        } catch {
+          // Best effort index cleanup.
+        }
+        this.removeVaultItem(id);
+      }
+      deleted += targetIds.length;
+      if (targetIds.length < this.config.expiredPurgeBatchSize) {
+        hasMore = false;
+      }
+    }
+    return deleted;
+  }
+
+  private optimizeDatabase(purgedCount: number = 0, force: boolean = false): void {
+    try {
+      this.db.exec('PRAGMA optimize');
+    } catch {
+      // Best effort optimize.
+    }
+    const now = Date.now();
+    if (!force && (purgedCount <= 0 || now - this.lastDatabaseVacuumAt < this.config.vacuumMinIntervalMs)) {
+      return;
+    }
+    try {
+      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch {
+      // Best effort checkpoint before vacuum.
+    }
+    this.db.exec('VACUUM');
+    this.lastDatabaseVacuumAt = now;
   }
 
   private mirrorIntoGraph(item: Pick<MemoryItem, 'content' | 'priority' | 'tags'>): void {

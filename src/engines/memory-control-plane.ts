@@ -14,6 +14,8 @@ export interface MemoryCandidateFact {
     ephemeral: boolean;
 }
 
+export type MemoryExtractionMode = 'llm' | 'heuristic';
+
 export type MemoryContainerLane = 'profile' | 'workspace' | 'shared' | 'inbox';
 
 export interface MemoryProvenance {
@@ -30,6 +32,11 @@ export interface MemoryProvenance {
     references: string[];
     tags: string[];
     summary: string;
+    rawContext?: {
+        preview: string;
+        fingerprint: string;
+        extractionMode?: MemoryExtractionMode;
+    };
 }
 
 export type MemoryReconciliationAction = 'ADD' | 'UPDATE' | 'MERGE' | 'DELETE' | 'NONE' | 'QUARANTINE';
@@ -41,6 +48,9 @@ export interface MemoryReconciliationEntry {
     relatedIds: string[];
     storedId?: string;
     expiresAt?: number;
+    overlapScore?: number;
+    extractorMode?: MemoryExtractionMode;
+    resolutionReason?: string;
 }
 
 export interface MemoryReconciliationSummary {
@@ -56,6 +66,20 @@ export interface MemoryMaintenanceResult {
     quarantined: number;
     scrapMarked: number;
     retained: number;
+}
+
+export interface MemoryReconciliationCandidateSnapshot {
+    id: string;
+    content: string;
+    state?: 'active' | 'quarantined' | 'scrap' | 'expired';
+}
+
+export interface MemoryReconciliationDecision {
+    action: MemoryReconciliationAction;
+    reason: string;
+    relatedIds: string[];
+    overlapScore?: number;
+    resolutionReason: string;
 }
 
 const STOP_WORDS = new Set([
@@ -123,6 +147,111 @@ export function createMemoryProvenance(input: Partial<MemoryProvenance> & { sour
         references: dedupeStrings(input.references ?? []),
         tags: dedupeStrings(input.tags ?? []),
         summary: input.summary ?? `${input.source} memory event`,
+        rawContext: input.rawContext?.preview
+            ? {
+                preview: String(input.rawContext.preview).slice(0, 240),
+                fingerprint: String(input.rawContext.fingerprint ?? ''),
+                extractionMode: input.rawContext.extractionMode,
+            }
+            : undefined,
+    };
+}
+
+export function reconcileCandidateFact(
+    candidate: MemoryCandidateFact,
+    items: MemoryReconciliationCandidateSnapshot[],
+    options: {
+        priority: number;
+        contradictionThreshold?: number;
+        mergeThreshold?: number;
+        duplicateThreshold?: number;
+    },
+): MemoryReconciliationDecision {
+    const contradictionThreshold = options.contradictionThreshold ?? 0.42;
+    const mergeThreshold = options.mergeThreshold ?? 0.68;
+    const duplicateThreshold = options.duplicateThreshold ?? 0.9;
+    const related = items
+        .filter((item) => item.state !== 'expired')
+        .map((item) => ({
+            item,
+            overlap: wordOverlap(
+                candidate.content.toLowerCase().split(/\W+/).filter(Boolean),
+                item.content.toLowerCase().split(/\W+/).filter(Boolean),
+            ),
+        }))
+        .filter((entry) => entry.overlap >= contradictionThreshold)
+        .sort((left, right) => right.overlap - left.overlap)
+        .slice(0, 4);
+
+    const relatedIds = related.map((entry) => entry.item.id);
+    const bestOverlap = related[0]?.overlap;
+    const contradiction = related.find((entry) => hasNegation(candidate.content) !== hasNegation(entry.item.content));
+
+    if (containsDeleteSignal(candidate.content) && relatedIds.length > 0) {
+        return {
+            action: 'DELETE',
+            reason: 'Candidate indicates the prior memory should expire.',
+            relatedIds,
+            overlapScore: bestOverlap,
+            resolutionReason: 'delete-signal-expire-prior',
+        };
+    }
+
+    if (contradiction) {
+        if (contradiction.overlap >= mergeThreshold) {
+            return {
+                action: 'UPDATE',
+                reason: 'Candidate contradicts an existing memory and should supersede it.',
+                relatedIds: [contradiction.item.id],
+                overlapScore: contradiction.overlap,
+                resolutionReason: 'hard-contradiction-supersede',
+            };
+        }
+        return {
+            action: 'QUARANTINE',
+            reason: 'Candidate conflicts with an existing memory but lacks enough overlap to safely supersede it.',
+            relatedIds: [contradiction.item.id],
+            overlapScore: contradiction.overlap,
+            resolutionReason: 'ambiguous-contradiction-quarantine',
+        };
+    }
+
+    if (related.some((entry) => entry.overlap >= duplicateThreshold)) {
+        return {
+            action: 'NONE',
+            reason: 'Candidate duplicates an existing memory.',
+            relatedIds,
+            overlapScore: bestOverlap,
+            resolutionReason: 'duplicate-noop',
+        };
+    }
+
+    if (related.some((entry) => entry.overlap >= mergeThreshold)) {
+        return {
+            action: 'MERGE',
+            reason: 'Candidate overlaps strongly with an existing memory and should be linked.',
+            relatedIds,
+            overlapScore: bestOverlap,
+            resolutionReason: 'strong-overlap-merge',
+        };
+    }
+
+    if (candidate.confidence < 0.52 || options.priority < 0.45) {
+        return {
+            action: 'QUARANTINE',
+            reason: 'Candidate has low confidence and should remain quarantined until validated.',
+            relatedIds,
+            overlapScore: bestOverlap,
+            resolutionReason: 'low-confidence-quarantine',
+        };
+    }
+
+    return {
+        action: 'ADD',
+        reason: 'Candidate is net new and worth storing.',
+        relatedIds,
+        overlapScore: bestOverlap,
+        resolutionReason: 'net-new-add',
     };
 }
 
@@ -218,6 +347,23 @@ function isLowSignalSegment(segment: string): boolean {
 
 function isTelemetryNoise(segment: string): boolean {
     return /(orchestrated run failed|called nexus orchestrate|run id:|summary:|crew:|specialists:|worker\(s\)|review gate|token optimization applied|token budget|selected skills|selected workflows|using planner|execution ledger|prompt packet|source-aware budget|fetched .* endpoint)/i.test(segment);
+}
+
+function containsDeleteSignal(segment: string): boolean {
+    return /delete|remove|obsolete|deprecated|no longer needed|superseded/i.test(segment);
+}
+
+function hasNegation(segment: string): boolean {
+    return /\b(not|never|no longer|cannot|can't)\b/i.test(segment);
+}
+
+function wordOverlap(a: string[], b: string[]): number {
+    const setA = new Set(a.filter((word) => word.length > 2));
+    const setB = new Set(b.filter((word) => word.length > 2));
+    if (setA.size === 0 || setB.size === 0) return 0;
+    const intersection = [...setA].filter((word) => setB.has(word));
+    const union = new Set([...setA, ...setB]);
+    return union.size === 0 ? 0 : intersection.length / union.size;
 }
 
 function dedupeCandidates(values: MemoryCandidateFact[]): MemoryCandidateFact[] {

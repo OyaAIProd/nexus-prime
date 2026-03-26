@@ -273,45 +273,50 @@ export class WorkflowRuntime {
     }
 
     private loadLocalOverrides(): void {
-        const workflowDir = path.join(this.workspaceRoot, '.agent', 'workflows');
-        for (const entry of readMarkdownArtifacts(workflowDir)) {
-            const frontmatter = entry.parsed.frontmatter;
-            const lines = entry.parsed.body.split('\n');
-            const steps: WorkflowStep[] = lines
-                .map((line) => line.match(/^(\d+)\.\s+(.+)$/))
-                .filter(Boolean)
-                .map((match) => ({
-                    title: String(match?.[2] ?? '').trim(),
-                    command: extractCommand(String(match?.[2] ?? '')),
-                    checkpoint: 'before-mutate' as SkillCheckpoint,
-                    bindings: [],
-                }));
+        const workflowDirs = [
+            path.join(this.workspaceRoot, '.agent', 'workflows'),
+            path.join(this.workspaceRoot, '.agents', 'workflows'),
+        ];
+        for (const workflowDir of workflowDirs) {
+            for (const entry of readMarkdownArtifacts(workflowDir)) {
+                const frontmatter = entry.parsed.frontmatter;
+                const lines = entry.parsed.body.split('\n');
+                const steps: WorkflowStep[] = lines
+                    .map((line) => line.match(/^(\d+)\.\s+(.+)$/))
+                    .filter(Boolean)
+                    .map((match) => ({
+                        title: String(match?.[2] ?? '').trim(),
+                        command: extractCommand(String(match?.[2] ?? '')),
+                        checkpoint: 'before-mutate' as SkillCheckpoint,
+                        bindings: [],
+                    }));
 
-            const name = String(frontmatter.name ?? path.basename(entry.path, '.md'));
-            this.stage({
-                workflowId: `workflow_local_${slugify(name)}`,
-                version: 1,
-                name,
-                domain: String(frontmatter.domain ?? detectDomains(name)[0] ?? 'workflows'),
-                description: String(frontmatter.description ?? ''),
-                triggerConditions: toStringArray(frontmatter.triggers),
-                expectedOutputs: toStringArray(frontmatter.outputs),
-                guardrails: toStringArray(frontmatter.guardrails),
-                verifierHooks: toStringArray(frontmatter.verify),
-                roleAffinity: toStringArray(frontmatter.roles),
-                steps,
-                scope: 'base',
-                provenance: `local:${entry.path}`,
-                validationStatus: 'validated',
-                rolloutStatus: 'promoted',
-                effectiveness: {
-                    successes: 0,
-                    failures: 0,
-                    retriesAvoided: 0,
-                    verificationPasses: 0,
-                },
-                deploymentPoints: [],
-            });
+                const name = String(frontmatter.name ?? path.basename(entry.path, '.md'));
+                this.stage({
+                    workflowId: `workflow_local_${slugify(name)}`,
+                    version: 1,
+                    name,
+                    domain: String(frontmatter.domain ?? detectDomains(name)[0] ?? 'workflows'),
+                    description: String(frontmatter.description ?? ''),
+                    triggerConditions: toStringArray(frontmatter.triggers),
+                    expectedOutputs: toStringArray(frontmatter.outputs),
+                    guardrails: toStringArray(frontmatter.guardrails),
+                    verifierHooks: toStringArray(frontmatter.verify),
+                    roleAffinity: toStringArray(frontmatter.roles),
+                    steps,
+                    scope: 'base',
+                    provenance: `local:${entry.path}`,
+                    validationStatus: 'validated',
+                    rolloutStatus: 'promoted',
+                    effectiveness: {
+                        successes: 0,
+                        failures: 0,
+                        retriesAvoided: 0,
+                        verificationPasses: 0,
+                    },
+                    deploymentPoints: [],
+                });
+            }
         }
     }
 

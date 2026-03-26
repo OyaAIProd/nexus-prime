@@ -14,6 +14,7 @@ export type NexusEventType =
     | 'memory.recall'
     | 'memory.flushed'
     | 'memory.health.tick'
+    | 'memory.sqlite.retry'
     | 'pod.signal'
     | 'tokens.optimized'
     | 'phantom.worker.start'
@@ -124,6 +125,7 @@ export interface NexusEventPayloads {
     'memory.recall': { query: string; count: number };
     'memory.flushed': { count: number; reason: string; ts: number };
     'memory.health.tick': { counts: Array<{ state: string; c: number }>; ts: number };
+    'memory.sqlite.retry': { operation: string; attempt: number; maxAttempts: number; delayMs: number; message: string };
     'pod.signal': { workerId: string; type: string; content: string; confidence?: number; tags?: string[]; runId?: string | null; workItemId?: string | null; correlationId?: string | null };
     'tokens.optimized': {
         savings: number;
@@ -259,6 +261,7 @@ function getEventsFile(): string {
 }
 const MAX_EVENT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_EVENT_ARCHIVES = 3;
+const EVENT_ARCHIVE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 class EventBusEngine {
     private emitter = new EventEmitter();
@@ -276,6 +279,7 @@ class EventBusEngine {
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
+        this.pruneArchivedEvents();
         this.rehydrateHistoryFromDisk();
     }
 
@@ -449,6 +453,7 @@ class EventBusEngine {
 
     private rotateEventsFileIfNeeded(): void {
         try {
+            this.pruneArchivedEvents();
             if (!fs.existsSync(getEventsFile())) return;
             const size = fs.statSync(getEventsFile()).size;
             if (size < MAX_EVENT_FILE_BYTES) return;
@@ -465,8 +470,25 @@ class EventBusEngine {
                 }
             }
             fs.renameSync(getEventsFile(), `${getEventsFile()}.1`);
+            this.pruneArchivedEvents();
         } catch {
             // Ignore rotation failures and continue writing to the active event file.
+        }
+    }
+
+    private pruneArchivedEvents(): void {
+        const cutoff = Date.now() - EVENT_ARCHIVE_TTL_MS;
+        for (let index = 1; index <= MAX_EVENT_ARCHIVES; index += 1) {
+            const archive = `${getEventsFile()}.${index}`;
+            if (!fs.existsSync(archive)) continue;
+            try {
+                const stats = fs.statSync(archive);
+                if (stats.mtimeMs < cutoff) {
+                    fs.unlinkSync(archive);
+                }
+            } catch {
+                // Ignore stale archive cleanup failures.
+            }
         }
     }
 }

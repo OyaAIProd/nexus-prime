@@ -12,6 +12,7 @@ import { TokenSupremacyEngine, type FileRef, type ReadingPlan } from './token-su
 
 export type KnowledgeSourceClass = 'repo' | 'memory' | 'rag' | 'patterns' | 'runtime';
 export type ModelTier = 'low' | 'high';
+const MAX_RUNTIME_SESSION_SNAPSHOTS = 20;
 
 export interface SourceMixDecision {
     dominantSource: KnowledgeSourceClass;
@@ -116,12 +117,21 @@ export interface KnowledgeFabricSnapshot {
     summary: string;
 }
 
+interface MemoryMatchWithQuality {
+    content: string;
+    confidence: number;
+    entropy: number;
+    trust: number;
+}
+
 interface ComposeInput {
     runtimeId: string;
     sessionId: string;
     task: string;
     candidateFiles: string[];
     memoryMatches: string[];
+    memoryMatchesWithQuality?: MemoryMatchWithQuality[];
+    fileBoosts?: Map<string, number>;
     runtimeSnapshot?: RuntimeRegistrySnapshot;
     tokenBudget?: number;
     intent?: {
@@ -162,7 +172,7 @@ export class KnowledgeFabricEngine {
     compose(input: ComposeInput): KnowledgeFabricBundle {
         const runtimeSnapshot = input.runtimeSnapshot ?? this.runtimeRegistry.read(input.runtimeId);
         const fileRefs = input.candidateFiles.map((entry) => toFileRef(entry)).filter((entry): entry is FileRef => Boolean(entry));
-        const readingPlan = fileRefs.length > 0 ? this.tokenEngine.plan(input.task, fileRefs) : undefined;
+        const readingPlan = fileRefs.length > 0 ? this.tokenEngine.plan(input.task, fileRefs, input.fileBoosts) : undefined;
         const selectedFiles = readingPlan
             ? readingPlan.files.filter((file) => file.action !== 'skip').map((file) => file.file.path)
             : input.candidateFiles;
@@ -177,9 +187,19 @@ export class KnowledgeFabricEngine {
         });
         const selectedPatterns = this.patternRegistry.search(input.task, 5);
         const shortlistPatterns = this.patternRegistry.list().slice(0, 6);
+        // Compute memory quality factor from quality metadata if available
+        let memoryQuality = 1.0;
+        if (input.memoryMatchesWithQuality && input.memoryMatchesWithQuality.length > 0) {
+            const matches = input.memoryMatchesWithQuality;
+            const avgConfidence = matches.reduce((s, m) => s + m.confidence, 0) / matches.length;
+            const avgTrust = matches.reduce((s, m) => s + m.trust, 0) / matches.length;
+            const avgEntropy = matches.reduce((s, m) => s + m.entropy, 0) / matches.length;
+            memoryQuality = Math.max(0.2, avgConfidence * avgTrust * (1 - avgEntropy * 0.5));
+        }
         const sourceMix = this.buildSourceMix({
             repoFiles: input.candidateFiles.length,
             memoryMatches: input.memoryMatches.length,
+            memoryQuality,
             ragHits: ragHits.length,
             patternHits: selectedPatterns.length,
             runtimeSnapshot,
@@ -391,18 +411,35 @@ export class KnowledgeFabricEngine {
         };
         fs.writeFileSync(path.join(runtimeDir, 'latest.json'), JSON.stringify(snapshot, null, 2), 'utf8');
         fs.writeFileSync(path.join(runtimeDir, `${bundle.sessionId}.json`), JSON.stringify(snapshot, null, 2), 'utf8');
+        this.pruneRuntimeSnapshots(runtimeDir);
+    }
+
+    private pruneRuntimeSnapshots(runtimeDir: string): void {
+        const sessionSnapshots = fs.readdirSync(runtimeDir)
+            .filter((entry) => entry.endsWith('.json') && entry !== 'latest.json')
+            .map((entry) => ({
+                entry,
+                mtimeMs: fs.statSync(path.join(runtimeDir, entry)).mtimeMs,
+            }))
+            .sort((a, b) => b.mtimeMs - a.mtimeMs);
+        for (const stale of sessionSnapshots.slice(MAX_RUNTIME_SESSION_SNAPSHOTS)) {
+            fs.unlinkSync(path.join(runtimeDir, stale.entry));
+        }
     }
 
     private buildSourceMix(input: {
         repoFiles: number;
         memoryMatches: number;
+        memoryQuality?: number;
         ragHits: number;
         patternHits: number;
         runtimeSnapshot?: RuntimeRegistrySnapshot;
     }): SourceMixDecision {
+        // Memory quality factor: scales memory weight by avg confidence × trust, penalizes high entropy
+        const mq = input.memoryQuality ?? 1.0;
         const rawWeights: Record<KnowledgeSourceClass, number> = {
             repo: input.repoFiles > 0 ? 4 + Math.min(input.repoFiles, 6) : 0,
-            memory: input.memoryMatches > 0 ? 3 + Math.min(input.memoryMatches, 4) : 0,
+            memory: input.memoryMatches > 0 ? (3 + Math.min(input.memoryMatches, 4)) * mq : 0,
             rag: input.ragHits > 0 ? 3 + Math.min(input.ragHits, 4) : 0,
             patterns: input.patternHits > 0 ? 2 + Math.min(input.patternHits, 3) : 0,
             runtime: input.runtimeSnapshot?.executionLedger ? 2 + Math.min((input.runtimeSnapshot.lastToolCalls ?? []).length, 3) : 0,

@@ -106,7 +106,11 @@ export class TokenSupremacyEngine {
     /**
      * Plan a token-efficient reading strategy for a given task + files.
      */
-    plan(task: string, files: FileRef[]): ReadingPlan {
+    /**
+     * Plan file reading with optional external file boosts (e.g. from graph memory or n-gram index).
+     * fileBoosts: Map<filePath, boostScore> — added to relevance score before thresholding.
+     */
+    plan(task: string, files: FileRef[], fileBoosts?: Map<string, number>): ReadingPlan {
         // Apply hypertuning if we have many files
         if (files.length > 10) {
             this.hypertune(task);
@@ -122,7 +126,9 @@ export class TokenSupremacyEngine {
         const outlineThreshold = files.length > 20 ? 0.45 : files.length < 5 ? 0.30 : 0.40;
 
         for (const file of files) {
-            const relevance = this.scoreRelevance(file.path, taskKeywords, taskKeywords);
+            const baseRelevance = this.scoreRelevance(file.path, taskKeywords, taskKeywords);
+            const boost = fileBoosts?.get(file.path) ?? 0;
+            const relevance = Math.min(1, baseRelevance + boost);
             const estFull = Math.ceil(file.sizeBytes / 4); // ~4 chars per token
             fullReadTokens += estFull;
 

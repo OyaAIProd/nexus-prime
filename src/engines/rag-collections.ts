@@ -5,6 +5,7 @@ import * as https from 'https';
 import { randomUUID } from 'crypto';
 import { createEmbedder, type Embedder } from './embedder.js';
 import { resolveNexusStateDir } from './runtime-registry.js';
+import { computeSemanticScore, type SemanticScoreBreakdown } from './semantic-ranking.js';
 
 export interface RagCollectionSource {
     sourceId: string;
@@ -78,6 +79,7 @@ export interface RagRetrievalHit {
     tokens: number;
     tags: string[];
     score: number;
+    scoreBreakdown?: SemanticScoreBreakdown;
 }
 
 const MAX_CHUNK_CHARS = 1200;
@@ -217,7 +219,6 @@ export class RagCollectionStore {
 
     retrieve(query: string, options: { runtimeId?: string; sessionId?: string; limit?: number; collectionIds?: string[] } = {}): RagRetrievalHit[] {
         const limit = Math.max(1, Math.min(20, options.limit ?? 6));
-        const keywords = extractKeywords(query);
         const queryVector = this.embedder.embedSync(query);
         const collections = options.collectionIds?.length
             ? options.collectionIds.map((collectionId) => this.getCollection(collectionId)).filter((collection): collection is RagCollection => Boolean(collection))
@@ -234,11 +235,19 @@ export class RagCollectionStore {
             .flatMap((collection) => collection.chunks.map((chunk) => {
                 const source = collection.sources.find((entry) => entry.sourceId === chunk.sourceId);
                 const normalizedEmbedding = this.ensureChunkEmbedding(chunk, source?.label ?? '');
-                const semanticScore = normalizedEmbedding.length === queryVector.length
-                    ? Math.max(0, this.embedder.cosineSimilarity(queryVector, normalizedEmbedding))
-                    : 0;
-                const lexicalScore = scoreText(chunk.text, keywords) + scoreText(source?.label ?? '', keywords);
-                const score = semanticScore * 10 + lexicalScore;
+                const scoreBreakdown = computeSemanticScore({
+                    query,
+                    queryVector,
+                    candidateText: `${source?.label ?? ''}\n${chunk.text}`,
+                    candidateVector: normalizedEmbedding,
+                    lexicalTexts: [chunk.text, source?.label ?? ''],
+                    embedder: this.embedder,
+                    weights: {
+                        semantic: 0.84,
+                        lexical: 0.16,
+                        path: 0,
+                    },
+                });
                 return {
                     collectionId: collection.collectionId,
                     collectionName: collection.name,
@@ -248,10 +257,11 @@ export class RagCollectionStore {
                     text: chunk.text,
                     tokens: chunk.tokens,
                     tags: chunk.tags,
-                    score,
+                    score: scoreBreakdown.final,
+                    scoreBreakdown,
                 } satisfies RagRetrievalHit;
             }))
-            .filter((hit) => hit.score > 0 || keywords.length === 0)
+            .filter((hit) => hit.score > 0)
             .sort((left, right) => right.score - left.score || left.label.localeCompare(right.label))
             .slice(0, limit);
     }
@@ -428,18 +438,6 @@ function fetchText(targetUrl: string, timeoutMs: number): Promise<string> {
         });
         req.on('error', (error) => finish(() => reject(error)));
     });
-}
-
-function extractKeywords(value: string): string[] {
-    return String(value || '')
-        .toLowerCase()
-        .split(/[^a-z0-9]+/)
-        .filter((token) => token.length >= 3);
-}
-
-function scoreText(value: string, keywords: string[]): number {
-    const lower = String(value || '').toLowerCase();
-    return keywords.reduce((sum, keyword) => sum + (lower.includes(keyword) ? 3 : 0), 0);
 }
 
 function estimateTokens(value: string): number {

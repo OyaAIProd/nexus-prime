@@ -1,23 +1,11 @@
 import { listSpecialists } from '../../engines/specialist-roster.js';
 import { createEmbedder } from '../../engines/embedder.js';
+import { computeSemanticScore, tokenizeSemanticText } from '../../engines/semantic-ranking.js';
 import type { SkillArtifact } from '../../engines/skill-runtime.js';
 import type { MandateSignals } from '../types.js';
 
 function tokenize(text: string): Set<string> {
-  return new Set(
-    text
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .split(/\s+/)
-      .filter((token) => token.length > 2),
-  );
-}
-
-function jaccard(left: Set<string>, right: Set<string>): number {
-  if (left.size === 0 || right.size === 0) return 0;
-  const overlap = [...left].filter((token) => right.has(token)).length;
-  const union = new Set([...left, ...right]).size;
-  return union === 0 ? 0 : overlap / union;
+  return tokenizeSemanticText(text);
 }
 
 const specialistEmbeddings = new Map<string, number[]>();
@@ -75,13 +63,18 @@ function scoreSemanticMatch(
   embedder: ReturnType<typeof createEmbedder>,
   cacheKey?: string,
 ): number {
-  const lexical = jaccard(signalTokens, tokenize(artifactText));
   const embedding = Array.isArray(cachedEmbedding) && cachedEmbedding.length === signalVector.length
     ? cachedEmbedding
     : embedder.embedSync(artifactText);
   if (cacheKey) {
     specialistEmbeddings.set(cacheKey, embedding);
   }
-  const semantic = Math.max(0, embedder.cosineSimilarity(signalVector, embedding));
-  return semantic * 0.8 + lexical * 0.2;
+  return computeSemanticScore({
+    query: [...signalTokens].join(' '),
+    queryVector: signalVector,
+    candidateText: artifactText,
+    candidateVector: embedding,
+    lexicalTexts: [artifactText],
+    embedder,
+  }).final;
 }

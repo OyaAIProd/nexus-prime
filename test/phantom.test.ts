@@ -125,12 +125,13 @@ async function runTests() {
 
     // ── Import phantom workers ───────────────────────────────────────────────
     console.log('\n📦 Imports');
-    let GhostPass: any, PhantomWorker: any, MergeOracle: any, doctorGitWorktrees: any;
+    let GhostPass: any, PhantomWorker: any, PhantomOrchestrator: any, MergeOracle: any, doctorGitWorktrees: any;
     try {
         const phantom = await import('../dist/phantom/index.js');
         const worktreeHealth = await import('../dist/engines/worktree-health.js');
         GhostPass = phantom.GhostPass;
         PhantomWorker = phantom.PhantomWorker;
+        PhantomOrchestrator = phantom.PhantomOrchestrator;
         MergeOracle = phantom.MergeOracle;
         doctorGitWorktrees = worktreeHealth.doctorGitWorktrees;
         assert(true, 'phantom/index.ts imports cleanly');
@@ -265,6 +266,37 @@ async function runTests() {
     // Test with single worker (should still work)
     const singleDecision = await oracle.merge([result1]);
     assert(singleDecision.action !== undefined, 'Single worker → valid decision');
+
+    console.log('\n🚫 Budget enforcement');
+    const orchestrator = new PhantomOrchestrator(memory as any, REPO_ROOT);
+    let mergeInputs: any[] = [];
+    (orchestrator as any).oracle.merge = async (workers: any[]) => {
+        mergeInputs = workers;
+        return {
+            action: 'reject',
+            rationale: 'Budget-exceeded workers should not reach the oracle',
+            confidence: 0,
+            learnings: [],
+            conflicts: [],
+            recommendedStrategy: 'Retry within budget',
+        };
+    };
+    await orchestrator.run(
+        'simulate a worker that blows through its token budget',
+        testFiles,
+        async (worktreeDir: string, task: any) => {
+            const testFile = path.join(worktreeDir, 'OVER_BUDGET.md');
+            fs.writeFileSync(testFile, '# Over Budget\n', 'utf8');
+            return {
+                learnings: ['Simulated a worker exceeding the token budget'],
+                confidence: 0.9,
+                tokensUsed: task.tokenBudget + 500,
+                tokenEstimateSource: 'reported',
+            };
+        },
+        1,
+    );
+    assert(mergeInputs.length === 0, 'Budget-exceeded workers are excluded from oracle input');
 
     // ── Memory integration ───────────────────────────────────────────────────
     console.log('\n🧠 Memory integration');

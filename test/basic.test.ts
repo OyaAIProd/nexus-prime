@@ -10,6 +10,43 @@ import { execSync } from 'child_process';
 
 process.env.NEXUS_DASHBOARD_PORT = '0';
 
+function writeLocalSkillArtifact(repoRoot: string, rootDir: '.agent' | '.agents', instructions: string): void {
+  const target = path.join(repoRoot, rootDir, 'skills', 'repo-priority-skill.md');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(
+    target,
+    `---
+name: repo-priority-skill
+domain: backend
+riskClass: read
+---
+${instructions}
+`,
+    'utf8',
+  );
+}
+
+function writeLocalWorkflowArtifact(repoRoot: string, rootDir: '.agent' | '.agents', description: string): void {
+  const target = path.join(repoRoot, rootDir, 'workflows', 'repo-priority-workflow.md');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(
+    target,
+    `---
+name: repo-priority-workflow
+domain: backend
+description: ${description}
+triggers: [bootstrap]
+outputs: [policy-evidence]
+verify: [npm run build]
+roles: [planner, coder]
+---
+1. Inspect the runtime packet
+2. Verify the repo-local policy wiring
+`,
+    'utf8',
+  );
+}
+
 function setupFixtureRepo(): string {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nexus-prime-basic-'));
   fs.writeFileSync(path.join(repoRoot, 'README.md'), '# Fixture Repo\n', 'utf8');
@@ -27,6 +64,8 @@ function setupFixtureRepo(): string {
   );
   fs.mkdirSync(path.join(repoRoot, 'src'), { recursive: true });
   fs.writeFileSync(path.join(repoRoot, 'src', 'app.ts'), 'export const fixture = "ok";\n', 'utf8');
+  writeLocalSkillArtifact(repoRoot, '.agents', 'Preferred .agents skill instructions.');
+  writeLocalWorkflowArtifact(repoRoot, '.agents', 'Preferred .agents workflow definition.');
 
   execSync('git init -b main', { cwd: repoRoot, stdio: 'ignore' });
   execSync('git config user.name "Nexus Prime Test"', { cwd: repoRoot, stdio: 'ignore' });
@@ -41,6 +80,14 @@ function extractJsonBlock(text: string): any {
   const match = text.match(/```json\n([\s\S]*?)\n```/);
   assert.ok(match, 'expected MCP response to include a fenced JSON details block');
   return JSON.parse(match[1]);
+}
+
+function normalizeExistingPath(targetPath: string): string {
+  return fs.existsSync(targetPath) ? fs.realpathSync(targetPath) : path.normalize(targetPath);
+}
+
+function mentionsRepoLocalGstackPolicy(content: string): boolean {
+  return content.includes('`.agents/skills`') && content.includes('`.agents/workflows`');
 }
 
 async function test() {
@@ -65,6 +112,8 @@ async function test() {
     const { createAdapter } = await import('../dist/agents/adapters.js');
     const { MCPAdapter } = await import('../dist/agents/adapters/mcp.js');
     const { GraphMemoryEngine } = await import('../dist/engines/graph-memory.js');
+    const { SkillRuntime } = await import('../dist/engines/skill-runtime.js');
+    const { WorkflowRuntime } = await import('../dist/engines/workflow-runtime.js');
     const nexus = createNexusPrime({ adapters: [] });
     await nexus.start();
     console.log('✅ Started\n');
@@ -73,14 +122,36 @@ async function test() {
     const orchestrator = nexus.getOrchestrator();
     const graphDbPath = path.join(path.dirname(process.env.NEXUS_MEMORY_DB_PATH || repoRoot), 'graph.db');
     assert.ok(fs.existsSync(graphDbPath), 'graph memory db should initialize alongside the primary memory db');
+    assert.ok(fs.existsSync(path.join(repoRoot, '.agents', 'README.md')), 'workspace bootstrap should seed the repo-local .agents guide');
+    assert.ok(fs.existsSync(path.join(repoRoot, '.agents', 'skills')), 'workspace bootstrap should create the .agents skills directory');
+    assert.ok(fs.existsSync(path.join(repoRoot, '.agents', 'workflows')), 'workspace bootstrap should create the .agents workflows directory');
     assert.ok(fs.existsSync(path.join(repoRoot, '.agent', 'hooks', 'before-mutate-guard.md')), 'workspace bootstrap should seed local hook files');
     assert.ok(fs.existsSync(path.join(repoRoot, '.agent', 'automations', 'session-close-followup.md')), 'workspace bootstrap should seed local automation files');
+    assert.ok(
+      runtime.listSkills().find((skill) => skill.name === 'repo-priority-skill')?.provenance.includes(`${path.sep}.agents${path.sep}skills${path.sep}`),
+      'runtime should load repo-local .agents skills during bootstrap'
+    );
     assert.ok(runtime.listSkills().some((skill) => skill.name === 'django-builder'), 'expanded bundled skills should include django-builder');
     assert.ok(runtime.listWorkflows().some((workflow) => workflow.name === 'gtm-approval-loop'), 'expanded bundled workflows should include gtm-approval-loop');
     assert.ok(runtime.listHooks().some((hook) => hook.name === 'run-created-brief'), 'bundled hooks should be available');
     assert.ok(runtime.listAutomations().some((automation) => automation.name === 'verified-followup-automation'), 'bundled automations should be available');
     assert.ok(runtime.listSpecialists().length > 20, 'native specialist roster should be available');
     assert.ok(runtime.listCrews().length > 0, 'crew catalog should be available');
+
+    writeLocalSkillArtifact(repoRoot, '.agent', 'Legacy .agent skill instructions.');
+    writeLocalWorkflowArtifact(repoRoot, '.agent', 'Legacy .agent workflow definition.');
+
+    const localSkillRuntime = new SkillRuntime(undefined, path.join(repoRoot, '.runtime-skill-test'), repoRoot);
+    const preferredSkill = localSkillRuntime.findByName('repo-priority-skill');
+    assert.ok(preferredSkill, 'local skill runtime should load duplicate repo-priority skill');
+    assert.ok(preferredSkill?.provenance.includes(`${path.sep}.agents${path.sep}skills${path.sep}`), '.agents skill should override the legacy .agent skill when names collide');
+    assert.ok(preferredSkill?.instructions.includes('Preferred .agents skill instructions.'), '.agents skill should provide the winning instructions when names collide');
+
+    const localWorkflowRuntime = new WorkflowRuntime(path.join(repoRoot, '.runtime-workflow-test'), repoRoot);
+    const preferredWorkflow = localWorkflowRuntime.findByName('repo-priority-workflow');
+    assert.ok(preferredWorkflow, 'local workflow runtime should load duplicate repo-priority workflow');
+    assert.ok(preferredWorkflow?.provenance.includes(`${path.sep}.agents${path.sep}workflows${path.sep}`), '.agents workflow should override the legacy .agent workflow when names collide');
+    assert.ok(preferredWorkflow?.description.includes('Preferred .agents workflow definition.'), '.agents workflow should provide the winning metadata when names collide');
 
     const bootstrap = await orchestrator.bootstrapSession('Bootstrap the fixture repo for graph and RAG validation', {
       files: ['README.md', 'package.json', 'src/app.ts'],
@@ -169,6 +240,10 @@ async function test() {
     assert.ok(
       result.execution.workerResults.some(worker => worker.verified),
       'at least one worker should pass verification'
+    );
+    assert.ok(
+      result.execution.workerResults.every((worker) => worker.tokenEstimateSource === 'runtime-estimate'),
+      'runtime worker results should use runtime token estimates instead of placeholder accounting'
     );
     assert.ok(result.execution.plannerResult, 'planner result should be present');
     assert.ok(result.execution.plannerState, 'planner state should be present');
@@ -392,6 +467,22 @@ async function test() {
     assert.ok(bootstrapPayload.knowledgeFabric?.summary, 'bootstrap tool should return a knowledge-fabric summary');
     assert.ok(Array.isArray(bootstrapPayload.knowledgeFabric?.selectedFiles), 'bootstrap tool should return knowledge-fabric selected files');
     assert.strictEqual(bootstrapPayload.catalogHealth.overall, 'healthy', 'bootstrap tool should expose catalog health');
+    assert.strictEqual(
+      normalizeExistingPath(bootstrapPayload.catalogHealth.categories.skills.localDirectory),
+      normalizeExistingPath(path.join(repoRoot, '.agents', 'skills')),
+      'catalog health should prefer .agents skills as the primary repo-local root'
+    );
+    assert.strictEqual(
+      normalizeExistingPath(bootstrapPayload.catalogHealth.categories.workflows.localDirectory),
+      normalizeExistingPath(path.join(repoRoot, '.agents', 'workflows')),
+      'catalog health should prefer .agents workflows as the primary repo-local root'
+    );
+    const skillRoots = bootstrapPayload.catalogHealth.categories.skills.localDirectories.map((entry: string) => normalizeExistingPath(entry));
+    const workflowRoots = bootstrapPayload.catalogHealth.categories.workflows.localDirectories.map((entry: string) => normalizeExistingPath(entry));
+    assert.ok(skillRoots.includes(normalizeExistingPath(path.join(repoRoot, '.agent', 'skills'))), 'catalog health should still report the legacy .agent skills root');
+    assert.ok(skillRoots.includes(normalizeExistingPath(path.join(repoRoot, '.agents', 'skills'))), 'catalog health should report the preferred .agents skills root');
+    assert.ok(workflowRoots.includes(normalizeExistingPath(path.join(repoRoot, '.agent', 'workflows'))), 'catalog health should still report the legacy .agent workflows root');
+    assert.ok(workflowRoots.includes(normalizeExistingPath(path.join(repoRoot, '.agents', 'workflows'))), 'catalog health should report the preferred .agents workflows root');
     assert.ok(bootstrapPayload.sourceMixRecommendation?.dominantSource, 'bootstrap tool should expose a source-mix recommendation');
     assert.ok(typeof bootstrapPayload.ragCandidateStatus?.attachedCollections === 'number', 'bootstrap tool should expose RAG candidate status');
     assert.ok(bootstrapPayload.clientBootstrapStatus?.clients?.length > 0, 'bootstrap tool should expose client bootstrap manifest status');
@@ -501,6 +592,7 @@ async function test() {
     assert.ok(codexAgents.includes('nexus-prime:codex-bootstrap:start'), 'Codex setup should write a managed bootstrap block');
     assert.ok(codexAgents.includes('nexus_session_bootstrap'), 'Codex setup should teach the bootstrap-first sequence in AGENTS.md');
     assert.ok(codexAgents.includes('nexus_orchestrate` does NOT replace during-work or session-close lifecycle steps'), 'Codex managed block should teach the mandatory lifecycle beyond orchestration');
+    assert.ok(mentionsRepoLocalGstackPolicy(codexAgents), 'Codex managed block should teach the repo-local Gstack policy');
     execSync(`node "${cliPath}" setup codex`, { cwd: repoRoot, env: setupEnv, stdio: 'ignore' });
     const codexAgentsSecondPass = fs.readFileSync(codexAgentsPath, 'utf8');
     assert.strictEqual((codexAgentsSecondPass.match(/nexus-prime:codex-bootstrap:start/g) || []).length, 1, 'Codex setup should update its managed AGENTS block instead of duplicating it');
@@ -518,12 +610,16 @@ async function test() {
     const opencodeBootstrap = fs.readFileSync(opencodeBootstrapPath, 'utf8');
     assert.ok(claudeBootstrap.includes('nexus_orchestrate does NOT replace during-work or session-close lifecycle steps'), 'Claude bootstrap note should carry the mandatory lifecycle wording');
     assert.ok(opencodeBootstrap.includes('nexus_orchestrate does NOT replace during-work or session-close lifecycle steps'), 'Opencode bootstrap note should carry the mandatory lifecycle wording');
+    assert.ok(mentionsRepoLocalGstackPolicy(claudeBootstrap), 'Claude bootstrap note should teach the repo-local Gstack policy');
+    assert.ok(mentionsRepoLocalGstackPolicy(opencodeBootstrap), 'Opencode bootstrap note should teach the repo-local Gstack policy');
     assert.ok(!claudeBootstrap.includes('These two calls handle memory recovery, skill selection, token optimization, and execution planning automatically.'), 'Claude bootstrap note should remove the old two-calls-do-everything sentence');
     assert.ok(!opencodeBootstrap.includes('These two calls handle memory recovery, skill selection, token optimization, and execution planning automatically.'), 'Opencode bootstrap note should remove the old two-calls-do-everything sentence');
     assert.ok(fs.readFileSync(cursorRulePath, 'utf8').includes('nexus_session_bootstrap'), 'Cursor rule file should teach the bootstrap-first sequence');
     assert.ok(fs.readFileSync(cursorRulePath, 'utf8').includes('nexus_store_memory'), 'Cursor rule file should teach the session-close lifecycle');
+    assert.ok(mentionsRepoLocalGstackPolicy(fs.readFileSync(cursorRulePath, 'utf8')), 'Cursor rule file should teach the repo-local Gstack policy');
     assert.ok(fs.readFileSync(windsurfRulePath, 'utf8').includes('nexus_orchestrate'), 'Windsurf rule file should teach the orchestrate path');
     assert.ok(fs.readFileSync(windsurfRulePath, 'utf8').includes('nexus_session_dna(action="generate")'), 'Windsurf rule file should teach the session-close lifecycle');
+    assert.ok(mentionsRepoLocalGstackPolicy(fs.readFileSync(windsurfRulePath, 'utf8')), 'Windsurf rule file should teach the repo-local Gstack policy');
     const antigravitySkillFiles = fs.readdirSync(antigravitySkillDir);
     assert.ok(antigravitySkillFiles.length > 0, 'Antigravity setup should emit at least one SKILL.md file');
     const antigravityCombined = antigravitySkillFiles
@@ -535,6 +631,7 @@ async function test() {
       assert.ok(content.length <= 6500, 'Antigravity setup should keep each skill artifact below the compact size budget');
     });
     assert.ok(antigravityCombined.includes('nexus_orchestrate does NOT replace during-work or session-close lifecycle steps'), 'Antigravity skill bundle should inherit the mandatory lifecycle wording');
+    assert.ok(mentionsRepoLocalGstackPolicy(antigravityCombined), 'Antigravity skill bundle should teach the repo-local Gstack policy');
     const statusOutput = execSync(`node "${cliPath}" setup status`, { cwd: repoRoot, env: setupEnv, encoding: 'utf8' });
     assert.ok(statusOutput.includes('Codex: ✅'), 'setup status should report Codex as installed');
     assert.ok(statusOutput.includes('Cursor: ✅'), 'setup status should report Cursor as installed');

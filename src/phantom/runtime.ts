@@ -1159,11 +1159,12 @@ export class SubAgentRuntime {
         run.state = 'running';
         const coderManifests = manifests.filter((manifest) => manifest.role === 'coder');
         const coderResults = await Promise.all(coderManifests.map((manifest) => this.runCoderWorker(runId, recorder, manifest)));
+        const mergeableCoderResults = coderResults.filter((result) => !result.budgetExceeded);
         
         // Phase 3E: Inter-pod sync point using Byzantine consensus
         const activePods = new Set(coderManifests.map(m => m.podId).filter(Boolean));
         if (activePods.size > 1) {
-            coderResults.forEach((res) => {
+            mergeableCoderResults.forEach((res) => {
                 if (res.outcome !== 'failed') {
                     // Submit candidate magnitude to inter-pod consensus
                     podNetwork.resolveConflict(res.workerId, 1, [res.tokensUsed, res.diff.length]);
@@ -1222,13 +1223,29 @@ export class SubAgentRuntime {
         run.state = 'verifying';
         const verifierManifests = manifests.filter((manifest) => manifest.role === 'verifier');
         const verificationResults = await Promise.all(verifierManifests.map((manifest) => {
+            const target = coderResults.find((result) => result.workerId === manifest.targetWorkerId);
+            if (!target || target.budgetExceeded) {
+                return Promise.resolve({
+                    workerId: manifest.targetWorkerId ?? manifest.workerId,
+                    verifierId: manifest.workerId,
+                    passed: false,
+                    commands: [],
+                    summary: target?.budgetExceeded
+                        ? 'Skipped verification for over-budget worker.'
+                        : 'Skipped verification because no coder result was produced.',
+                    artifactsPath: recorder.workerDir(manifest.workerId),
+                });
+            }
             manifest.verifyCommands = beforeVerifyResolved.verifyCommands;
-            return this.runVerifierWorker(runId, recorder, manifest, coderResults.find((result) => result.workerId === manifest.targetWorkerId));
+            return this.runVerifierWorker(runId, recorder, manifest, target);
         }));
         run.verificationResults = verificationResults;
         recorder.writeJson('verification-results.json', verificationResults);
 
         for (const result of run.workerResults) {
+            if (result.budgetExceeded) {
+                continue;
+            }
             const verification = verificationResults.find((entry) => entry.workerId === result.workerId);
             if (verification) {
                 result.verification = verification;
@@ -1238,7 +1255,7 @@ export class SubAgentRuntime {
             }
         }
 
-        const decision = await consensusPolicy.merge(run.workerResults);
+        const decision = await consensusPolicy.merge(mergeableCoderResults);
         run.finalDecision = decision;
         run.backendEvidence.consensus = consensusPolicy.shadowStats();
         recorder.writeJson('decision.json', decision);
@@ -2616,7 +2633,6 @@ export class SubAgentRuntime {
             recorder,
             (snapshot) => this.recordWorktreeHealth(snapshot),
         );
-        const start = Date.now();
         const learnings: string[] = [];
         const workerDir = recorder.workerDir(manifest.workerId);
 
@@ -2655,6 +2671,32 @@ export class SubAgentRuntime {
             if (allowedActions.length > 0) {
                 learnings.push(`Applied ${allowedActions.length} runtime binding(s): ${allowedActions.map((binding) => binding.type).join(', ')}`);
             }
+            const instructionPacket = this.runs.get(runId)?.instructionPacket;
+            const preflightTokens = this.estimateRuntimeWorkerTokens(manifest, allowedActions, learnings, '', instructionPacket);
+            if (manifest.tokenBudget > 0 && preflightTokens > manifest.tokenBudget) {
+                const budgetLearnings = [
+                    ...learnings,
+                    `Token budget exceeded before mutation: used ${preflightTokens}, budget ${manifest.tokenBudget}`,
+                ];
+                nexusEventBus.emit('phantom.worker.complete', { workerId: manifest.workerId, confidence: 0.05 });
+                return {
+                    workerId: manifest.workerId,
+                    role: manifest.role,
+                    taskId: runId,
+                    approach: manifest.strategy,
+                    diff: '',
+                    outcome: 'budgetExceeded',
+                    confidence: 0.05,
+                    tokensUsed: preflightTokens,
+                    tokenEstimateSource: 'runtime-estimate',
+                    budgetExceeded: true,
+                    learnings: budgetLearnings,
+                    testsPassing: 0,
+                    verified: false,
+                    artifactsPath: workerDir,
+                    modifiedFiles: [],
+                };
+            }
 
             const modifiedFiles = await session.applyBindings(allowedActions);
             modifiedFiles.forEach(file => {
@@ -2665,7 +2707,12 @@ export class SubAgentRuntime {
             const diff = await session.captureDiff();
             recorder.writeText(path.join('workers', manifest.workerId, 'diff.patch'), diff);
             podNetwork.publish(manifest.workerId, `Produced ${modifiedFiles.length} modified files`, 0.8, ['#runtime-worker']);
-            nexusEventBus.emit('phantom.worker.complete', { workerId: manifest.workerId, confidence: diff.trim() ? 0.7 : 0.2 });
+            const estimatedTokens = this.estimateRuntimeWorkerTokens(manifest, allowedActions, learnings, diff, instructionPacket);
+            const budgetExceeded = manifest.tokenBudget > 0 && estimatedTokens > manifest.tokenBudget;
+            if (budgetExceeded) {
+                learnings.push(`Token budget exceeded: used ${estimatedTokens}, budget ${manifest.tokenBudget}`);
+            }
+            nexusEventBus.emit('phantom.worker.complete', { workerId: manifest.workerId, confidence: budgetExceeded ? 0.1 : (diff.trim() ? 0.7 : 0.2) });
 
             return {
                 workerId: manifest.workerId,
@@ -2673,9 +2720,11 @@ export class SubAgentRuntime {
                 taskId: runId,
                 approach: manifest.strategy,
                 diff,
-                outcome: diff.trim() ? 'partial' : 'failed',
-                confidence: diff.trim() ? 0.68 : 0.18,
-                tokensUsed: Math.max(1, Math.round((Date.now() - start) / 100)),
+                outcome: budgetExceeded ? 'budgetExceeded' : (diff.trim() ? 'partial' : 'failed'),
+                confidence: budgetExceeded ? 0.1 : (diff.trim() ? 0.68 : 0.18),
+                tokensUsed: estimatedTokens,
+                tokenEstimateSource: 'runtime-estimate',
+                budgetExceeded,
                 learnings,
                 testsPassing: 0,
                 verified: false,
@@ -2696,6 +2745,8 @@ export class SubAgentRuntime {
                 outcome: 'failed',
                 confidence: 0,
                 tokensUsed: 0,
+                tokenEstimateSource: 'none',
+                budgetExceeded: false,
                 learnings,
                 verified: false,
                 artifactsPath: workerDir,
@@ -2704,6 +2755,36 @@ export class SubAgentRuntime {
         } finally {
             await session.cleanup();
         }
+    }
+
+    private estimateRuntimeWorkerTokens(
+        manifest: WorkerManifest,
+        allowedActions: SkillBinding[],
+        learnings: string[],
+        diff: string,
+        instructionPacket?: InstructionPacket,
+    ): number {
+        const actionPayloadTokens = allowedActions.reduce((sum, binding) => (
+            sum + estimateTokenCount({
+                type: binding.type,
+                path: 'path' in binding ? binding.path : undefined,
+                content: 'content' in binding ? binding.content : undefined,
+                command: 'command' in binding ? binding.command : undefined,
+            })
+        ), 0);
+        return Math.max(1, estimateTokenCount({
+            workerId: manifest.workerId,
+            role: manifest.role,
+            strategy: manifest.strategy,
+            files: manifest.files.map((file) => path.basename(file.path)),
+            allowedTools: manifest.allowedTools,
+            verifyCommands: manifest.verifyCommands,
+            instructionPacketHash: instructionPacket?.packetHash,
+            actionCount: allowedActions.length,
+            actionPayloadTokens,
+            learningCount: learnings.length,
+            diff,
+        }));
     }
 
     private async runVerifierWorker(

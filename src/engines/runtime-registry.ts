@@ -154,6 +154,7 @@ export interface RuntimeCatalogHealthEntry {
     rejected: number;
     readable: boolean;
     localDirectory?: string;
+    localDirectories?: string[];
     localOverrideFiles?: number;
     issues: string[];
 }

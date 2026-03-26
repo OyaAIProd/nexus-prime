@@ -13,6 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createEmbedder, type Embedder } from './embedder.js';
+import { computeSemanticScore, type SemanticScoreBreakdown } from './semantic-ranking.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -26,6 +27,11 @@ export interface ContextChunk {
     label: string;         // human-readable label (e.g. "MyClass.method()")
     startLine: number;
     endLine: number;
+    scoreBreakdown?: ContextChunkScoreBreakdown;
+    /** Memory entropy (0=fresh, 1=noise) — used to penalize noisy memory chunks */
+    entropy?: number;
+    /** Memory trust (0-1) — used to boost high-trust memory chunks */
+    trust?: number;
 }
 
 export interface QualityWeights {
@@ -49,6 +55,14 @@ export interface BudgetConfig {
     taskMultiplier: number;
     effectiveBudget: number;
     reason: string;
+}
+
+export interface ContextChunkScoreBreakdown {
+    relevance: SemanticScoreBreakdown;
+    recency: number;
+    connectivity: number;
+    novelty: number;
+    final: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,10 +95,14 @@ export class ContextAssembler {
      */
     assemble(task: string, candidates: ContextChunk[], budget: number): AssemblyResult {
         // Score all candidates
-        const scored = candidates.map(chunk => ({
-            ...chunk,
-            quality: this.scoreChunk(chunk, task),
-        }));
+        const scored = candidates.map((chunk) => {
+            const scoreBreakdown = this.scoreChunkBreakdown(chunk, task);
+            return {
+                ...chunk,
+                quality: scoreBreakdown.final,
+                scoreBreakdown,
+            };
+        });
 
         // Sort by quality-per-token ratio (descending) — greedy knapsack
         scored.sort((a, b) => {
@@ -131,17 +149,36 @@ export class ContextAssembler {
      * quality = w1*relevance + w2*recency + w3*connectivity + w4*novelty
      */
     scoreChunk(chunk: ContextChunk, task: string): number {
-        const rel = this.scoreRelevance(chunk, task);
-        const rec = this.scoreRecency(chunk);
-        const con = chunk.quality; // Use pre-set connectivity if available (0.0 fallback)
-        const nov = this.scoreNovelty(chunk);
+        return this.scoreChunkBreakdown(chunk, task).final;
+    }
 
-        return (
-            this.weights.relevance * rel +
-            this.weights.recency * rec +
-            this.weights.connectivity * con +
-            this.weights.novelty * nov
+    scoreChunkBreakdown(chunk: ContextChunk, task: string): ContextChunkScoreBreakdown {
+        const relevance = this.scoreRelevance(chunk, task);
+        const recency = this.scoreRecency(chunk);
+        const connectivity = chunk.quality;
+        const novelty = this.scoreNovelty(chunk);
+
+        let rawScore = (
+            this.weights.relevance * relevance.final +
+            this.weights.recency * recency +
+            this.weights.connectivity * connectivity +
+            this.weights.novelty * novelty
         );
+        // Apply memory quality signals: penalize high-entropy chunks, boost high-trust
+        if (chunk.entropy !== undefined) {
+            rawScore *= (1 - chunk.entropy * 0.5); // high entropy → up to 50% penalty
+        }
+        if (chunk.trust !== undefined) {
+            rawScore *= (0.7 + chunk.trust * 0.3); // low trust → up to 30% penalty
+        }
+
+        return {
+            relevance,
+            recency,
+            connectivity,
+            novelty,
+            final: rawScore,
+        };
     }
 
     /** Map quality score to token tier: L0, L1, or L2 */
@@ -152,33 +189,36 @@ export class ContextAssembler {
     }
 
     /** Relevance: keyword overlap between chunk content and task */
-    private scoreRelevance(chunk: ContextChunk, task: string): number {
+    private scoreRelevance(chunk: ContextChunk, task: string): SemanticScoreBreakdown {
         const taskTokens = this.tokenize(task);
-        const chunkTokens = this.tokenize(chunk.content.slice(0, 2000)); // cap for perf
-
-        if (taskTokens.length === 0 || chunkTokens.length === 0) return 0.3;
-
-        // Jaccard-like overlap
-        const taskSet = new Set(taskTokens);
-        const chunkSet = new Set(chunkTokens);
-        let overlap = 0;
-        for (const t of taskSet) {
-            if (chunkSet.has(t)) overlap++;
+        const chunkTokens = this.tokenize(chunk.content.slice(0, 2000));
+        if (taskTokens.length === 0 || chunkTokens.length === 0) {
+            return {
+                semantic: 0,
+                lexical: 0.3,
+                keywordCoverage: 0.3,
+                pathBoost: 0,
+                final: 0.3,
+                fallbackUsed: true,
+            };
         }
 
-        // Also boost if source file path contains task keywords
-        const pathLower = chunk.source.toLowerCase();
-        let pathBoost = 0;
-        for (const t of taskSet) {
-            if (pathLower.includes(t)) pathBoost += 0.15;
-        }
-
-        const jaccardScore = overlap / (taskSet.size + chunkSet.size - overlap);
-        const lexicalScore = Math.min(1.0, jaccardScore * 3 + Math.min(pathBoost, 0.4));
         const taskVector = this.vectorFor(`task:${task}`, task);
         const chunkVector = this.vectorFor(this.chunkKey(chunk), `${chunk.label}\n${chunk.source}\n${chunk.content.slice(0, 2000)}`);
-        const semanticScore = Math.max(0, this.embedder.cosineSimilarity(taskVector, chunkVector));
-        return Math.min(1.0, semanticScore * 0.7 + lexicalScore * 0.3);
+        return computeSemanticScore({
+            query: task,
+            queryVector: taskVector,
+            candidateText: `${chunk.label}\n${chunk.content.slice(0, 2000)}`,
+            candidateVector: chunkVector,
+            lexicalTexts: [chunk.label, chunk.content.slice(0, 2000)],
+            pathText: chunk.source,
+            embedder: this.embedder,
+            weights: {
+                semantic: 0.72,
+                lexical: 0.2,
+                path: 0.08,
+            },
+        });
     }
 
     /** Recency: how recently the file was modified (exponential decay) */

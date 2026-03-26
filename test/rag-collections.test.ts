@@ -72,6 +72,34 @@ async function test() {
     assert.strictEqual(afterTimeout?.sources.length, 0, 'timed-out ingests should not append partial sources');
     assert.strictEqual(afterTimeout?.chunks.length, 0, 'timed-out ingests should not append partial chunks');
 
+    const semanticCollection = store.createCollection({
+        name: 'Semantic ranking fixture',
+        description: 'Exercise score breakdown reporting for semantic retrieval',
+    });
+    await store.ingestCollection(semanticCollection.collectionId, [
+        {
+            label: 'token-guard',
+            text: 'Worker budget enforcement should stop merges when token spend exceeds the execution ceiling and the verifier must not promote the patch.',
+        },
+        {
+            label: 'theme-notes',
+            text: 'Landing page polish uses warm gradients, card shadows, and rounded navigation affordances for the visual refresh.',
+        },
+    ]);
+
+    const retrievalHits = store.retrieve('prevent workers from overspending token budget before merge', {
+        collectionIds: [semanticCollection.collectionId],
+        limit: 2,
+    });
+    assert.ok(retrievalHits.length >= 1, 'semantic retrieval should return at least one relevant hit');
+    assert.strictEqual(retrievalHits[0]?.label, 'token-guard', 'semantic retrieval should rank the token governance chunk above the unrelated visual note');
+    assert.ok(retrievalHits[0]?.scoreBreakdown, 'retrieval hits should expose score breakdown details');
+    assert.strictEqual(retrievalHits[0]?.score, retrievalHits[0]?.scoreBreakdown?.final, 'retrieval hit score should mirror the breakdown final score');
+    if (retrievalHits[1]) {
+        assert.ok((retrievalHits[0]?.scoreBreakdown?.semantic ?? 0) >= (retrievalHits[1]?.scoreBreakdown?.semantic ?? 0), 'semantic signal should favor the relevant governance hit');
+        assert.ok(retrievalHits[0]!.score > retrievalHits[1]!.score, 'relevant governance hit should outrank the unrelated note');
+    }
+
     console.log('✅ RAG collection store safety checks passed\n');
 }
 

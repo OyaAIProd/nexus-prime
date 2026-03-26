@@ -57,6 +57,14 @@ const CODEX_MANAGED_END = '<!-- nexus-prime:codex-bootstrap:end -->';
 const SUPPORTED_CLIENTS: SetupClientId[] = ['codex', 'cursor', 'claude', 'claude-code', 'claude-desktop', 'opencode', 'windsurf', 'antigravity', 'openclaw', 'aider', 'continue', 'cline'];
 const WORKSPACE_SEED_FILES: Array<{ relativePath: string; content: string }> = [
     {
+        relativePath: '.agents/README.md',
+        content: `# Repo-local Agent Assets
+
+Use \`.agents/skills\` and \`.agents/workflows\` for repo-local Gstack-style skill and workflow packs.
+Nexus Prime still reads the legacy \`.agent/skills\` and \`.agent/workflows\` directories for backward compatibility.
+`,
+    },
+    {
         relativePath: '.agent/hooks/before-mutate-guard.md',
         content: `---
 name: before-mutate-guard
@@ -660,6 +668,9 @@ function ensureWorkspaceAgentScaffold(workspaceRoot: string, options: { silent?:
         '.agent/workflows',
         '.agent/hooks',
         '.agent/automations',
+        '.agents',
+        '.agents/skills',
+        '.agents/workflows',
     ];
     directories.forEach((relativeDir) => {
         try {

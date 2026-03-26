@@ -159,6 +159,7 @@ function buildNextMask(nextChar: string): number {
 export class NgramIndex {
   private db: InstanceType<typeof Database>;
   private dbPath: string;
+  private storageDirty = false;
 
   // In-memory lookup: trigramHash → true (for fast existence check)
   private knownHashes = new Set<number>();
@@ -175,12 +176,20 @@ export class NgramIndex {
     this.initSchema();
     this.prepareStatements();
     this.warmHashSet();
+    try {
+      if (fs.existsSync(this.dbPath) && fs.statSync(this.dbPath).size > 32 * 1024 * 1024) {
+        this.optimizeStorage(true);
+      }
+    } catch {
+      // Best effort startup optimization for oversized indexes.
+    }
   }
 
   private initSchema(): void {
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('cache_size = -16000');
+    this.db.pragma('busy_timeout = 5000');
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS ngram_postings (
@@ -269,6 +278,7 @@ export class NgramIndex {
       this.deleteStmt.run(docId);
       this.db.prepare('DELETE FROM ngram_docs WHERE doc_id = ?').run(docId);
     })();
+    this.storageDirty = true;
   }
 
   /** Check if a document is already indexed */
@@ -390,7 +400,26 @@ export class NgramIndex {
     this.db.exec('DELETE FROM ngram_postings');
     this.db.exec('DELETE FROM ngram_docs');
     this.knownHashes.clear();
+    this.storageDirty = true;
     return this.addDocuments(docs);
+  }
+
+  optimizeStorage(force: boolean = false): void {
+    try {
+      this.db.exec('PRAGMA optimize');
+    } catch {
+      // Best effort optimize.
+    }
+    if (!force && !this.storageDirty) {
+      return;
+    }
+    try {
+      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch {
+      // Best effort checkpoint before vacuum.
+    }
+    this.db.exec('VACUUM');
+    this.storageDirty = false;
   }
 
   // ── Stats ───────────────────────────────────────────────────────────────
@@ -416,6 +445,7 @@ export class NgramIndex {
 
   /** Close the database connection */
   close(): void {
+    this.optimizeStorage(this.storageDirty);
     this.db.close();
   }
 }

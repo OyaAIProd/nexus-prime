@@ -59,7 +59,7 @@ export interface WorkerResult {
     outcome: 'success' | 'partial' | 'failed' | 'budgetExceeded';
     confidence: number;   // 0-1
     tokensUsed: number;
-    tokenEstimateSource?: 'reported' | 'diff-estimate' | 'none';
+    tokenEstimateSource?: 'runtime-estimate' | 'reported' | 'diff-estimate' | 'none';
     budgetExceeded?: boolean;
     learnings: string[];  // Key insights to store in memory
     testsPassing?: number;
@@ -173,11 +173,13 @@ export class PhantomWorker {
     private workerId: string;
     private repoRoot: string;
     private worktreeDir: string;
+    private skipDoctor: boolean;
 
-    constructor(repoRoot?: string) {
+    constructor(repoRoot?: string, options?: { skipDoctor?: boolean }) {
         this.workerId = `phantom-${randomUUID().slice(0, 8)}`;
         this.repoRoot = repoRoot ?? process.cwd();
         this.worktreeDir = path.join(os.tmpdir(), 'nexus-phantom', this.workerId);
+        this.skipDoctor = options?.skipDoctor ?? false;
     }
 
     get id(): string { return this.workerId; }
@@ -202,7 +204,7 @@ export class PhantomWorker {
             worktreeDir: string,
             task: WorkerTask,
             worker: PhantomWorker,
-        ) => Promise<{ learnings: string[]; confidence: number; tokensUsed?: number; tokenEstimateSource?: 'reported' | 'diff-estimate' }>
+        ) => Promise<{ learnings: string[]; confidence: number; tokensUsed?: number; tokenEstimateSource?: 'runtime-estimate' | 'reported' | 'diff-estimate' }>
     ): Promise<WorkerResult> {
         try {
             if ((task.entangledPeers?.length ?? 0) > 0) {
@@ -259,7 +261,7 @@ export class PhantomWorker {
     private async createWorktree(): Promise<void> {
         fs.mkdirSync(path.dirname(this.worktreeDir), { recursive: true });
 
-        await doctorGitWorktrees(this.repoRoot);
+        if (!this.skipDoctor) await doctorGitWorktrees(this.repoRoot);
 
         // Detached worktrees avoid ref-lock conflicts and are sufficient for diff-only execution.
         try {
@@ -365,16 +367,18 @@ export class PhantomOrchestrator {
             worktreeDir: string,
             task: WorkerTask,
             worker: PhantomWorker,
-        ) => Promise<{ learnings: string[]; confidence: number; tokensUsed?: number; tokenEstimateSource?: 'reported' | 'diff-estimate' }>,
+        ) => Promise<{ learnings: string[]; confidence: number; tokensUsed?: number; tokenEstimateSource?: 'runtime-estimate' | 'reported' | 'diff-estimate' }>,
         nWorkers: number = 2
     ): Promise<{ report: GhostReport; decision: MergeDecision }> {
         // Phase 1: Ghost Pass
         const report = await this.ghost.analyze(goal, files, nWorkers);
 
         // Phase 2: Parallel Phantom Workers
+        // Run worktree doctor once per batch, not per-worker
+        await doctorGitWorktrees(this.repoRoot);
         const tasks = report.workerAssignments.slice(0, nWorkers);
         const workerPromises = tasks.map(task => {
-            const worker = new PhantomWorker(this.repoRoot);
+            const worker = new PhantomWorker(this.repoRoot, { skipDoctor: true });
             return worker.spawn(task, executor);
         });
 
@@ -382,9 +386,10 @@ export class PhantomOrchestrator {
         const workerResults = results
             .filter((r): r is PromiseFulfilledResult<WorkerResult> => r.status === 'fulfilled')
             .map(r => r.value);
+        const mergeCandidates = workerResults.filter((result) => !result.budgetExceeded);
 
         // Phase 3: Merge Oracle
-        const decision = await this.oracle.merge(workerResults);
+        const decision = await this.oracle.merge(mergeCandidates);
 
         return { report, decision };
     }

@@ -32,7 +32,7 @@ import type {
   RuntimeTokenSummarySnapshot,
   RuntimeWorkerPlanSnapshot,
 } from './runtime-registry.js';
-import { SessionDNAManager } from './session-dna.js';
+import { SessionDNAManager, type SessionDNA } from './session-dna.js';
 import type { ClientRecord, ClientRegistry } from './client-registry.js';
 import {
   DEFAULT_REQUIRED_SEQUENCE,
@@ -264,7 +264,8 @@ export class OrchestratorEngine {
       }
     }
     this.sessionState = this.loadSessionState();
-    
+    this.pruneStaleAutonomySessions();
+
     this.memoryBackgroundWorker = new MemoryBackgroundWorker(this.memory);
     this.repoTreeGenerator = new RepoTreeGenerator(this.repoRoot);
     this.skillLearner = new SkillLearnerEngine(this.skillRuntime, this.memory);
@@ -316,11 +317,12 @@ export class OrchestratorEngine {
     const primaryClient = this.resolvePrimaryClient();
     const bootstrapManifest = readBootstrapManifest();
     const latestDNA = SessionDNAManager.loadLatest();
-    const memoryMatches = await this.memory.recall(task, 8, this.buildWorkspaceRecallFilters());
+    const memoryMatchesFull = await this.memory.recallWithMetadata(task, 8, this.buildWorkspaceRecallFilters());
+    const memoryMatches = memoryMatchesFull.map(m => m.content);
     const memoryStats = this.memory.getStats();
     const candidateFiles = options.files?.length
       ? options.files
-      : this.discoverCandidateFiles(task);
+      : this.discoverCandidateFiles(task, latestDNA);
     await this.knowledgeFabric.ensureBootstrapCollection({
       runtimeId: this.runtime.getRuntimeId(),
       sessionId: this.sessionState.sessionId,
@@ -328,11 +330,15 @@ export class OrchestratorEngine {
     });
     let knowledgeFabric: KnowledgeFabricBundle;
     try {
-      knowledgeFabric = this.composeKnowledgeFabric(task, candidateFiles, memoryMatches, intent);
+      const qualityMeta = memoryMatchesFull.map(m => ({ content: m.content, confidence: m.confidence, entropy: m.entropy, trust: m.trust }));
+      const fileBoosts = this.memory.getFileBoosts(candidateFiles);
+      knowledgeFabric = this.composeKnowledgeFabric(task, candidateFiles, memoryMatches, intent, qualityMeta, fileBoosts);
     } catch (error: any) {
       console.warn('[Orchestrator] Knowledge Fabric compose failed, retrying:', error?.message ?? error);
       try {
-        knowledgeFabric = this.composeKnowledgeFabric(task, candidateFiles, memoryMatches, intent);
+        const qualityMeta = memoryMatchesFull.map(m => ({ content: m.content, confidence: m.confidence, entropy: m.entropy, trust: m.trust }));
+        const fileBoosts = this.memory.getFileBoosts(candidateFiles);
+        knowledgeFabric = this.composeKnowledgeFabric(task, candidateFiles, memoryMatches, intent, qualityMeta, fileBoosts);
       } catch (retryError: any) {
         throw new Error(`[Orchestrator] Knowledge Fabric unavailable: ${retryError?.message ?? retryError}`);
       }
@@ -1144,6 +1150,8 @@ export class OrchestratorEngine {
     candidateFiles: string[],
     memoryMatches: string[],
     intent: AutonomyIntent,
+    memoryMatchesFull?: Array<{ content: string; confidence: number; entropy: number; trust: number }>,
+    fileBoosts?: Map<string, number>,
   ): KnowledgeFabricBundle {
     const bundle = this.knowledgeFabric.compose({
       runtimeId: this.runtime.getRuntimeId(),
@@ -1151,6 +1159,8 @@ export class OrchestratorEngine {
       task,
       candidateFiles,
       memoryMatches,
+      memoryMatchesWithQuality: memoryMatchesFull,
+      fileBoosts,
       runtimeSnapshot: this.runtime.getUsageSnapshot() as RuntimeRegistrySnapshot,
       intent,
     });
@@ -1207,6 +1217,24 @@ export class OrchestratorEngine {
 
   private sessionStatePath(): string {
     return path.join(this.sessionsDir, `${this.runtime.getRuntimeId()}.json`);
+  }
+
+  /** Remove autonomy-session files older than 14 days */
+  private pruneStaleAutonomySessions(): void {
+    try {
+      const TTL_MS = 14 * 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      for (const entry of fs.readdirSync(this.sessionsDir)) {
+        if (!entry.endsWith('.json')) continue;
+        const filePath = path.join(this.sessionsDir, entry);
+        try {
+          const stat = fs.statSync(filePath);
+          if (now - stat.mtimeMs > TTL_MS) {
+            fs.unlinkSync(filePath);
+          }
+        } catch { /* best-effort */ }
+      }
+    } catch { /* best-effort */ }
   }
 
   private resolvePrimaryClient(): RuntimePrimaryClientSnapshot | undefined {
@@ -1465,12 +1493,19 @@ export class OrchestratorEngine {
     return { taskType, secondaryType, intentScores, riskClass, complexity };
   }
 
-  private discoverCandidateFiles(task: string): string[] {
+  private discoverCandidateFiles(task: string, dna?: SessionDNA | null): string[] {
     const keywords = extractKeywords(task);
+    // Build a set of files from previous session DNA for boosting
+    const dnaFiles = new Set<string>();
+    if (dna) {
+      for (const f of [...(dna.filesAccessed ?? []), ...(dna.filesModified ?? [])]) {
+        dnaFiles.add(f);
+      }
+    }
     const candidates = this.walkRepo(this.repoRoot)
       .map((filePath) => ({
         filePath,
-        score: scorePath(filePath, keywords),
+        score: scorePath(filePath, keywords) + (dnaFiles.has(filePath) ? 0.3 : 0),
       }))
       .filter((entry) => entry.score > 0)
       .sort((left, right) => right.score - left.score || left.filePath.localeCompare(right.filePath))
@@ -1832,22 +1867,37 @@ export class OrchestratorEngine {
   }
 
   private scanCatalogHealth(selections: ResolvedSelections): RuntimeCatalogHealthSnapshot {
-    const scanLocalDirectory = (relativeDir: string) => {
-      const localDirectory = path.join(this.repoRoot, relativeDir);
-      if (!fs.existsSync(localDirectory)) {
-        return { localDirectory, readable: false, files: 0, issues: [`Missing ${relativeDir}`] };
-      }
-      try {
-        const files = fs.readdirSync(localDirectory).filter((entry) => !entry.startsWith('.')).length;
-        return { localDirectory, readable: true, files, issues: [] as string[] };
-      } catch {
-        return { localDirectory, readable: false, files: 0, issues: [`Unreadable ${relativeDir}`] };
-      }
+    const scanLocalDirectories = (relativeDirs: string[]) => {
+      const scanned = relativeDirs.map((relativeDir) => {
+        const localDirectory = path.join(this.repoRoot, relativeDir);
+        if (!fs.existsSync(localDirectory)) {
+          return { relativeDir, localDirectory, readable: false, files: 0, issues: [] as string[] };
+        }
+        try {
+          const files = fs.readdirSync(localDirectory).filter((entry) => !entry.startsWith('.')).length;
+          return { relativeDir, localDirectory, readable: true, files, issues: [] as string[] };
+        } catch {
+          return { relativeDir, localDirectory, readable: false, files: 0, issues: [`Unreadable ${relativeDir}`] };
+        }
+      });
+      const readable = scanned.some((entry) => entry.readable);
+      const existing = scanned.filter((entry) => fs.existsSync(entry.localDirectory));
+      return {
+        localDirectory: existing.find((entry) => entry.relativeDir.startsWith('.agents/'))?.localDirectory
+          ?? existing[0]?.localDirectory
+          ?? scanned[0]?.localDirectory,
+        localDirectories: scanned.map((entry) => entry.localDirectory),
+        readable,
+        files: scanned.reduce((sum, entry) => sum + entry.files, 0),
+        issues: readable
+          ? scanned.flatMap((entry) => entry.issues)
+          : [`Missing ${relativeDirs.join(' or ')}`],
+      };
     };
-    const skillsDir = scanLocalDirectory('.agent/skills');
-    const workflowsDir = scanLocalDirectory('.agent/workflows');
-    const hooksDir = scanLocalDirectory('.agent/hooks');
-    const automationsDir = scanLocalDirectory('.agent/automations');
+    const skillsDir = scanLocalDirectories(['.agent/skills', '.agents/skills']);
+    const workflowsDir = scanLocalDirectories(['.agent/workflows', '.agents/workflows']);
+    const hooksDir = scanLocalDirectories(['.agent/hooks']);
+    const automationsDir = scanLocalDirectories(['.agent/automations']);
     const specialistsAvailable = this.runtime.listSpecialists().length;
     const crewsAvailable = this.runtime.listCrews().length;
     const issues = [
@@ -1870,6 +1920,7 @@ export class OrchestratorEngine {
           rejected: Math.max(0, this.runtime.listSkills().length - selections.skills.length),
           readable: skillsDir.readable,
           localDirectory: skillsDir.localDirectory,
+          localDirectories: skillsDir.localDirectories,
           localOverrideFiles: skillsDir.files,
           issues: skillsDir.issues,
         },
@@ -1880,6 +1931,7 @@ export class OrchestratorEngine {
           rejected: Math.max(0, this.runtime.listWorkflows().length - selections.workflows.length),
           readable: workflowsDir.readable,
           localDirectory: workflowsDir.localDirectory,
+          localDirectories: workflowsDir.localDirectories,
           localOverrideFiles: workflowsDir.files,
           issues: workflowsDir.issues,
         },
@@ -1890,6 +1942,7 @@ export class OrchestratorEngine {
           rejected: Math.max(0, this.runtime.listHooks().length - selections.hooks.length),
           readable: hooksDir.readable,
           localDirectory: hooksDir.localDirectory,
+          localDirectories: hooksDir.localDirectories,
           localOverrideFiles: hooksDir.files,
           issues: hooksDir.issues,
         },
@@ -1900,6 +1953,7 @@ export class OrchestratorEngine {
           rejected: Math.max(0, this.runtime.listAutomations().length - selections.automations.length),
           readable: automationsDir.readable,
           localDirectory: automationsDir.localDirectory,
+          localDirectories: automationsDir.localDirectories,
           localOverrideFiles: automationsDir.files,
           issues: automationsDir.issues,
         },

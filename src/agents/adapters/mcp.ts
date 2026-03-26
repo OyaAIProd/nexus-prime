@@ -1903,6 +1903,8 @@ export class MCPAdapter implements Adapter {
                         text: [
                             'Memory export ready.',
                             formatBullets([
+                                `Bundle version: ${Number(result?.version || 0)}`,
+                                `Schema: ${result?.schemaVersion || 'legacy'}`,
                                 `Session: ${result?.sessionId || 'n/a'}`,
                                 `Items: ${Number(result?.items?.length || 0)}`,
                                 `Generated: ${result?.exportedAt ? new Date(result.exportedAt).toISOString() : 'n/a'}`,
@@ -1948,6 +1950,9 @@ export class MCPAdapter implements Adapter {
                             'Memory import complete.',
                             formatBullets([
                                 `Imported: ${Number(result?.imported || 0)}`,
+                                `Added: ${Number((result as any)?.added || 0)}`,
+                                `Updated: ${Number((result as any)?.updated || 0)}`,
+                                `Skipped: ${Number((result as any)?.skipped || 0)}`,
                                 `Duplicates skipped: ${Number(result?.duplicates || 0)}`,
                                 `Quarantined on import: ${Number(result?.quarantined || 0)}`,
                             ]),
@@ -1997,12 +2002,20 @@ export class MCPAdapter implements Adapter {
                         `Success: ${result.success}`,
                         `Items: ${result.itemCount}`,
                         result.path ? `Path: ${result.path}` : '',
+                        result.manifestPath ? `Manifest: ${result.manifestPath}` : '',
+                        result.chunkCount ? `Chunks: ${result.chunkCount}` : '',
                     ]);
                 } else if (action === 'syncFrom') {
                     const result = bridge.syncFrom(sourceDir || bridge.getBridgeDir());
                     detail = formatBullets([
                         `Success: ${result.success}`,
-                        `Items: ${result.itemCount}`,
+                        `Imported: ${result.imported}`,
+                        `Added: ${result.added}`,
+                        `Updated: ${result.updated}`,
+                        `Skipped: ${result.skipped}`,
+                        `Quarantined: ${result.quarantined}`,
+                        result.path ? `Path: ${result.path}` : '',
+                        result.manifestPath ? `Manifest: ${result.manifestPath}` : '',
                         result.errors?.length ? `Errors: ${result.errors.join(', ')}` : '',
                     ]);
                 } else {
@@ -2011,6 +2024,11 @@ export class MCPAdapter implements Adapter {
                         `Last sync: ${result.lastSync ? new Date(result.lastSync).toISOString() : 'never'}`,
                         `Direction: ${result.lastDirection || 'none'}`,
                         `Items: ${result.lastItemCount}`,
+                        `Added: ${result.lastAdded}`,
+                        `Updated: ${result.lastUpdated}`,
+                        `Skipped: ${result.lastSkipped}`,
+                        `Quarantined: ${result.lastQuarantined}`,
+                        result.manifestPath ? `Manifest: ${result.manifestPath}` : '',
                     ]);
                 }
 

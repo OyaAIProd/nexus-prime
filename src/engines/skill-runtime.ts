@@ -17,56 +17,21 @@ import {
 } from './runtime-assets.js';
 import { createEmbedder, type Embedder } from './embedder.js';
 import { getSharedNgramIndex, type NgramIndex } from './ngram-index.js';
-
-function tokenize(text: string): Set<string> {
-    return new Set(
-        text.toLowerCase()
-            .replace(/[^a-z0-9\s]/g, ' ')
-            .split(/\s+/)
-            .filter((word) => word.length > 2)
-    );
-}
-
-function jaccardSimilarity(setA: Set<string>, setB: Set<string>): number {
-    if (setA.size === 0 || setB.size === 0) return 0;
-    const intersection = new Set([...setA].filter((x) => setB.has(x)));
-    const union = new Set([...setA, ...setB]);
-    return intersection.size / union.size;
-}
-
-function computeSkillRelevance(goal: string, artifact: { name: string; instructions?: string; domain?: string }): number {
-    const goalTokens = tokenize(goal);
-    const nameTokens = tokenize(artifact.name);
-    const instructionTokens = tokenize(artifact.instructions || '');
-    const domainTokens = artifact.domain ? tokenize(artifact.domain) : new Set<string>();
-    
-    const nameScore = jaccardSimilarity(goalTokens, nameTokens);
-    const instructionScore = jaccardSimilarity(goalTokens, instructionTokens);
-    const domainScore = jaccardSimilarity(goalTokens, domainTokens);
-    
-    // Substring boost: if any goal token appears as a substring of the skill name or domain, add +0.2
-    const nameLower = artifact.name.toLowerCase();
-    const domainLower = (artifact.domain || '').toLowerCase();
-    let substringBoost = 0;
-    for (const token of goalTokens) {
-        if (nameLower.includes(token) || domainLower.includes(token)) {
-            substringBoost = 0.2;
-            break;
-        }
-    }
-
-    return Math.max(nameScore, instructionScore * 0.7, domainScore * 0.5) + substringBoost;
-}
+import { computeSemanticScore } from './semantic-ranking.js';
 
 async function computeSemanticRelevance(goal: string, goalVector: number[], artifact: SkillArtifact, embedder: Embedder): Promise<number> {
     const artifactText = `${artifact.name} ${artifact.domain || ''} ${artifact.instructions || ''}`;
     if (!artifact.embedding) {
         artifact.embedding = await embedder.embed(artifactText);
     }
-    const semanticScore = embedder.cosineSimilarity(goalVector, artifact.embedding);
-    const lexicalScore = computeSkillRelevance(goal, artifact);
-    
-    return Math.max(semanticScore, lexicalScore);
+    return computeSemanticScore({
+        query: goal,
+        queryVector: goalVector,
+        candidateText: artifactText,
+        candidateVector: artifact.embedding,
+        lexicalTexts: [artifact.name, artifact.domain ?? '', artifact.instructions ?? ''],
+        embedder,
+    }).final;
 }
 
 export type { SkillCheckpoint, SkillRiskClass, SkillScope, RuntimeBinding as SkillBinding, RuntimeBindingType as SkillBindingType };
@@ -527,31 +492,36 @@ export class SkillRuntime {
     }
 
     private loadLocalOverrides(): void {
-        const skillDir = path.join(this.workspaceRoot, '.agent', 'skills');
-        for (const entry of readMarkdownArtifacts(skillDir)) {
-            const frontmatter = entry.parsed.frontmatter;
-            const name = String(frontmatter.name ?? path.basename(entry.path, '.md'));
-            this.stage({
-                skillId: `skill_local_${slugify(name)}`,
-                version: 1,
-                name,
-                domain: String(frontmatter.domain ?? detectDomains(name)[0] ?? ''),
-                instructions: entry.parsed.body,
-                toolBindings: [],
-                riskClass: normalizeRiskClass(frontmatter.riskClass),
-                scope: 'base',
-                provenance: `local:${entry.path}`,
-                validationStatus: 'validated',
-                rolloutStatus: 'promoted',
-                effectiveness: {
-                    successes: 0,
-                    failures: 0,
-                    tokenDelta: 0,
-                    retriesAvoided: 0,
-                    verificationPasses: 0,
-                },
-                deploymentPoints: [],
-            });
+        const skillDirs = [
+            path.join(this.workspaceRoot, '.agent', 'skills'),
+            path.join(this.workspaceRoot, '.agents', 'skills'),
+        ];
+        for (const skillDir of skillDirs) {
+            for (const entry of readMarkdownArtifacts(skillDir)) {
+                const frontmatter = entry.parsed.frontmatter;
+                const name = String(frontmatter.name ?? path.basename(entry.path, '.md'));
+                this.stage({
+                    skillId: `skill_local_${slugify(name)}`,
+                    version: 1,
+                    name,
+                    domain: String(frontmatter.domain ?? detectDomains(name)[0] ?? ''),
+                    instructions: entry.parsed.body,
+                    toolBindings: [],
+                    riskClass: normalizeRiskClass(frontmatter.riskClass),
+                    scope: 'base',
+                    provenance: `local:${entry.path}`,
+                    validationStatus: 'validated',
+                    rolloutStatus: 'promoted',
+                    effectiveness: {
+                        successes: 0,
+                        failures: 0,
+                        tokenDelta: 0,
+                        retriesAvoided: 0,
+                        verificationPasses: 0,
+                    },
+                    deploymentPoints: [],
+                });
+            }
         }
     }
 
