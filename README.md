@@ -654,6 +654,21 @@ Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 
 ## 📜 Release History
 
 <details open>
+<summary><b>v4.5.0</b> · 2026-03-27 · Neural Ascension — Auto-optimization, memory injection, and sci-fi command center</summary>
+
+- **Auto token optimization**: Bootstrap auto-applies token planning when 5+ candidate files detected. Quality floor (0.7) ensures task-referenced and recently modified files never get skipped. Zero manual `nexus_optimize_tokens` calls needed.
+- **Seamless memory injection**: Every MCP tool response auto-recalls top 3 relevant memories (30s rate limit, 0.4 score floor, SHA1-cached). Recursion-safe — skips memory tools.
+- **Auto ghost-pass**: Refactoring tasks with 3+ files or 3+ phases auto-detect risk areas before execution begins.
+- **MCP category visuals**: 5 distinct sci-fi themes (memory/orchestration/execution/intelligence/system) with per-category ANSI borders, colors, and thematic labels.
+- **Dashboard noise reduction**: Server-side rate limiting for 5 event types (2-10s windows), noise suppression for auto/empty signals, System filter button, client-side type+summary dedup.
+- **Cross-project memory**: New APIs for cross-project browsing and project index. Dashboard project selector, tag-based search with fuzzy toggle, cross-project memory lane.
+- **Animated installation**: 10-frame braille spinner, compact logo for narrow terminals, progress bars, phase headers, build metadata in success message.
+- **Lifecycle policy substrate**: Feature flags with env overrides for all new auto-behaviors. Fail-open defaults with decision metrics.
+
+Full history: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
 <summary><b>v4.4.0</b> · 2026-03-27 · Lifecycle policy automation, cross-project memory APIs, and signal-aware dashboard UX</summary>
 
 - **Lifecycle policy substrate**: Added policy-gated auto behaviors with fail-open decisions, feature kill switches, and decision metrics for bootstrap token planning, memory-context injection, MCP visuals, and ghost-pass automation.
