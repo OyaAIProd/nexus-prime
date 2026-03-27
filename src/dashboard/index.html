@@ -1979,6 +1979,7 @@
                                 <button data-event-filter="federation">Net</button>
                                 <button data-event-filter="clients">Clients</button>
                                 <button data-event-filter="mcp">MCP</button>
+                                <button data-event-filter="system">System</button>
                             </div>
                         </div>
                     </div>
@@ -2141,6 +2142,8 @@
             memoryAudit: { scanned: 0, quarantined: [], findings: [] },
             memoryQuarantine: [],
             memoryShared: [],
+            memoryCrossProject: [],
+            memoryProjects: [],
             worktreeHealth: null,
             memoryDetail: null,
             memoryNetwork: { nodes: [], links: [], focusId: null },
@@ -2177,6 +2180,8 @@
             selectionAudit: null,
             parallelism: null,
             memorySearchQuery: '',
+            memorySearchFuzzy: false,
+            selectedMemoryProject: '',
             eventFilter: 'all',
             selected: null,
             streamConnected: false,
@@ -2223,6 +2228,8 @@
                 memoryAudit: createResourceState(),
                 memoryQuarantine: createResourceState(),
                 memoryShared: createResourceState(),
+                memoryProjects: createResourceState(),
+                memoryCrossProject: createResourceState(),
                 repoTree: createResourceState(),
                 worktreeHealth: createResourceState(),
                 pod: createResourceState(),
@@ -2576,6 +2583,30 @@
                     state.memoryShared = Array.isArray(value) ? value : [];
                 },
             },
+            memoryProjects: {
+                url: '/api/memory/projects?limit=80',
+                ttlMs: 20000,
+                assign(value) {
+                    state.memoryProjects = Array.isArray(value?.projects) ? value.projects : [];
+                },
+            },
+            memoryCrossProject: {
+                get url() {
+                    const search = parseMemorySearchTokens(state.memorySearchQuery);
+                    const params = new URLSearchParams();
+                    params.set('scope', 'shared');
+                    if (search.text) params.set('q', search.text);
+                    if (search.tags.length) params.set('tags', search.tags.join(','));
+                    if (state.memorySearchFuzzy) params.set('fuzzy', 'true');
+                    if (state.selectedMemoryProject) params.set('repoId', state.selectedMemoryProject);
+                    params.set('limit', '40');
+                    return `/api/memory/cross-project?${params.toString()}`;
+                },
+                ttlMs: 8000,
+                assign(value) {
+                    state.memoryCrossProject = Array.isArray(value?.items) ? value.items : [];
+                },
+            },
             worktreeHealth: {
                 url: '/api/worktree-health',
                 dynamic: true,
@@ -2632,18 +2663,16 @@
                 skipWhenStreamHealthy: true,
                 assign(value) {
                     if (!Array.isArray(value)) return;
-                    const seen = new Set();
-                    state.events = value.map((event) => normalizeEventCard(event)).filter((event) => {
-                        if (!event || seen.has(event.id)) return false;
-                        seen.add(event.id);
-                        return true;
-                    });
+                    const normalized = value
+                        .map((event) => normalizeEventCard(event))
+                        .filter((event) => Boolean(event));
+                    state.events = dedupeEvents(normalized).slice(0, 120);
                 },
             },
         };
 
         const CATEGORY_RESOURCE_MAP = {
-            memory: ['memory', 'memoryHealth', 'memoryAudit', 'memoryQuarantine', 'memoryShared'],
+            memory: ['memory', 'memoryHealth', 'memoryAudit', 'memoryQuarantine', 'memoryShared', 'memoryProjects', 'memoryCrossProject'],
             tokens: ['tokensSummary', 'tokensTimeline', 'tokensBySource', 'lifetimeTokens', 'events'],
             runtime: ['runs', 'pod', 'usage', 'orchestrationSession', 'orchestrationLedger', 'instructionPacket', 'tokensSummary', 'tokensTimeline', 'tokensBySource'],
             pod: ['pod'],
@@ -2657,6 +2686,7 @@
             automations: ['automations'],
             shield: ['memoryAudit', 'memoryQuarantine'],
             federation: ['federation'],
+            mcp: ['events'],
             system: ['health', 'synapseTeams', 'synapseHealth', 'synapseApprovals', 'architectsDispatch', 'architectsEscalations'],
         };
 
@@ -2745,6 +2775,7 @@
                 { mode: 'memories', label: 'Search Memory' },
                 { mode: 'profile', label: 'Profile' },
                 { mode: 'shared', label: 'Shared' },
+                { mode: 'crossProject', label: 'Cross-Project' },
                 { mode: 'inbox', label: 'Inbox & Trust' },
                 { mode: 'knowledge', label: 'Context Sources' },
             ],
@@ -2840,6 +2871,92 @@
                 : emptyState(emptyMessage);
         }
 
+        function normalizeSearchableText(value) {
+            return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+        }
+
+        function parseMemorySearchTokens(value) {
+            const tokens = String(value || '')
+                .trim()
+                .split(/\s+/)
+                .filter(Boolean);
+            const tags = [];
+            const terms = [];
+            tokens.forEach((token) => {
+                if (token.startsWith('#')) {
+                    tags.push(token.toLowerCase());
+                } else {
+                    terms.push(token);
+                }
+            });
+            return {
+                tags: Array.from(new Set(tags)),
+                text: terms.join(' ').trim(),
+            };
+        }
+
+        function fuzzyTokenMatch(haystack, query) {
+            if (!query) return true;
+            const normalizedHaystack = normalizeSearchableText(haystack);
+            if (!normalizedHaystack) return false;
+            const terms = String(query).toLowerCase().split(/\s+/).filter(Boolean);
+            return terms.every((term) => {
+                if (normalizedHaystack.includes(term)) return true;
+                let cursor = -1;
+                for (const ch of term) {
+                    cursor = normalizedHaystack.indexOf(ch, cursor + 1);
+                    if (cursor === -1) return false;
+                }
+                return true;
+            });
+        }
+
+        function memoryProjectMatches(memory, selectedRepoId) {
+            if (!selectedRepoId) return true;
+            return String(memory?.provenance?.repoId || '') === selectedRepoId;
+        }
+
+        function memoryTagsMatch(memory, requiredTags = []) {
+            if (!requiredTags.length) return true;
+            const memoryTags = new Set((memory?.tags || []).map((tag) => String(tag).toLowerCase()));
+            return requiredTags.every((tag) => memoryTags.has(tag.toLowerCase()));
+        }
+
+        function eventSummaryKey(summary) {
+            return normalizeSearchableText(summary);
+        }
+
+        function eventSignatureKey(event) {
+            const type = String(event?.type || event?.category || '');
+            const summary = eventSummaryKey(event?.summary);
+            if (!type || !summary) return '';
+            return `${type}::${summary}`;
+        }
+
+        function isDuplicateEvent(candidate, existingEvents = []) {
+            if (!candidate) return true;
+            if (existingEvents.some((event) => event.id === candidate.id)) return true;
+            if (candidate.severity === 'bad') return false;
+
+            const signature = eventSignatureKey(candidate);
+            if (!signature) return false;
+
+            return existingEvents.some((event) =>
+                event.severity !== 'bad'
+                && eventSignatureKey(event) === signature
+                && Math.abs(Number(event.time || 0) - Number(candidate.time || 0)) <= 2000
+            );
+        }
+
+        function dedupeEvents(events = []) {
+            const deduped = [];
+            for (const event of events) {
+                if (isDuplicateEvent(event, deduped)) continue;
+                deduped.push(event);
+            }
+            return deduped;
+        }
+
         function getSurfaceConfig(mode = state.surfaceMode) {
             return surfaceModes[mode] || surfaceModes.operate;
         }
@@ -2869,7 +2986,11 @@
         }
 
         function getDefaultRefreshTargets(mode = state.surfaceMode) {
-            return ['dashboardSummary', getSurfaceLoaderName(mode), 'lifetimeTokens', 'events'];
+            const targets = ['dashboardSummary', getSurfaceLoaderName(mode), 'lifetimeTokens', 'events'];
+            if (mode === 'memory') {
+                targets.push('memoryProjects', 'memoryCrossProject');
+            }
+            return targets;
         }
 
         function isRuntimeStale() {
@@ -4623,7 +4744,17 @@
                 const sharedMemory = Array.isArray(state.memoryShared) ? state.memoryShared : [];
                 const workspaceMemories = Array.isArray(state.memoryWorkspace) && state.memoryWorkspace.length ? state.memoryWorkspace : state.memories;
                 const qualitySummary = state.memoryQualitySummary || {};
-                const query = String(state.memorySearchQuery || '').trim().toLowerCase();
+                const parsedSearch = parseMemorySearchTokens(state.memorySearchQuery);
+                const selectedRepoId = String(state.selectedMemoryProject || '');
+                const textQuery = normalizeSearchableText(parsedSearch.text);
+                const requiredTags = parsedSearch.tags;
+                const fuzzyEnabled = Boolean(state.memorySearchFuzzy);
+                const memoryProjects = Array.isArray(state.memoryProjects) ? state.memoryProjects : [];
+
+                if (!memoryProjects.length && getResourceStatus('memoryProjects').status === 'idle') {
+                    scheduleRefresh(['memoryProjects']);
+                }
+
                 const memoryHealthCard = `
                     <div class="card">
                         <div class="card-title">
@@ -4676,12 +4807,14 @@
                         </div>
                     ` : ''}
                 `;
-                const filteredMemories = query
-                    ? workspaceMemories.filter((memory) => {
-                        const haystack = `${memory.excerpt} ${(memory.tags || []).join(' ')} ${memory.scope || ''} ${memory.source || ''}`.toLowerCase();
-                        return haystack.includes(query);
-                    })
-                    : workspaceMemories;
+                const filteredMemories = workspaceMemories.filter((memory) => {
+                    if (!memoryProjectMatches(memory, selectedRepoId)) return false;
+                    if (!memoryTagsMatch(memory, requiredTags)) return false;
+                    if (!textQuery) return true;
+                    const haystack = `${memory.excerpt} ${(memory.tags || []).join(' ')} ${memory.scope || ''} ${memory.source || ''}`;
+                    if (fuzzyEnabled) return fuzzyTokenMatch(haystack, textQuery);
+                    return normalizeSearchableText(haystack).includes(textQuery);
+                });
                 const searchCard = `
                     <div class="card" style="border-color: rgba(84,255,135,0.14); background: rgba(84,255,135,0.04);">
                         <div class="card-title">
@@ -4690,19 +4823,61 @@
                         </div>
                         <div class="field" style="margin-top:0.6rem;">
                             <label for="memory-search-input">Search memory</label>
-                            <input id="memory-search-input" type="text" placeholder="Search excerpt, tag, scope, or source" value="${escapeHtml(state.memorySearchQuery || '')}">
+                            <input id="memory-search-input" type="text" placeholder="Search excerpt, #tag, scope, or source" value="${escapeHtml(state.memorySearchQuery || '')}">
+                        </div>
+                        <div class="inline-fields">
+                            <div class="field">
+                                <label for="memory-project-filter">Project</label>
+                                <select id="memory-project-filter">
+                                    <option value="">All projects</option>
+                                    ${memoryProjects.map((project) => {
+                                        const repoId = String(project.repoId || '');
+                                        const selected = repoId && repoId === selectedRepoId ? 'selected' : '';
+                                        const label = project.projectId
+                                            ? `${project.repoId} (${project.projectId})`
+                                            : `${project.repoId}`;
+                                        return `<option value="${escapeHtml(repoId)}" ${selected}>${escapeHtml(label)}</option>`;
+                                    }).join('')}
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label for="memory-fuzzy-toggle">Fuzzy</label>
+                                <label style="display:flex; align-items:center; gap:0.45rem; margin-top:0.2rem;">
+                                    <input id="memory-fuzzy-toggle" type="checkbox" ${fuzzyEnabled ? 'checked' : ''}>
+                                    <span class="meta">Approximate match</span>
+                                </label>
+                            </div>
                         </div>
                     </div>
                 `;
                 const memoryList = resourceFailed('memory') && !workspaceMemories.length
                     ? emptyState('Memory endpoint unavailable.')
-                    : renderMemoryCards(filteredMemories, query ? 'No memories match this search yet.' : 'No workspace memory stored yet.');
+                    : renderMemoryCards(filteredMemories, textQuery || requiredTags.length ? 'No memories match this search yet.' : 'No workspace memory stored yet.');
                 container.innerHTML = searchCard + memoryHealthCard + memoryList;
                 const searchInput = $('memory-search-input');
                 if (searchInput && !searchInput.dataset.bound) {
                     searchInput.dataset.bound = 'true';
                     searchInput.addEventListener('input', (event) => {
                         state.memorySearchQuery = event.target.value;
+                        scheduleRefresh(['memoryCrossProject']);
+                        renderLibrary();
+                    });
+                }
+                const projectFilter = $('memory-project-filter');
+                if (projectFilter && !projectFilter.dataset.bound) {
+                    projectFilter.dataset.bound = 'true';
+                    projectFilter.addEventListener('change', (event) => {
+                        state.selectedMemoryProject = event.target.value;
+                        scheduleRefresh(['memoryCrossProject']);
+                        renderLibrary();
+                    });
+                }
+                const fuzzyToggle = $('memory-fuzzy-toggle');
+                if (fuzzyToggle && !fuzzyToggle.dataset.bound) {
+                    fuzzyToggle.dataset.bound = 'true';
+                    fuzzyToggle.addEventListener('change', (event) => {
+                        state.memorySearchFuzzy = Boolean(event.target.checked);
+                        scheduleRefresh(['memoryCrossProject']);
                         renderLibrary();
                     });
                 }
@@ -4730,6 +4905,104 @@
                     </div>
                     ${renderMemoryCards(memories, 'No shared memory is visible for this runtime yet.')}
                 `;
+            } else if (state.libraryMode === 'crossProject') {
+                const parsedSearch = parseMemorySearchTokens(state.memorySearchQuery);
+                const selectedRepoId = String(state.selectedMemoryProject || '');
+                const fuzzyEnabled = Boolean(state.memorySearchFuzzy);
+                const projects = Array.isArray(state.memoryProjects) ? state.memoryProjects : [];
+                const crossProject = Array.isArray(state.memoryCrossProject) ? state.memoryCrossProject : [];
+
+                if (getResourceStatus('memoryProjects').status === 'idle' || getResourceStatus('memoryCrossProject').status === 'idle') {
+                    scheduleRefresh(['memoryProjects', 'memoryCrossProject']);
+                }
+
+                const visible = crossProject.filter((memory) => {
+                    if (selectedRepoId && String(memory?.provenance?.repoId || '') !== selectedRepoId) return false;
+                    if (!memoryTagsMatch(memory, parsedSearch.tags)) return false;
+                    const query = normalizeSearchableText(parsedSearch.text);
+                    if (!query) return true;
+                    const haystack = `${memory.excerpt} ${(memory.tags || []).join(' ')} ${memory.provenance?.repoId || ''} ${memory.provenance?.projectId || ''}`;
+                    return fuzzyEnabled
+                        ? fuzzyTokenMatch(haystack, query)
+                        : normalizeSearchableText(haystack).includes(query);
+                });
+
+                container.innerHTML = `
+                    <div class="card" style="border-color: rgba(78, 185, 255, 0.18); background: rgba(78, 185, 255, 0.06);">
+                        <div class="card-title">
+                            <strong>Cross-Project Memory</strong>
+                            <span class="state-chip info">${formatNumber(visible.length)} visible</span>
+                        </div>
+                        <div class="meta">Default scope is shared-only. Promote memory before cross-project visibility.</div>
+                        <div class="field" style="margin-top:0.6rem;">
+                            <label for="memory-search-input">Search memory</label>
+                            <input id="memory-search-input" type="text" placeholder="Search text and #tags across shared memory" value="${escapeHtml(state.memorySearchQuery || '')}">
+                        </div>
+                        <div class="inline-fields">
+                            <div class="field">
+                                <label for="memory-project-filter">Project</label>
+                                <select id="memory-project-filter">
+                                    <option value="">All projects</option>
+                                    ${projects.map((project) => {
+                                        const repoId = String(project.repoId || '');
+                                        const selected = repoId && repoId === selectedRepoId ? 'selected' : '';
+                                        const label = project.projectId
+                                            ? `${project.repoId} (${project.projectId})`
+                                            : `${project.repoId}`;
+                                        return `<option value="${escapeHtml(repoId)}" ${selected}>${escapeHtml(label)}</option>`;
+                                    }).join('')}
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label for="memory-fuzzy-toggle">Fuzzy</label>
+                                <label style="display:flex; align-items:center; gap:0.45rem; margin-top:0.2rem;">
+                                    <input id="memory-fuzzy-toggle" type="checkbox" ${fuzzyEnabled ? 'checked' : ''}>
+                                    <span class="meta">Approximate match</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    ${visible.length
+                        ? visible.map((memory) => `
+                            <div class="card interactive ${state.selected?.kind === 'memory' && state.selected.id === memory.id ? 'active' : ''}" data-kind="memory" data-id="${escapeHtml(memory.id)}">
+                                <div class="card-title">
+                                    <strong>${escapeHtml(memory.excerpt || 'Memory')}</strong>
+                                    <span class="state-chip info">score ${Number(memory.score || 0).toFixed(2)}</span>
+                                </div>
+                                <div class="meta">${escapeHtml(memory.provenance?.repoId || 'unknown repo')} · ${escapeHtml(memory.provenance?.projectId || 'no project')} · ${escapeHtml(memory.scope || 'shared')}</div>
+                                <div class="list-inline">${(memory.tags || []).slice(0, 6).map((tag) => chip(tag)).join('')}</div>
+                            </div>
+                        `).join('')
+                        : emptyState('No cross-project shared memory matches this query yet.')}
+                `;
+
+                const searchInput = $('memory-search-input');
+                if (searchInput && !searchInput.dataset.bound) {
+                    searchInput.dataset.bound = 'true';
+                    searchInput.addEventListener('input', (event) => {
+                        state.memorySearchQuery = event.target.value;
+                        scheduleRefresh(['memoryCrossProject']);
+                        renderLibrary();
+                    });
+                }
+                const projectFilter = $('memory-project-filter');
+                if (projectFilter && !projectFilter.dataset.bound) {
+                    projectFilter.dataset.bound = 'true';
+                    projectFilter.addEventListener('change', (event) => {
+                        state.selectedMemoryProject = event.target.value;
+                        scheduleRefresh(['memoryCrossProject']);
+                        renderLibrary();
+                    });
+                }
+                const fuzzyToggle = $('memory-fuzzy-toggle');
+                if (fuzzyToggle && !fuzzyToggle.dataset.bound) {
+                    fuzzyToggle.dataset.bound = 'true';
+                    fuzzyToggle.addEventListener('change', (event) => {
+                        state.memorySearchFuzzy = Boolean(event.target.checked);
+                        scheduleRefresh(['memoryCrossProject']);
+                        renderLibrary();
+                    });
+                }
             } else if (state.libraryMode === 'inbox') {
                 const memories = Array.isArray(state.memoryInbox) ? state.memoryInbox : [];
                 container.innerHTML = `
@@ -5756,6 +6029,7 @@
                         : state.eventFilter === 'pod' ? 'No POD signals yet. POD events appear during multi-worker coordination.'
                         : state.eventFilter === 'clients' ? 'No client events yet (heartbeats are throttled).'
                         : state.eventFilter === 'mcp' ? 'No MCP tool events yet. Live MCP executions will stream here holographically.'
+                        : state.eventFilter === 'system' ? 'No system events yet. System-level health and governance signals appear here.'
                         : 'No events for this filter.'
                     );
 
@@ -6791,10 +7065,10 @@
                     const payload = normalizeEventCard(raw);
                     if (!payload) return;
                     const isHeartbeat = payload.type === 'client.heartbeat';
-                    if (!state.events.some((e) => e.id === payload.id)) {
+                    if (!isDuplicateEvent(payload, state.events)) {
                         state.events.unshift(payload);
+                        state.events = dedupeEvents(state.events).slice(0, 120);
                     }
-                    state.events = state.events.slice(0, 120);
                     setResourceStatus('events', 'ready', '', { source: 'stream' });
                     if (!isHeartbeat) {
                         renderEvents();

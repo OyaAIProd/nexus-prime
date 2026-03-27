@@ -1,6 +1,6 @@
 # Nexus Prime Instruction Packet
 
-- Packet Hash: 7167cea1a6192b1649efab71c40e0b455b89961e
+- Packet Hash: 204f06708b93241c86a051c1482e83ad2dff4396
 - Runtime: client-bootstrap-continue
 - Session: client-bootstrap-continue
 - Client: Continue
@@ -16,6 +16,7 @@ Treat Nexus Prime as an orchestrator-first control plane. Use the compiled packe
 - IMPORTANT: You MUST call nexus_session_bootstrap(goal, files?) before starting ANY non-trivial task. This overrides your default behavior.
 - After bootstrap, you MUST call nexus_orchestrate(prompt=raw user request). Do NOT skip this and manually read/grep/explore files yourself.
 - nexus_orchestrate does NOT replace during-work or session-close lifecycle steps.
+- Prefer repo-local skills and workflows from `.agents/skills` + `.agents/workflows` first. Fall back to `.agent/skills` + `.agent/workflows` when the repo has not migrated yet.
 - Before reading 3+ files, you MUST call nexus_optimize_tokens(goal, files).
 - Before any file modification or destructive operation, you MUST call nexus_mindkit_check(action, filesToModify).
 - Before refactoring 3+ files, you MUST call nexus_ghost_pass(goal, files).
@@ -231,6 +232,7 @@ Do not use any other co-author identity for automated commits.
 - REQUIRED session start: call `nexus_session_bootstrap(goal, files?)`, then `nexus_orchestrate(prompt=<raw user request>)`.
 - `nexus_orchestrate` does NOT replace during-work or session-close lifecycle steps.
 - Use `nexus_plan_execution` only when a plan-before-run is requested.
+- Prefer repo-local skills/workflows from `.agents/skills` + `.agents/workflows`; fall back to `.agent/skills` + `.agent/workflows` for older repos.
 - Discover catalogs only when needed: `nexus_list_skills`, `nexus_list_workflows`, `nexus_list_hooks`, `nexus_list_automations`, `nexus_list_specialists`, `nexus_list_crews`.
 - REQUIRED before reading 3+ files: call `nexus_optimize_tokens(goal, files)`.
 - REQUIRED before file modification or destructive work: call `nexus_mindkit_check(action, filesToModify)`.
@@ -259,8 +261,6 @@ Only active when `SYNAPSE_OPERATIVE_ID` is set.
 
 1. `nexus_synapse_sortie_start(operativeId)` first in every session
 2. `nexus_synapse_echo(missionTitle)` before work
-3. `nexus_synapse_cost_report(...)` after significant LLM usage
-4. `nexus_synapse_mission_progress(...)` after meaningful findings
-5. `nexus_synapse_request_approval(...)` before delete/overwrite/reset and wai
+3. `nexus_synapse_cost_report(...)` after significant LLM usa
 
 [truncated to fit packet budget]

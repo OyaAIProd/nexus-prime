@@ -130,6 +130,7 @@ export interface MemoryRecallFilters {
   includeShared?: boolean;
   includeProfile?: boolean;
   includeHidden?: boolean;
+  minScore?: number;
 }
 
 export interface MemoryRecallMatch {
@@ -141,6 +142,22 @@ export interface MemoryRecallMatch {
   trust: number;
   tier: string;
   priority: number;
+}
+
+export interface MemorySearchHighlight {
+  start: number;
+  end: number;
+}
+
+export interface MemorySearchMatch {
+  id: string;
+  content: string;
+  score: number;
+  tags: string[];
+  scope: MemoryItem['scope'];
+  state: MemoryItem['state'];
+  provenance: MemoryProvenance;
+  highlights: MemorySearchHighlight[];
 }
 
 export interface MemoryContainerSummary {
@@ -1591,7 +1608,11 @@ export class MemoryEngine {
         priority: item.priority,
       };
     });
-    const top = scored.sort((a, b) => b.score - a.score).slice(0, k);
+    const minScore = Number(filters.minScore ?? 0);
+    const top = scored
+      .sort((a, b) => b.score - a.score)
+      .filter((entry) => entry.score >= minScore)
+      .slice(0, k);
     if (top.length > 0) {
       const ids = top.filter(e => e.id).map(e => e.id);
       if (ids.length > 0) this.incrementAccessTxn(ids);
@@ -1608,16 +1629,33 @@ export class MemoryEngine {
     if (candidateFiles.length === 0) return boosts;
 
     const recentMemories = this.db.prepare(`
-      SELECT content FROM memories
+      SELECT content, tags, timestamp FROM memories
       WHERE state = 'active' AND tier IN ('prefrontal', 'hippocampus')
       ORDER BY timestamp DESC LIMIT 50
-    `).all() as Array<{ content: string }>;
+    `).all() as Array<{ content: string; tags: string; timestamp: number }>;
 
-    const contentBlock = recentMemories.map(r => r.content).join('\n').toLowerCase();
     for (const filePath of candidateFiles) {
       const basename = filePath.split('/').pop()?.replace(/\.[^.]+$/, '')?.toLowerCase() ?? '';
-      if (basename.length >= 3 && contentBlock.includes(basename)) {
-        boosts.set(filePath, 0.25);
+      if (basename.length < 3) continue;
+      let score = 0;
+      for (const memory of recentMemories) {
+        const content = String(memory.content || '').toLowerCase();
+        if (!content.includes(basename)) continue;
+        const tags = this.parseRawTags(memory.tags);
+        const isCritical = tags.includes('#critical');
+        const isRecent = Number(memory.timestamp || 0) >= (Date.now() - 60 * 60 * 1000);
+        if (isCritical) {
+          score = Math.max(score, 1.0);
+          continue;
+        }
+        if (isRecent) {
+          score = Math.max(score, 0.75);
+          continue;
+        }
+        score = Math.max(score, 0.25);
+      }
+      if (score > 0) {
+        boosts.set(filePath, score);
       }
     }
     return boosts;
@@ -3362,6 +3400,117 @@ export class MemoryEngine {
       LIMIT ?
     `).all(...tags, limit) as any[];
     return rows.map(row => this.rowToItem(row));
+  }
+
+  /**
+   * Search memories by free text + tags with optional fuzzy matching.
+   * Combines n-gram overlap and vector similarity to rank candidates.
+   */
+  searchByTagsAndContent(
+    query: string,
+    tags: string[] = [],
+    options: {
+      fuzzy?: boolean;
+      scope?: MemoryItem['scope'];
+      limit?: number;
+      fuzzyThreshold?: number;
+    } = {},
+  ): MemorySearchMatch[] {
+    this.expireMemories();
+    const limit = Math.max(1, Number(options.limit ?? 20));
+    const fuzzy = Boolean(options.fuzzy);
+    const normalizedQuery = String(query ?? '').trim();
+    const normalizedTags = dedupeStrings(
+      (Array.isArray(tags) ? tags : [])
+        .map((tag) => String(tag || '').trim())
+        .filter(Boolean)
+        .map((tag) => tag.startsWith('#') ? tag.toLowerCase() : `#${tag.toLowerCase()}`),
+    );
+    const fuzzyThreshold = Number(options.fuzzyThreshold ?? (fuzzy ? 0.22 : 0.48));
+
+    const clauses = ["state = 'active'", '(expires_at IS NULL OR expires_at > ?)'];
+    const params: unknown[] = [Date.now()];
+    if (options.scope) {
+      clauses.push('scope = ?');
+      params.push(options.scope);
+    }
+    if (normalizedTags.length > 0) {
+      const tagPlaceholders = normalizedTags.map(() => '?').join(',');
+      clauses.push(`EXISTS (SELECT 1 FROM json_each(memories.tags) jt WHERE jt.value IN (${tagPlaceholders}))`);
+      params.push(...normalizedTags);
+    }
+
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const candidateLimit = Math.max(limit * 10, 120);
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM memories
+      ${where}
+      ORDER BY priority DESC, timestamp DESC
+      LIMIT ?
+    `).all(...params, candidateLimit) as any[];
+
+    const candidates = rows.map((row) => this.rowToItem(row));
+    if (candidates.length === 0) return [];
+
+    const lowerQuery = normalizedQuery.toLowerCase();
+    const queryTokens = lowerQuery.split(/\s+/).filter(Boolean);
+    const queryVector = lowerQuery ? this.embedder.localEmbed(lowerQuery) : [];
+    const ngramResults = lowerQuery
+      ? this.ngramIndex?.search(lowerQuery, candidateLimit) ?? []
+      : [];
+    const ngramMap = new Map<string, number>(ngramResults.map((entry) => [entry.docId, entry.score]));
+    const queryNgramCount = Math.max(1, lowerQuery.length - 2);
+
+    const scored = candidates.map((item) => {
+      const contentLower = item.content.toLowerCase();
+      const lexicalScore = lowerQuery
+        ? (contentLower.includes(lowerQuery) ? 1 : queryTokens.length === 0 ? 0 : (queryTokens.filter((token) => contentLower.includes(token)).length / queryTokens.length))
+        : 0;
+      const ngramScore = Math.min(1, (ngramMap.get(item.id) ?? 0) / queryNgramCount);
+      const vectorScore = queryVector.length > 0
+        ? (() => {
+            const itemVector = this.embedder.localEmbed(contentLower);
+            const hDist = HyperbolicMath.dist(queryVector, itemVector);
+            return 1 / (1 + hDist);
+          })()
+        : 0;
+      const tagMatches = normalizedTags.filter((tag) => item.tags.includes(tag)).length;
+      const tagScore = normalizedTags.length > 0 ? tagMatches / normalizedTags.length : 0;
+      const score = vectorScore * 0.45 + ngramScore * 0.25 + lexicalScore * 0.15 + item.priority * 0.1 + tagScore * 0.05;
+
+      const includeByText = !lowerQuery
+        || lexicalScore > 0
+        || ngramScore >= fuzzyThreshold
+        || (fuzzy && vectorScore >= Math.max(0.35, fuzzyThreshold));
+      const includeByTags = normalizedTags.length === 0 || tagMatches > 0;
+
+      const highlights: MemorySearchHighlight[] = [];
+      if (lowerQuery) {
+        const idx = contentLower.indexOf(lowerQuery);
+        if (idx >= 0) {
+          highlights.push({ start: idx, end: idx + lowerQuery.length });
+        }
+      }
+
+      return {
+        id: item.id,
+        content: item.content,
+        score,
+        tags: item.tags,
+        scope: item.scope,
+        state: item.state,
+        provenance: item.provenance,
+        highlights,
+        include: includeByText && includeByTags,
+      };
+    });
+
+    return scored
+      .filter((entry) => entry.include)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(({ include, ...rest }) => rest);
   }
 
   close(): void {

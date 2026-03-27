@@ -83,7 +83,7 @@ interface DashboardEventCard {
     source: string;
     time: number;
     severity: 'good' | 'info' | 'warn' | 'bad';
-    category: 'memory' | 'tokens' | 'runtime' | 'pod' | 'skills' | 'workflows' | 'clients' | 'system' | 'hooks' | 'automations' | 'shield' | 'federation';
+    category: 'memory' | 'tokens' | 'runtime' | 'pod' | 'skills' | 'workflows' | 'clients' | 'system' | 'hooks' | 'automations' | 'shield' | 'federation' | 'mcp';
     summary: string;
     payload: unknown;
 }
@@ -145,6 +145,8 @@ export class DashboardServer {
     private endpointCache = new Map<string, CachedResponse<unknown>>();
     private repoTreeGenerator: RepoTreeGenerator;
     private gitUser: string;
+    private broadcastThrottles: Map<string, number> = new Map();
+    private lastSignalByType: Map<string, string> = new Map();
 
     constructor(options: DashboardServerOptions = {}) {
         this.runtimeProvider = options.runtimeProvider;
@@ -596,6 +598,52 @@ export class DashboardServer {
                 projectId,
                 includeHidden,
             }));
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/memory/cross-project') {
+            const scopeRaw = String(url.searchParams.get('scope') || 'shared').toLowerCase();
+            if (!['shared', 'promoted'].includes(scopeRaw)) {
+                this.respondJson(res, {
+                    error: 'invalid-scope',
+                    message: 'scope must be shared or promoted',
+                    allowedScopes: ['shared', 'promoted'],
+                }, 400);
+                return;
+            }
+            const tags = String(url.searchParams.get('tags') || '')
+                .split(',')
+                .map((tag) => tag.trim())
+                .filter(Boolean)
+                .map((tag) => tag.startsWith('#') ? tag : `#${tag}`);
+            const q = String(url.searchParams.get('q') || '').trim();
+            const fuzzy = String(url.searchParams.get('fuzzy') || '').toLowerCase() === 'true';
+            const repoId = String(url.searchParams.get('repoId') || '').trim() || undefined;
+            const limit = Math.max(1, Math.min(parseInt(url.searchParams.get('limit') || '20', 10), 100));
+
+            try {
+                const payload = this.listCrossProjectMemories({
+                    scope: scopeRaw as 'shared' | 'promoted',
+                    tags,
+                    q,
+                    fuzzy,
+                    repoId,
+                    limit,
+                });
+                this.respondJson(res, payload);
+            } catch (error: any) {
+                this.respondJson(res, {
+                    error: 'cross-project-query-failed',
+                    message: error?.message ?? String(error),
+                    retry: 'Retry with a narrower query or lower limit.',
+                }, 503);
+            }
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/memory/projects') {
+            const limit = Math.max(1, Math.min(parseInt(url.searchParams.get('limit') || '60', 10), 200));
+            this.respondJson(res, this.listCrossProjectProjects(limit));
             return;
         }
 
@@ -1137,11 +1185,53 @@ export class DashboardServer {
 
     private lastHeartbeatBroadcast = 0;
 
+    private throttleIntervalFor(type: NexusEventType): number {
+        if (type === 'client.heartbeat') return 10_000;
+        if (type === 'pod.signal') return 5_000;
+        if (type === 'memory.store') return 2_000;
+        if (type === 'memory.recall') return 2_000;
+        if (type === 'nexusnet.sync') return 5_000;
+        return 0;
+    }
+
+    private eventSummaryKey(event: NexusEvent): string {
+        return `${event.type}:${summarizeEvent(event.type, event.data as Record<string, unknown>)}`;
+    }
+
+    private isNoiseEvent(event: NexusEvent): boolean {
+        const payload = (event.data || {}) as Record<string, unknown>;
+        if (event.type === 'memory.store') {
+            const tags = Array.isArray(payload.tags) ? payload.tags.map(String) : [];
+            const priority = Number(payload.priority ?? 0);
+            if (tags.includes('#auto') && priority < 0.3) return true;
+        }
+        if (event.type === 'pod.signal') {
+            const summaryKey = this.eventSummaryKey(event);
+            if (!payload || Object.keys(payload).length === 0) return true;
+            if (!String(payload.content ?? '').trim()) return true;
+            const previous = this.lastSignalByType.get(event.type);
+            this.lastSignalByType.set(event.type, summaryKey);
+            if (previous && previous === summaryKey) return true;
+        }
+        if (event.type === 'nexusnet.sync') {
+            if (Number(payload.newItemsCount ?? 0) === 0) return true;
+        }
+        return false;
+    }
+
     private broadcast(event: NexusEvent): void {
-        if (event.type === 'client.heartbeat') {
-            const now = Date.now();
-            if (now - this.lastHeartbeatBroadcast < 10000) return;
-            this.lastHeartbeatBroadcast = now;
+        const now = Date.now();
+        const throttleInterval = this.throttleIntervalFor(event.type);
+        if (throttleInterval > 0) {
+            const last = this.broadcastThrottles.get(event.type) ?? 0;
+            if (now - last < throttleInterval) {
+                return;
+            }
+            this.broadcastThrottles.set(event.type, now);
+        }
+        if (event.type === 'client.heartbeat') this.lastHeartbeatBroadcast = now;
+        if (this.isNoiseEvent(event) && mapEventSeverity(event.type, event.data as Record<string, unknown>) !== 'bad') {
+            return;
         }
         const normalized = this.normalizeEvent(event);
         const dataStr = `data: ${JSON.stringify(normalized)}\n\n`;
@@ -1359,11 +1449,123 @@ export class DashboardServer {
             .slice(0, limit);
     }
 
+    private listCrossProjectMemories(options: {
+        scope: 'shared' | 'promoted';
+        tags: string[];
+        q: string;
+        fuzzy: boolean;
+        repoId?: string;
+        limit: number;
+    }) {
+        const memory = this.getMemory();
+        if (!memory) {
+            return {
+                scope: options.scope,
+                items: [],
+                governance: {
+                    defaultScope: 'shared',
+                    allowedScopes: ['shared', 'promoted'],
+                    requestedScope: options.scope,
+                    sharedOnlyDefault: true,
+                },
+            };
+        }
+
+        const normalizedTags = options.tags
+            .map((tag) => tag.trim())
+            .filter(Boolean)
+            .map((tag) => tag.startsWith('#') ? tag.toLowerCase() : `#${tag.toLowerCase()}`);
+
+        const rawMatches = (options.q || normalizedTags.length > 0)
+            ? memory.searchByTagsAndContent(options.q, normalizedTags, {
+                fuzzy: options.fuzzy,
+                scope: options.scope,
+                limit: options.limit * 3,
+            })
+            : memory.listSnapshots(options.limit * 3, {
+                scope: options.scope,
+                state: 'active',
+                includeHidden: false,
+            }).map((item: any) => ({
+                id: item.id,
+                content: item.excerpt ?? item.content ?? '',
+                score: Number(item.importanceScore || item.relevanceScore || item.priority || 0),
+                tags: item.tags ?? [],
+                scope: item.scope,
+                state: item.state,
+                provenance: item.provenance ?? {},
+                highlights: [],
+            }));
+
+        const filtered = rawMatches
+            .filter((item: any) => !options.repoId || item.provenance?.repoId === options.repoId)
+            .slice(0, options.limit)
+            .map((item: any) => ({
+                id: item.id,
+                excerpt: String(item.content || '').slice(0, 220),
+                score: Number(item.score || 0),
+                tags: Array.isArray(item.tags) ? item.tags : [],
+                scope: item.scope,
+                state: item.state,
+                provenance: item.provenance,
+                highlights: Array.isArray(item.highlights) ? item.highlights : [],
+                projectKey: `${item.provenance?.repoId || 'unknown'}:${item.provenance?.projectId || 'none'}`,
+            }));
+
+        return {
+            scope: options.scope,
+            query: {
+                q: options.q,
+                tags: normalizedTags,
+                fuzzy: options.fuzzy,
+                repoId: options.repoId ?? null,
+                limit: options.limit,
+            },
+            governance: {
+                defaultScope: 'shared',
+                allowedScopes: ['shared', 'promoted'],
+                requestedScope: options.scope,
+                sharedOnlyDefault: true,
+            },
+            items: filtered,
+        };
+    }
+
+    private listCrossProjectProjects(limit: number) {
+        const memory = this.getMemory();
+        if (!memory) return { generatedAt: Date.now(), projects: [] };
+        const snapshots = memory.listSnapshots(Math.max(limit * 6, 300), {
+            includeHidden: false,
+            state: 'active',
+        });
+
+        const grouped = new Map<string, { repoId: string; projectId: string | null; workspaceId: string | null; count: number }>();
+        for (const item of snapshots) {
+            const repoId = String(item.provenance?.repoId || '');
+            if (!repoId) continue;
+            const projectId = item.provenance?.projectId ? String(item.provenance.projectId) : null;
+            const workspaceId = item.provenance?.workspaceId ? String(item.provenance.workspaceId) : null;
+            const key = `${repoId}:${projectId || ''}:${workspaceId || ''}`;
+            const current = grouped.get(key) ?? { repoId, projectId, workspaceId, count: 0 };
+            current.count += 1;
+            grouped.set(key, current);
+        }
+
+        return {
+            generatedAt: Date.now(),
+            projects: [...grouped.values()]
+                .sort((a, b) => b.count - a.count)
+                .slice(0, limit),
+        };
+    }
+
     private collectTokenOptimization(snapshot: any, usage: any) {
         const tokens = snapshot?.tokens ?? this.getRuntime()?.getTokenTelemetrySummary?.() ?? {};
         const budget = usage?.sourceAwareTokenBudget ?? {};
+        const autoApplied = Boolean(usage?.tokenAutoApplied);
         return {
-            applied: Boolean(usage?.tokenOptimizationApplied || budget?.applied),
+            applied: Boolean(usage?.tokenOptimizationApplied || budget?.applied || autoApplied),
+            autoApplied,
             savedTokens: Number(tokens?.savedTokens || 0),
             forwardedTokens: Number(tokens?.forwardedTokens || 0),
             grossInputTokens: Number(tokens?.grossInputTokens || 0),
@@ -1971,6 +2173,7 @@ export class DashboardServer {
 }
 
 function mapEventCategory(type: NexusEventType): DashboardEventCard['category'] {
+    if (type.startsWith('mcp.')) return 'mcp';
     if (type.startsWith('planner.')) return 'runtime';
     if (type.startsWith('memory.')) return 'memory';
     if (type.startsWith('pod.')) return 'pod';
@@ -1987,6 +2190,8 @@ function mapEventCategory(type: NexusEventType): DashboardEventCard['category'] 
 }
 
 function mapEventSeverity(type: NexusEventType, payload: Record<string, unknown>): DashboardEventCard['severity'] {
+    if (type === 'mcp.call.start') return 'info';
+    if (type === 'mcp.call.complete') return payload.error ? 'bad' : 'good';
     if (type === 'guardrail.check') {
         return payload.passed ? 'good' : 'bad';
     }
@@ -2037,6 +2242,8 @@ function mapEventTitle(type: NexusEventType): string {
         'dashboard.action': 'Dashboard action',
         'nexusnet.publish': 'NexusNet publish',
         'nexusnet.sync': 'NexusNet sync',
+        'mcp.call.start': 'MCP execute',
+        'mcp.call.complete': 'MCP result',
         'entanglement.create': 'Entanglement created',
         'entanglement.collapse': 'Entanglement collapsed',
         'entanglement.correlate': 'Entanglement correlated',
@@ -2050,6 +2257,7 @@ function mapEventTitle(type: NexusEventType): string {
 }
 
 function mapEventSource(type: NexusEventType, payload: Record<string, unknown>): string {
+    if (type.startsWith('mcp.')) return String(payload.toolName ?? payload.serverName ?? 'mcp');
     if (type.startsWith('planner.')) return String(payload.owner ?? payload.runId ?? 'planner');
     if (type.startsWith('client.')) return String(payload.displayName ?? payload.clientId ?? 'client');
     if (type === 'pod.signal') return String(payload.workerId ?? 'pod');
@@ -2079,6 +2287,12 @@ function summarizeEvent(type: NexusEventType, payload: Record<string, unknown>):
             return `${payload.approach ?? 'worker'} started for ${payload.goal ?? 'task'}`;
         case 'phantom.worker.complete':
             return `Confidence ${payload.confidence ?? 0}`;
+        case 'mcp.call.start':
+            return `Tool ${payload.toolName ?? 'unknown'} initialized`;
+        case 'mcp.call.complete':
+            return payload.error
+                ? `Fault: ${payload.error}`
+                : `${payload.durationMs ?? 0}ms [${payload.resultByteSize ?? 0} B]`;
         case 'phantom.merge':
             return `${payload.action ?? 'merge'} · ${payload.winner ?? 'unknown winner'}`;
         case 'client.heartbeat':

@@ -654,6 +654,17 @@ Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 
 ## 📜 Release History
 
 <details open>
+<summary><b>v4.4.0</b> · 2026-03-27 · Lifecycle policy automation, cross-project memory APIs, and signal-aware dashboard UX</summary>
+
+- **Lifecycle policy substrate**: Added policy-gated auto behaviors with fail-open decisions, feature kill switches, and decision metrics for bootstrap token planning, memory-context injection, MCP visuals, and ghost-pass automation.
+- **Memory platform expansion**: Added `/api/memory/cross-project` and `/api/memory/projects`, shared-only governance defaults, and tag+content+fuzzy cross-project query support.
+- **Dashboard signal quality**: Added server-side event throttles/noise suppression, explicit `mcp` + `system` taxonomy alignment, a `System` event filter chip, and dual-key dedup (`id` + `type/summary` in 2s, severity bypass).
+- **CLI/install visual layer**: Expanded ASCII toolkit (compact logo, richer loaders, phase/sub-brand helpers), added TTY-aware install spinner, and surfaced phase/sub-brand rendering in CLI summaries/help.
+
+Full history: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
 <summary><b>v4.3.4</b> · 2026-03-26 · Semantic retrieval hardening, truthful worker budgets, and canonical promoted assets</summary>
 
 - **Semantic retrieval and matching**: RAG chunks now carry embeddings with semantic-first retrieval, Context Assembler relevance uses Embedder-backed scoring, and Synapse asset matching blends semantic and lexical signals instead of pure Jaccard hot paths.

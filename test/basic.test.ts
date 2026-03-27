@@ -514,9 +514,10 @@ async function test() {
       mcpAdapter.telemetry.recordCall();
     }
     const decoratedProbe = mcpAdapter.decorateLifecycleResponse('nexus_memory_stats', lifecycleProbe);
-    assert.ok(decoratedProbe.content[0].text.includes('LIFECYCLE WARNING:'), 'response decoration should prepend lifecycle warnings');
-    assert.ok(decoratedProbe.content[0].text.includes('best-effort file intent from tool arguments'), 'optimize warning should describe the heuristic file-intent scope truthfully');
-    assert.ok(decoratedProbe.content[0].text.includes('nexus_store_memory'), 'store-memory warning should remind the agent to persist findings');
+    const warningText = decoratedProbe.content[0].text;
+    assert.ok(warningText.includes('NEXUS LIFECYCLE VIOLATION'), 'response decoration should prepend lifecycle warnings');
+    assert.ok(warningText.includes('nexus_optimize_tokens'), 'optimize warning should reference the token optimizer tool');
+    assert.ok(warningText.includes('nexus_store_memory'), 'store-memory warning should remind the agent to persist findings');
 
     const exportedMemory = await mcpAdapter.handleToolCall({
       params: {

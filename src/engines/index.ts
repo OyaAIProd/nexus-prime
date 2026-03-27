@@ -16,6 +16,8 @@ export { NgramIndex, getSharedNgramIndex } from './ngram-index.js';
 export { OrchestratorEngine, createOrchestrator } from './orchestrator.js';
 export type { Agent, AgentType, Task } from './orchestrator.js';
 export { KnowledgeFabricEngine } from './knowledge-fabric.js';
+export { LifecyclePolicy, createLifecyclePolicy } from './lifecycle-policy.js';
+export type { LifecycleFeature, LifecyclePolicyDecision } from './lifecycle-policy.js';
 export type {
   ContextProvenanceTrace,
   KnowledgeFabricBundle,

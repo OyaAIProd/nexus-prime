@@ -360,6 +360,8 @@ async function test() {
       memoryHealthRes,
       memoryTraceRes,
       memorySharedRes,
+      memoryCrossProjectRes,
+      memoryProjectsRes,
       memoryAuditRes,
       memoryQuarantineRes,
       memoryNetworkRes,
@@ -413,6 +415,8 @@ async function test() {
       fetch(`${primaryAddress}/api/memory/health`),
       fetch(`${primaryAddress}/api/memory/trace?id=${encodeURIComponent(rootMemoryId)}&runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
       fetch(`${primaryAddress}/api/memory/shared?runtimeId=${encodeURIComponent(runtime.getRuntimeId())}`),
+      fetch(`${primaryAddress}/api/memory/cross-project?scope=shared&limit=20`),
+      fetch(`${primaryAddress}/api/memory/projects?limit=50`),
       fetch(`${primaryAddress}/api/memory/audit`),
       fetch(`${primaryAddress}/api/memory/quarantine`),
       fetch(`${primaryAddress}/api/memory/${encodeURIComponent(rootMemoryId)}/network`),
@@ -467,6 +471,8 @@ async function test() {
     const memoryHealth = await memoryHealthRes.json();
     const memoryTrace = await memoryTraceRes.json();
     const memoryShared = await memorySharedRes.json();
+    const memoryCrossProject = await memoryCrossProjectRes.json();
+    const memoryProjects = await memoryProjectsRes.json();
     const memoryAudit = await memoryAuditRes.json();
     const memoryQuarantine = await memoryQuarantineRes.json();
     const memoryNetwork = await memoryNetworkRes.json();
@@ -537,6 +543,12 @@ async function test() {
     assert.ok(html.includes('data-event-filter="automations"'), 'dashboard HTML should expose automations event filter');
     assert.ok(html.includes('data-event-filter="shield"'), 'dashboard HTML should expose shield event filter');
     assert.ok(html.includes('data-event-filter="federation"'), 'dashboard HTML should expose federation event filter');
+    assert.ok(html.includes('data-event-filter="system"'), 'dashboard HTML should expose system event filter');
+    assert.ok(html.includes("{ mode: 'crossProject', label: 'Cross-Project' }"), 'dashboard HTML should expose a cross-project memory lane');
+    assert.ok(html.includes("return `/api/memory/cross-project?${params.toString()}`;"), 'dashboard HTML should call the cross-project memory API');
+    assert.ok(html.includes("url: '/api/memory/projects?limit=80'"), 'dashboard HTML should call the project index memory API');
+    assert.ok(html.includes('id="memory-project-filter"'), 'dashboard HTML should expose a memory project selector');
+    assert.ok(html.includes('id="memory-fuzzy-toggle"'), 'dashboard HTML should expose a memory fuzzy toggle');
     assert.match(html, /runtime:\s*\['runs', 'pod', 'usage', 'orchestrationSession', 'orchestrationLedger', 'instructionPacket', 'tokensSummary', 'tokensTimeline', 'tokensBySource'\]/, 'runtime-category refresh should include token resources');
     assert.match(html, /knowledge:\s*\['knowledgeFabricSession', 'knowledgeProvenance', 'ragCollections', 'patterns', 'tokensSummary', 'tokensTimeline', 'tokensBySource', 'modelTiers', 'memoryShared', 'usage'\]/, 'knowledge-category refresh should include token resources');
     assert.match(html, /refreshAll\(\['ragCollections', 'knowledgeFabricSession', 'knowledgeProvenance', 'usage', 'tokensSummary', 'tokensTimeline', 'tokensBySource', 'orchestrationSession', 'orchestrationLedger'\]\)/, 'RAG actions should refresh token telemetry alongside knowledge surfaces');
@@ -662,6 +674,10 @@ async function test() {
     assert.strictEqual(memoryTrace.id, rootMemoryId, 'memory trace API should resolve the requested memory');
     assert.ok(Array.isArray(memoryTrace.lineage), 'memory trace API should expose lineage');
     assert.ok(Array.isArray(memoryShared), 'shared-memory API should return shared memory rows');
+    assert.strictEqual(memoryCrossProject.governance?.defaultScope, 'shared', 'cross-project memory should default to shared scope');
+    assert.strictEqual(memoryCrossProject.governance?.sharedOnlyDefault, true, 'cross-project memory should enforce shared-only default');
+    assert.ok(Array.isArray(memoryCrossProject.items), 'cross-project memory API should return memory rows');
+    assert.ok(Array.isArray(memoryProjects.projects), 'memory projects API should return project rows');
     assert.ok(typeof memoryAudit.scanned === 'number', 'memory audit API should return a scan count');
     assert.ok(Array.isArray(memoryQuarantine), 'memory quarantine API should return a list');
     assert.ok(memoryAudit.findings.length > 0, 'memory audit API should expose governance findings');
@@ -677,6 +693,10 @@ async function test() {
     assert.ok(Array.isArray(events) && events.length > 0, 'events API should return normalized event cards');
     assert.ok(events.some((event: any) => event.type === 'dashboard.action' && String(event.summary).includes('rehydrated-prestart')), 'events API should rehydrate recent persisted events on dashboard start');
     assert.ok(events.every((event: any) => event.title && event.category && typeof event.time === 'number'), 'events API should normalize event cards');
+    const invalidCrossScopeRes = await fetch(`${primaryAddress}/api/memory/cross-project?scope=workspace`);
+    assert.strictEqual(invalidCrossScopeRes.status, 400, 'cross-project API should reject unsupported scopes');
+    const invalidCrossScope = await invalidCrossScopeRes.json();
+    assert.strictEqual(invalidCrossScope.error, 'invalid-scope', 'cross-project API should return structured invalid-scope errors');
     assert.ok(streamChunk.includes('retry: 3000') || streamChunk.includes('event: bootstrap'), 'stream endpoint should emit SSE prelude');
     assert.strictEqual(seedResponse.mode, 'canonical-runtime', 'seed endpoint should report canonical runtime catalog mode');
     assert.deepStrictEqual(seedResponse.seeded, [], 'seed endpoint should avoid dashboard-local artifact mutation');

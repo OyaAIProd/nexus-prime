@@ -10,6 +10,7 @@ import { statSync, readdirSync } from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
+import { createHash } from 'crypto';
 import { Adapter, NetworkMessage } from '../core/types.js';
 import { NexusPrime } from '../../index.js';
 import {
@@ -36,6 +37,7 @@ import { SkillCardRegistry, type SkillCard } from '../../engines/skill-card.js';
 import type { HookTrigger } from '../../engines/runtime-assets.js';
 import { DarwinLoop } from '../../engines/darwin-loop.js';
 import { nexusNetRelay } from '../../engines/nexusnet-relay.js';
+import { LifecyclePolicy } from '../../engines/lifecycle-policy.js';
 import {
     entanglementEngine,
     ContinuousAttentionStream,
@@ -181,6 +183,7 @@ class SessionTelemetry {
     private fileReadIntentCount = 0;
     private callsSinceOrchestrate = 0;
     private fileIntentPaths = new Set<string>();
+    private tokenAutoApplied = false;
     public bootstrapped = false;
 
     recordCall() {
@@ -206,6 +209,7 @@ class SessionTelemetry {
             sessionDnaCalled: this.sessionDnaCalled,
             fileReadIntentCount: this.fileReadIntentCount,
             callsSinceOrchestrate: this.callsSinceOrchestrate,
+            tokenAutoApplied: this.tokenAutoApplied,
         };
     }
 
@@ -215,6 +219,7 @@ class SessionTelemetry {
         if (nextPhase === 'bootstrapped' || nextPhase === 'orchestrated') {
             this.resetFileIntentTracking();
             this.optimizeTokensCalled = false;
+            this.tokenAutoApplied = false;
         }
         if (nextPhase === 'orchestrated') {
             this.mindkitCheckCalled = false;
@@ -280,7 +285,13 @@ class SessionTelemetry {
     needsOptimizeTokens(currentToolName?: string): boolean {
         if (currentToolName === 'nexus_optimize_tokens') return false;
         if (this.lifecyclePhase === 'pre-bootstrap') return false;
+        if (this.tokenAutoApplied) return false;
         return this.fileReadIntentCount >= 3 && !this.optimizeTokensCalled;
+    }
+
+    markTokenAutoApplied(): void {
+        this.tokenAutoApplied = true;
+        this.optimizeTokensCalled = true;
     }
 
     needsStoreMemory(currentToolName?: string): boolean {
@@ -401,6 +412,9 @@ export class MCPAdapter implements Adapter {
     private telemetry: SessionTelemetry = new SessionTelemetry();
     private sessionDNA: SessionDNAManager;
     private runtime?: SubAgentRuntime;
+    private lifecyclePolicy = new LifecyclePolicy();
+    private memoryInjectionCache = new Map<string, { expiresAt: number; matches: Array<{ content: string; score: number }> }>();
+    private lastMemoryInjectionAt = 0;
 
     private sciFiMatrixLog(title: string, metrics: Record<string, any>, intent?: string): void {
         const width = 76;
@@ -429,6 +443,84 @@ export class MCPAdapter implements Adapter {
         }
         
         console.error(`\x1b[36m╚${'═'.repeat(width - 2)}╝\x1b[0m\n`);
+    }
+
+    private classifyToolCategory(toolName: string): 'memory' | 'orchestration' | 'execution' | 'intelligence' | 'system' {
+        if (['nexus_store_memory', 'nexus_recall_memory', 'nexus_memory_stats'].includes(toolName)) return 'memory';
+        if (['nexus_orchestrate', 'nexus_plan_execution', 'nexus_spawn_workers'].includes(toolName)) return 'orchestration';
+        if (['nexus_ghost_pass', 'nexus_mindkit_check', 'nexus_optimize_tokens'].includes(toolName)) return 'execution';
+        if (['nexus_session_bootstrap', 'nexus_session_dna', 'nexus_token_report'].includes(toolName)) return 'intelligence';
+        if (toolName === 'nexus_run_status' || toolName === 'nexus_federation_status' || toolName.startsWith('nexus_list_')) return 'system';
+        return 'system';
+    }
+
+    private sciFiToolHeader(
+        category: 'memory' | 'orchestration' | 'execution' | 'intelligence' | 'system',
+        toolName: string,
+        goal: string,
+    ): void {
+        if (!this.lifecyclePolicy.isEnabled('mcpCategoryVisuals')) {
+            console.error(`\x1b[90m[NEXUS] ◈ ${toolName} ◈\x1b[0m`);
+            return;
+        }
+        const rawPreview = goal || 'No goal payload provided.';
+        const preview = rawPreview.length > 54 ? `${rawPreview.slice(0, 53)}…` : rawPreview;
+        if (category === 'orchestration') {
+            this.sciFiMatrixLog('ORCHESTRATION MATRIX', {
+                'Category': 'orchestration',
+                'Label': 'ORCHESTRATION MATRIX',
+                'Tool': toolName,
+                'Execution': 'autonomous',
+                'Policy': 'enabled',
+                'Status': 'dispatching',
+            }, preview);
+            return;
+        }
+
+        const themed = {
+            memory: {
+                color: '32',
+                title: '🧠 MEMORY LATTICE QUERY',
+                lines: [
+                    `Glyph: ⬢ MEMORY NODE`,
+                    `Tool: ${toolName}`,
+                    `Intent: ${preview}`,
+                    'Border: single-line lattice',
+                ],
+            },
+            execution: {
+                color: '33',
+                title: '⚙ EXECUTION PIPELINE',
+                lines: [
+                    `Glyph: ▶ PIPE STAGE`,
+                    `Tool: ${toolName}`,
+                    `Intent: ${preview}`,
+                    'Border: high-visibility single line',
+                ],
+            },
+            intelligence: {
+                color: '34',
+                title: '📡 INTELLIGENCE RELAY',
+                lines: [
+                    `Glyph: ⟡ RELAY NODE`,
+                    `Tool: ${toolName}`,
+                    `Intent: ${preview}`,
+                    'Border: relay channel single line',
+                ],
+            },
+            system: {
+                color: '90',
+                title: '⋯ SYSTEM BUS ⋯',
+                lines: [
+                    `Glyph: ◌ BUS TRACE`,
+                    `Tool: ${toolName}`,
+                    `Intent: ${preview}`,
+                    'Border: dotted diagnostics',
+                ],
+            },
+        }[category];
+
+        this.box(themed.title, themed.lines, themed.color);
     }
 
     private box(title: string, content: string[], color: string = '34'): void {
@@ -587,6 +679,78 @@ export class MCPAdapter implements Adapter {
                 warningBlock,
                 ...result.content,
             ],
+        };
+    }
+
+    private extractGoalLikeText(args: Record<string, unknown>): string {
+        const candidates = [args.goal, args.task, args.prompt, args.query, args.action, args.content]
+            .map((value) => String(value ?? '').trim())
+            .filter(Boolean);
+        return candidates[0] ?? '';
+    }
+
+    private isMemoryTool(toolName: string): boolean {
+        return toolName === 'nexus_store_memory'
+            || toolName === 'nexus_recall_memory'
+            || toolName === 'nexus_memory_stats'
+            || toolName.startsWith('nexus_memory_');
+    }
+
+    private async injectMemoryContext(
+        toolName: string,
+        args: Record<string, unknown>,
+        result: { content: Array<{ type: string; text: string }> },
+    ): Promise<{ content: Array<{ type: string; text: string }> }> {
+        const policy = this.lifecyclePolicy.evaluate('memoryInjection', {
+            toolName,
+            hasArgs: Object.keys(args ?? {}).length,
+        });
+        if (!policy.enabled || this.isMemoryTool(toolName)) return result;
+        const query = this.extractGoalLikeText(args);
+        if (query.length < 10) return result;
+
+        const now = Date.now();
+        if (now - this.lastMemoryInjectionAt < 30_000) return result;
+
+        const cacheWindowMs = Number(process.env.NEXUS_MEMORY_INJECTION_CACHE_MS ?? 30_000);
+        const minScore = Number(process.env.NEXUS_MEMORY_INJECTION_MIN_SCORE ?? 0.4);
+        const cacheKey = createHash('sha1').update(query.toLowerCase()).digest('hex').slice(0, 16);
+        const cached = this.memoryInjectionCache.get(cacheKey);
+        let matches: Array<{ content: string; score: number }> = [];
+
+        if (cached && cached.expiresAt > now) {
+            matches = cached.matches;
+        } else {
+            try {
+                const memory = this.getOrchestrator().getMemoryEngine();
+                const recalled = await memory.recallWithMetadata(query, 3, { minScore });
+                matches = recalled
+                    .filter((entry) => Number(entry.score) >= minScore)
+                    .map((entry) => ({ content: entry.content, score: entry.score }));
+                this.memoryInjectionCache.set(cacheKey, {
+                    expiresAt: now + cacheWindowMs,
+                    matches,
+                });
+            } catch (error: any) {
+                console.warn('[MCP] Memory context injection skipped:', error?.message ?? error);
+                return result;
+            }
+        }
+
+        if (matches.length === 0) return result;
+        this.lastMemoryInjectionAt = now;
+
+        const contextBlock = {
+            type: 'text' as const,
+            text: [
+                '[Memory Context]',
+                ...matches.map((entry, index) => `${index + 1}. ${entry.content.slice(0, 220)}${entry.content.length > 220 ? '…' : ''} (score ${entry.score.toFixed(2)})`),
+            ].join('\n'),
+        };
+
+        return {
+            ...result,
+            content: [...result.content, contextBlock],
         };
     }
 
@@ -1561,8 +1725,8 @@ export class MCPAdapter implements Adapter {
             }
 
             this.telemetry.observeSuccessfulToolCall(toolName, args);
-
-            return this.decorateLifecycleResponse(toolName, result);
+            const decorated = this.decorateLifecycleResponse(toolName, result);
+            return this.injectMemoryContext(toolName, args, decorated);
         });
     }
 
@@ -1582,23 +1746,18 @@ export class MCPAdapter implements Adapter {
             toolProfile: this.getToolProfile(),
         });
 
-        // v1.5 Mandatory Induction Interceptor / Sci-Fi Telemetry
-        if (goal && goal.length > 20 && !['nexus_execute_nxl', 'nexus_session_bootstrap', 'nexus_plan_execution', 'nexus_memory_stats'].includes(request.params.name)) {
-            // Show sci-fi loader animation
-            for (let i = 0; i < 4; i++) {
+        const toolCategory = this.classifyToolCategory(toolName);
+        const showRichHeader = goal
+            && goal.length > 20
+            && !['nexus_execute_nxl', 'nexus_session_bootstrap', 'nexus_plan_execution', 'nexus_memory_stats'].includes(request.params.name);
+        if (showRichHeader) {
+            const frameCount = Math.max(4, Math.min(8, Number(ASCII_ART.sciFiLoaderFrames?.length ?? 8)));
+            for (let i = 0; i < frameCount; i++) {
                 console.error(`\x1b[35m${ASCII_ART.sciFiLoader(i)}\x1b[0m`);
             }
-            this.sciFiMatrixLog('ROUTING PROTOCOL INITIATED', {
-                'Active Protocol': 'Multi-Agent Swarm',
-                'Tool Executing': toolName,
-                'Git Isolation': 'Enabled (Worktrees)',
-                'Memory Bridge': 'Active (Shared)',
-                'POD Network': 'Online',
-                'Status': 'Executing...'
-            }, goal.substring(0, 50) + '...');
+            this.sciFiToolHeader(toolCategory, toolName, goal);
         } else if (toolName) {
-           // Standard trace with brief sci-fi element
-           console.error(`\x1b[90m[NEXUS] ◈ ${toolName} ◈\x1b[0m`);
+            console.error(`\x1b[90m[NEXUS:${toolCategory.toUpperCase()}] ◈ ${toolName} ◈\x1b[0m`);
         }
 
         if (goal && goal.length > 50 && !['nexus_execute_nxl', 'nexus_session_bootstrap', 'nexus_plan_execution'].includes(request.params.name)) {
@@ -1624,6 +1783,20 @@ export class MCPAdapter implements Adapter {
                     ? (request.params.arguments.files as unknown[]).map(String)
                     : undefined;
                 const bootstrap = await this.getOrchestrator().bootstrapSession(bootstrapGoal, { files });
+                const autoTokenApplied = Boolean(bootstrap.tokenOptimization?.autoApplied);
+                if (autoTokenApplied) {
+                    this.telemetry.markTokenAutoApplied();
+                    if (bootstrap.tokenOptimization?.planMetrics?.savings) {
+                        this.telemetry.recordTokens(Number(bootstrap.tokenOptimization.planMetrics.savings));
+                    }
+                }
+                this.getRuntime().recordClientToolCall('nexus_session_bootstrap', {
+                    bootstrapCalled: true,
+                    plannerCalled: true,
+                    tokenOptimizationApplied: autoTokenApplied,
+                    tokenAutoApplied: autoTokenApplied,
+                    toolProfile: this.getToolProfile(),
+                });
 
                 // Auto-generate a project-scoped memory on bootstrap so dashboard always has something to show
                 try {
@@ -1664,15 +1837,21 @@ export class MCPAdapter implements Adapter {
                                 `Memory stats: prefrontal ${bootstrap.memoryStats?.prefrontal ?? 0} · hippocampus ${bootstrap.memoryStats?.hippocampus ?? 0} · cortex ${bootstrap.memoryStats?.cortex ?? 0}`,
                                 `Recommended next step: ${bootstrap.recommendedNextStep || 'nexus_orchestrate'}`,
                                 `Execution mode: ${bootstrap.recommendedExecutionMode || 'autonomous'}`,
-                                `Token optimization: ${bootstrap.tokenOptimization?.required ? 'required before broad reading' : 'not required yet'}`,
+                                `Token optimization: ${bootstrap.tokenOptimization?.autoApplied ? 'auto-applied during bootstrap' : (bootstrap.tokenOptimization?.required ? 'required before broad reading' : 'not required yet')}`,
                                 `Catalog health: ${bootstrap.catalogHealth?.overall || 'unknown'} · selected ${bootstrap.artifactSelectionAudit?.selected?.length || 0}`,
                                 `Shortlist: ${bootstrap.shortlist?.skills?.slice(0, 3).join(', ') || 'none'} (skills), ${bootstrap.shortlist?.specialists?.slice(0, 3).join(', ') || 'none'} (specialists)`,
                                 `Knowledge fabric: ${bootstrap.sourceMixRecommendation?.dominantSource || bootstrap.knowledgeFabric?.dominantSource || 'awaiting source mix'}`,
                                 `RAG: ${bootstrap.ragCandidateStatus?.attachedCollections || 0} attached · ${bootstrap.ragCandidateStatus?.retrievedChunks || 0} retrieved`,
                                 `Task graph: ${bootstrap.taskGraphPreview?.phases?.length || 0} phases · ${bootstrap.taskGraphPreview?.independentBranches || 0} branches`,
                                 `Worker plan: ${bootstrap.workerPlanPreview?.totalWorkers || 0} lanes planned`,
+                                bootstrap.autoGhostPass?.applied
+                                    ? `Auto ghost-pass: ${bootstrap.autoGhostPass.riskAreas.length} risk area(s) · ${bootstrap.autoGhostPass.workerApproaches} approach(es)`
+                                    : `Auto ghost-pass: skipped`,
                                 `Bootstrap status: ${bootstrap.clientBootstrapStatus?.clients?.length || 0} client manifests tracked`,
                             ]),
+                            bootstrap.tokenOptimization?.autoApplied && bootstrap.tokenOptimization?.plan
+                                ? `Auto token plan\n\`\`\`txt\n${bootstrap.tokenOptimization.plan}\n\`\`\``
+                                : '',
                             formatJsonDetails('Structured details', payload),
                             this.formatProtocolChecklist(),
                         ].join('\n\n'),
@@ -1722,6 +1901,24 @@ export class MCPAdapter implements Adapter {
                         optimizationProfile,
                     });
                     const verifiedWorkers = execution.workerResults.filter((worker) => worker.verified).length;
+                    const tokenPlan = (execution as any)?.knowledgeFabric?.repo?.readingPlan;
+                    const canAutoApplyTokenPlan = Boolean(
+                        tokenPlan
+                        && Number(tokenPlan.savings || 0) > 5000
+                        && !this.getRuntime().getUsageSnapshot()?.tokenOptimizationApplied,
+                    );
+                    let autoTokenApplyNote = '';
+                    if (canAutoApplyTokenPlan) {
+                        const savings = Number(tokenPlan.savings || 0);
+                        this.telemetry.recordTokens(savings);
+                        this.getRuntime().recordClientToolCall('nexus_orchestrate', {
+                            orchestrateCalled: true,
+                            plannerCalled: true,
+                            tokenOptimizationApplied: true,
+                            toolProfile: this.getToolProfile(),
+                        });
+                        autoTokenApplyNote = `Auto-applied token optimization (${savings.toLocaleString()} estimated token savings).`;
+                    }
 
                     // Auto-store run summary memory so dashboard and future sessions can see what happened
                     try {
@@ -1772,6 +1969,7 @@ export class MCPAdapter implements Adapter {
                         tokens: execution.tokenTelemetry,
                         verifiedWorkers,
                         continuationChildren: execution.continuationChildren,
+                        autoTokenApplyNote,
                     };
 
                     return {
@@ -1790,6 +1988,7 @@ export class MCPAdapter implements Adapter {
                                     `Verification: ${verifiedWorkers}/${execution.workerResults.length} worker(s) verified`,
                                     `Worktrees: ${runtimeUsage.worktreeHealth?.overall || 'unknown'} · repaired ${runtimeUsage.worktreeHealth?.repairedEntries || 0} · broken ${runtimeUsage.worktreeHealth?.brokenEntries || 0}`,
                                     `Tokens: saved ${Number(execution.tokenTelemetry?.savedTokens || 0).toLocaleString()} · compression ${Number(execution.tokenTelemetry?.compressionPct || 0)}% · dominant ${runtimeUsage.sourceAwareTokenBudget?.dominantSource || execution.knowledgeFabric?.sourceMix?.dominantSource || 'repo'}`,
+                                    autoTokenApplyNote || null,
                                     `RAG: ${(runtimeUsage.ragUsageSummary?.attachedCollections || execution.knowledgeFabric?.rag.attachedCollections.length || 0)} attached · ${(runtimeUsage.ragUsageSummary?.retrievedChunks || execution.knowledgeFabric?.rag.hits.length || 0)} retrieved`,
                                     `Memory scopes: ${Object.entries(runtimeUsage.memoryScopeUsage?.byScope || execution.memoryScopeUsage?.byScope || {}).map(([scope, count]) => `${scope}:${count}`).join(' · ') || 'awaiting shared/session reads'}`,
                                 ]),

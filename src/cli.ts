@@ -26,6 +26,7 @@ import { resolveNexusStateDir } from './engines/runtime-registry.js';
 import { SessionDNAManager } from './engines/session-dna.js';
 import { nexusEventBus } from './engines/event-bus.js';
 import { buildRuntimeSetupCommand } from './cli-setup.js';
+import { nexusPrimeSubBrand, sciFiPhaseHeader } from './utils/ascii-art.js';
 
 
 const tokenEngine = new TokenSupremacyEngine();
@@ -56,6 +57,7 @@ const CODEX_MANAGED_END = '<!-- nexus-prime:codex-bootstrap:end -->';
 function printExecutionSummary(execution: ExecutionRun): void {
   const verifiedWorkers = execution.workerResults.filter(result => result.verified).length;
   const modifiedFiles = execution.workerResults.reduce((sum, result) => sum + result.modifiedFiles.length, 0);
+  console.log(sciFiPhaseHeader('Execution Summary', 1));
   console.log(`🧠 Runtime: ${summarizeExecution(execution)}`);
   console.log(`📁 Artifacts: ${execution.artifactsPath}`);
   console.log(`🧪 Verified Workers: ${verifiedWorkers}/${execution.workerResults.length}`);
@@ -414,6 +416,8 @@ program
   .name('nexus-prime')
   .description('🧬 Nexus Prime - Local-first MCP control plane for coding agents')
   .version(packageJson.version);
+
+program.addHelpText('beforeAll', `\n${nexusPrimeSubBrand('Nexus Prime CLI Command Surface')}\n`);
 
 program
   .command('init')

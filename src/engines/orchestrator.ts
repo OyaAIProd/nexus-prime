@@ -17,8 +17,9 @@ import { RepoTreeGenerator, type RepoTreeNode } from './repo-tree.js';
 import { createSkillRuntime, type SkillRuntime } from './skill-runtime.js';
 import { SkillLearnerEngine } from './skill-learner.js';
 import { nxl, type AgentArchetype } from './nxl-interpreter.js';
-import { TokenSupremacyEngine, type FileRef } from './token-supremacy.js';
+import { TokenSupremacyEngine, type FileRef, formatReadingPlan, type ReadingPlan } from './token-supremacy.js';
 import { resolveNexusStateDir } from './runtime-registry.js';
+import { LifecyclePolicy } from './lifecycle-policy.js';
 import type {
   RuntimeArtifactSelectionAudit,
   RuntimeArtifactOutcomeSnapshot,
@@ -44,6 +45,8 @@ import {
 import { KnowledgeFabricEngine, type KnowledgeFabricBundle } from './knowledge-fabric.js';
 import { readBootstrapManifest, type BootstrapManifestStatus } from './client-bootstrap.js';
 import {
+  GhostPass,
+  type GhostReport,
   createSubAgentRuntime,
   type ExecutionRun,
   type ExecutionTask,
@@ -127,6 +130,20 @@ export interface SessionBootstrapResult {
     required: boolean;
     reason: string;
     candidateFiles: string[];
+    autoApplied?: boolean;
+    plan?: string;
+    planMetrics?: {
+      files: number;
+      savings: number;
+      compressedTokens: number;
+      originalTokens: number;
+    };
+    policy?: {
+      feature: string;
+      enabled: boolean;
+      reason: string;
+      contextHash: string;
+    };
   };
   reviewGates: string[];
   catalogHealth: RuntimeCatalogHealthSnapshot;
@@ -152,6 +169,18 @@ export interface SessionBootstrapResult {
     patternHits: string[];
     selectedFiles: string[];
     modelTiers: string[];
+  };
+  autoGhostPass?: {
+    applied: boolean;
+    riskAreas: string[];
+    workerApproaches: number;
+    estimatedTokens: number;
+    policy: {
+      feature: string;
+      enabled: boolean;
+      reason: string;
+      contextHash: string;
+    };
   };
   repoTree?: RepoTreeNode;
 }
@@ -191,6 +220,13 @@ interface PreparedExecution {
   mode: RuntimeOrchestrationSnapshot['mode'];
   taskGraph: RuntimeTaskGraphSnapshot;
   workerPlan: RuntimeWorkerPlanSnapshot;
+  autoGhostPass?: GhostReport;
+  autoGhostPassDecision?: {
+    feature: string;
+    enabled: boolean;
+    reason: string;
+    contextHash: string;
+  };
 }
 
 interface OrchestratorOptions {
@@ -233,6 +269,7 @@ export class OrchestratorEngine {
   private consecutiveFailures = 0;
   private readonly CIRCUIT_THRESHOLD = 3;
   private readonly CIRCUIT_COOLDOWN_MS = 30_000;
+  private lifecyclePolicy: LifecyclePolicy;
 
   constructor(options: OrchestratorOptions = {}) {
     this.memory = options.memory || new MemoryEngine();
@@ -252,6 +289,7 @@ export class OrchestratorEngine {
       memory: this.memory,
       tokenEngine: this.tokenEngine,
     });
+    this.lifecyclePolicy = new LifecyclePolicy();
     this.sessionsDir = path.join(resolveNexusStateDir(), 'autonomy-sessions');
     try {
       fs.mkdirSync(this.sessionsDir, { recursive: true });
@@ -309,6 +347,37 @@ export class OrchestratorEngine {
       .filter(Boolean);
 
     return subtasks.length > 0 ? subtasks : [task];
+  }
+
+  private shouldAutoGhostPass(task: string, candidateFiles: string[], phaseCount: number): boolean {
+    if (candidateFiles.length < 3) return false;
+    if (phaseCount >= 3) return true;
+    return /(refactor|move|rename|restructure|migrate|extract|split|consolidate)/i.test(task);
+  }
+
+  private async autoGhostPass(task: string, files: string[]): Promise<GhostReport> {
+    const ghost = new GhostPass(this.repoRoot);
+    const refs = this.toFileRefs(files);
+    return ghost.analyze(task, refs, Math.min(4, Math.max(2, Math.ceil(files.length / 2))));
+  }
+
+  private toFileRefs(files: string[]): FileRef[] {
+    return files.map((candidate) => {
+      const resolved = path.isAbsolute(candidate) ? candidate : path.join(this.repoRoot, candidate);
+      try {
+        const stat = fs.statSync(resolved);
+        return {
+          path: resolved,
+          sizeBytes: stat.size,
+          lastModified: stat.mtimeMs,
+        };
+      } catch {
+        return {
+          path: resolved,
+          sizeBytes: 0,
+        };
+      }
+    });
   }
 
   private async _prepareExecution(task: string, options: Partial<ExecutionTask> = {}): Promise<PreparedExecution> {
@@ -370,6 +439,19 @@ export class OrchestratorEngine {
     const mode = this.determineMode(intent, phases.length, workerCount);
     const taskGraph = this.buildTaskGraph(task, phases, intent);
     const workerPlan = this.buildWorkerPlan(workerCount, mode, taskGraph, knowledgeFabric);
+    const autoGhostPassDecision = this.lifecyclePolicy.evaluate('autoGhostPass', {
+      candidateFiles: candidateFiles.length,
+      phaseCount: phases.length,
+      taskPreview: shortLabel(task, 120),
+    });
+    let autoGhostPass: GhostReport | undefined;
+    if (autoGhostPassDecision.enabled && this.shouldAutoGhostPass(task, candidateFiles, phases.length)) {
+      try {
+        autoGhostPass = await this.autoGhostPass(task, candidateFiles);
+      } catch (error: any) {
+        console.warn('[Orchestrator] Auto ghost-pass failed, continuing with manual fallback:', error?.message ?? error);
+      }
+    }
 
     return {
       intent,
@@ -390,6 +472,13 @@ export class OrchestratorEngine {
       mode,
       taskGraph,
       workerPlan,
+      autoGhostPass,
+      autoGhostPassDecision: {
+        feature: autoGhostPassDecision.feature,
+        enabled: autoGhostPassDecision.enabled,
+        reason: autoGhostPassDecision.reason,
+        contextHash: autoGhostPassDecision.contextHash,
+      },
     };
   }
 
@@ -488,6 +577,7 @@ export class OrchestratorEngine {
       latestDNA,
       memoryMatches,
       memoryStats,
+      candidateFiles,
       knowledgeFabric,
       planner,
       selections,
@@ -496,8 +586,27 @@ export class OrchestratorEngine {
       mode,
       taskGraph,
       workerPlan,
+      autoGhostPass,
+      autoGhostPassDecision,
     } = prepared;
-    const tokenOptimizationRequired = true; // MUST run mandatorily
+    const autoTokenDecision = this.lifecyclePolicy.evaluate('autoTokenBootstrap', {
+      candidateFiles: candidateFiles.length,
+      selectedFiles: knowledgeFabric.repo.selectedFiles.length,
+      taskPreview: shortLabel(task, 120),
+    });
+    let autoTokenPlan: ReadingPlan | undefined;
+    let autoTokenApplied = false;
+    if (autoTokenDecision.enabled && candidateFiles.length >= 5) {
+      try {
+        const refs = this.toFileRefs(candidateFiles);
+        const fileBoosts = this.memory.getFileBoosts(candidateFiles);
+        autoTokenPlan = this.tokenEngine.plan(task, refs, fileBoosts);
+        autoTokenApplied = true;
+      } catch (error: any) {
+        console.warn('[Orchestrator] Bootstrap auto token optimization failed, falling back to manual path:', error?.message ?? error);
+      }
+    }
+    const tokenOptimizationRequired = !autoTokenApplied;
     const ragUsageSummary = this.toRagUsageSummary(knowledgeFabric, {
       usedInPlanner: knowledgeFabric.rag.hits.length > 0,
       usedInPacket: false,
@@ -541,7 +650,8 @@ export class OrchestratorEngine {
     this.runtime.recordClientToolCall('nexus_session_bootstrap', {
       bootstrapCalled: true,
       plannerCalled: true,
-      tokenOptimizationApplied: tokenOptimizationRequired,
+      tokenOptimizationApplied: autoTokenApplied,
+      tokenAutoApplied: autoTokenApplied,
     });
     this.ensurePeriodicFlushAndSentinel();
 
@@ -616,8 +726,24 @@ export class OrchestratorEngine {
       },
       tokenOptimization: {
         required: tokenOptimizationRequired,
-        reason: tokenBudget.reason,
+        reason: autoTokenApplied
+          ? 'Auto-applied during bootstrap via lifecycle policy.'
+          : tokenBudget.reason,
         candidateFiles: knowledgeFabric.repo.candidateFiles,
+        autoApplied: autoTokenApplied,
+        plan: autoTokenPlan ? formatReadingPlan(autoTokenPlan) : undefined,
+        planMetrics: autoTokenPlan ? {
+          files: autoTokenPlan.files.length,
+          savings: autoTokenPlan.savings,
+          compressedTokens: autoTokenPlan.totalEstimatedTokens,
+          originalTokens: autoTokenPlan.totalEstimatedTokens + autoTokenPlan.savings,
+        } : undefined,
+        policy: {
+          feature: autoTokenDecision.feature,
+          enabled: autoTokenDecision.enabled,
+          reason: autoTokenDecision.reason,
+          contextHash: autoTokenDecision.contextHash,
+        },
       },
       reviewGates: planner.reviewGates.map((gate) => `${gate.gate}:${gate.status}`),
       catalogHealth,
@@ -637,6 +763,18 @@ export class OrchestratorEngine {
         patternHits: knowledgeFabric.patterns.selected.map((pattern) => pattern.name),
         selectedFiles: knowledgeFabric.repo.selectedFiles,
         modelTiers: knowledgeFabric.modelTierTrace.map((trace) => `${trace.stage}:${trace.tier}`),
+      },
+      autoGhostPass: {
+        applied: Boolean(autoGhostPass),
+        riskAreas: autoGhostPass?.riskAreas ?? [],
+        workerApproaches: autoGhostPass?.workerAssignments?.length ?? 0,
+        estimatedTokens: autoGhostPass?.totalEstimatedTokens ?? 0,
+        policy: autoGhostPassDecision ?? {
+          feature: 'autoGhostPass',
+          enabled: false,
+          reason: 'missing-policy-evaluation',
+          contextHash: 'n/a',
+        },
       },
       repoTree,
     };
@@ -685,6 +823,7 @@ export class OrchestratorEngine {
       mode,
       taskGraph,
       workerPlan,
+      autoGhostPass,
     } = prepared;
     this.runtime.recordClientToolCall('nexus_orchestrate', {
       orchestrateCalled: true,
@@ -721,7 +860,11 @@ export class OrchestratorEngine {
     });
     markExecutionLedgerStep(ledger, 'candidate-file-discovery', 'completed', {
       summary: `${candidateFiles.length} candidate file(s) discovered.`,
-      details: { files: candidateFiles.slice(0, 24) },
+      details: {
+        files: candidateFiles.slice(0, 24),
+        autoGhostPassApplied: Boolean(autoGhostPass),
+        autoGhostPassRisks: autoGhostPass?.riskAreas?.length ?? 0,
+      },
     });
     markExecutionLedgerStep(ledger, 'knowledge-fabric', 'completed', {
       summary: knowledgeFabric.summary,
@@ -1045,6 +1188,7 @@ export class OrchestratorEngine {
     run.ragUsageSummary = ragUsageSummary;
     run.memoryScopeUsage = memoryScopeUsage;
     run.memoryReconciliationSummary = memoryReconciliationSummary;
+    run.autoGhostPass = autoGhostPass;
     this.runtime.recordExecutionLedger(ledger, 'autonomous');
     this.runtime.recordInstructionPacket(instructionPacket, {
       executionMode: 'autonomous',

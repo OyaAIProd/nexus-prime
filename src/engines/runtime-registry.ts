@@ -321,6 +321,7 @@ export interface RuntimeRegistrySnapshot {
     executionLedger?: ExecutionLedger;
     plannerApplied?: boolean;
     tokenOptimizationApplied?: boolean;
+    tokenAutoApplied?: boolean;
     bootstrapCalled?: boolean;
     orchestrateCalled?: boolean;
     plannerCalled?: boolean;

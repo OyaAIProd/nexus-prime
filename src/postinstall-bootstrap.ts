@@ -3,7 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { ensureBootstrap } from './engines/client-bootstrap.js';
-import { printASCIILogo, printBootSuccessMessage } from './utils/ascii-art.js';
+import { ASCII_ART, printASCIILogo, printBootSuccessMessage } from './utils/ascii-art.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +33,44 @@ function appendInstallLog(message: string): void {
   }
 }
 
+function shouldShowInstallBanner(): boolean {
+  return process.env.CI !== 'true' && !process.env.NEXUS_SILENT_INSTALL;
+}
+
+function shouldAnimateInstall(): boolean {
+  if (!shouldShowInstallBanner()) return false;
+  return Boolean(process.stdout.isTTY && process.stderr.isTTY);
+}
+
+function startInstallSpinner(): { stop: (message?: string) => void } | null {
+  if (!shouldAnimateInstall()) return null;
+
+  let frame = 0;
+  const frames = Array.isArray(ASCII_ART.sciFiLoaderFrames) && ASCII_ART.sciFiLoaderFrames.length > 0
+    ? ASCII_ART.sciFiLoaderFrames
+    : [ASCII_ART.sciFiLoader(0)];
+  const frameRate = Math.max(60, Number(ASCII_ART.sciFiLoaderFrameRateMs || 90));
+
+  const render = () => {
+    const glyph = frames[frame % frames.length];
+    process.stderr.write(`\r\x1b[35m${glyph}\x1b[0m`);
+    frame += 1;
+  };
+
+  render();
+  const handle = setInterval(render, frameRate);
+
+  return {
+    stop(message = '') {
+      clearInterval(handle);
+      process.stderr.write('\r\x1b[2K');
+      if (message) {
+        process.stderr.write(`\r\x1b[32m${message}\x1b[0m\n`);
+      }
+    },
+  };
+}
+
 async function runWithRetry(maxRetries = 3, delayMs = 1000) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -42,26 +80,34 @@ async function runWithRetry(maxRetries = 3, delayMs = 1000) {
       }
 
       // Show ASCII art during installation (non-silent mode)
-      if (process.env.CI !== 'true' && !process.env.NEXUS_SILENT_INSTALL) {
+      if (shouldShowInstallBanner()) {
         console.log('');
         printASCIILogo(version);
       }
 
-      ensureBootstrap({
-        packageRoot,
-        workspaceRoot: process.cwd(),
-        phase: 'install',
-        silent: true,
-      });
+      const spinner = startInstallSpinner();
+      try {
+        ensureBootstrap({
+          packageRoot,
+          workspaceRoot: process.cwd(),
+          phase: 'install',
+          silent: true,
+        });
+        spinner?.stop('✔ bootstrap complete');
+      } catch (error) {
+        spinner?.stop();
+        throw error;
+      }
 
       // Show success message
-      if (process.env.CI !== 'true' && !process.env.NEXUS_SILENT_INSTALL) {
+      if (shouldShowInstallBanner()) {
         printBootSuccessMessage(version);
       }
 
       appendInstallLog(`Bootstrap complete (workspace: ${process.cwd()})`);
       return;
     } catch (error) {
+      process.stderr.write('\r\x1b[2K');
       const code = error instanceof Error && 'code' in error ? String((error as NodeJS.ErrnoException).code) : '';
       const isRetryable = code === 'EBUSY' || code === 'EACCES';
       const message = error instanceof Error ? error.message : String(error);

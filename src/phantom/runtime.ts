@@ -117,6 +117,7 @@ import {
 import { MergeOracle } from './merge-oracle.js';
 import type { MergeDecision, WorkerResult } from './index.js';
 import type { FileRef, ReadingPlan } from '../engines/token-supremacy.js';
+import type { GhostReport } from './index.js';
 
 const exec = promisify(execCallback);
 
@@ -409,6 +410,7 @@ export interface ExecutionRun {
     ragUsageSummary?: RuntimeRagUsageSummary;
     memoryScopeUsage?: RuntimeMemoryScopeUsageSnapshot;
     memoryReconciliationSummary?: RuntimeMemoryReconciliationSummary;
+    autoGhostPass?: GhostReport;
 }
 
 export interface SubAgentRuntimeOptions {
@@ -718,6 +720,7 @@ export class SubAgentRuntime {
             executionMode: 'manual-low-level',
             plannerApplied: false,
             tokenOptimizationApplied: false,
+            tokenAutoApplied: false,
             bootstrapCalled: false,
             orchestrateCalled: false,
             plannerCalled: false,
@@ -1642,6 +1645,7 @@ export class SubAgentRuntime {
             orchestrateCalled?: boolean;
             plannerCalled?: boolean;
             tokenOptimizationApplied?: boolean;
+            tokenAutoApplied?: boolean;
             toolProfile?: 'autonomous' | 'full';
             instructionFiles?: string[];
         } = {},
@@ -1656,6 +1660,7 @@ export class SubAgentRuntime {
             orchestrateCalled: options.orchestrateCalled ?? this.runtimeSnapshot.orchestrateCalled ?? false,
             plannerCalled: options.plannerCalled ?? this.runtimeSnapshot.plannerCalled ?? false,
             tokenOptimizationApplied: options.tokenOptimizationApplied ?? this.runtimeSnapshot.tokenOptimizationApplied ?? false,
+            tokenAutoApplied: options.tokenAutoApplied ?? this.runtimeSnapshot.tokenAutoApplied ?? false,
             clientInstructionStatus: {
                 clientId: client?.clientId ?? this.runtimeSnapshot.clientId,
                 clientFamily: client?.clientFamily ?? this.runtimeSnapshot.clientFamily,

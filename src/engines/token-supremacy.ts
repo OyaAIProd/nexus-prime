@@ -64,12 +64,17 @@ export interface ContextDelta {
     changed: FileRef[];    // files that changed since last session
     unchanged: FileRef[];  // files to skip (use last session's summary)
     summary?: string;      // previous session summary (replaces unchanged context)
+    memoryContextSummary?: string; // memory-recalled context for unchanged but relevant files
 }
 
 export interface TokenBudget {
     total: number;
     allocated: Map<string, number>; // workerId → tokens
     remaining: number;
+}
+
+export interface TokenSupremacyOptions {
+    qualityFloor?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -79,6 +84,7 @@ export interface TokenBudget {
 export class TokenSupremacyEngine {
     private sessionBudget: number;
     private sessionPath: string;
+    private qualityFloor: number;
 
     // Per-session learned relevance: task keyword → file paths that helped
     private relevanceCache: Map<string, Map<string, number>> = new Map();
@@ -86,8 +92,9 @@ export class TokenSupremacyEngine {
     private contextAssembler: ContextAssembler;
     private casEngine: ContinuousAttentionStream;
 
-    constructor(sessionBudget: number = 200_000) {
+    constructor(sessionBudget: number = 200_000, options: TokenSupremacyOptions = {}) {
         this.sessionBudget = sessionBudget;
+        this.qualityFloor = Number(options.qualityFloor ?? process.env.NEXUS_TOKEN_QUALITY_FLOOR ?? 0.7);
         const stateDir = resolveNexusStateDir();
         this.sessionPath = path.join(stateDir, 'sessions');
         this.relevanceCachePath = path.join(stateDir, 'relevance.json');
@@ -117,6 +124,7 @@ export class TokenSupremacyEngine {
         }
 
         const taskKeywords = this.extractKeywords(task);
+        const lowerTask = task.toLowerCase();
         const plans: FileReadPlan[] = [];
         let totalTokens = 0;
         let fullReadTokens = 0;
@@ -131,18 +139,45 @@ export class TokenSupremacyEngine {
             const relevance = Math.min(1, baseRelevance + boost);
             const estFull = Math.ceil(file.sizeBytes / 4); // ~4 chars per token
             fullReadTokens += estFull;
+            const taskReferenced = this.isTaskReferenced(file.path, lowerTask, taskKeywords);
+            const recentlyModified = typeof file.lastModified === 'number' && (Date.now() - file.lastModified) <= (60 * 60 * 1000);
+            const criticalBoost = boost >= 0.9;
+            const mustReadFull = criticalBoost || recentlyModified;
 
             let plan: FileReadPlan;
 
-            if (relevance < skipThreshold) {
-                // Irrelevant — skip entirely
+            if (mustReadFull) {
                 plan = {
                     file,
-                    action: 'skip',
-                    tier: 'L0',
-                    reason: `low relevance (${relevance.toFixed(2)}) to task`,
-                    estimatedTokens: 0
+                    action: 'full',
+                    tier: 'L2',
+                    reason: criticalBoost
+                        ? 'critical memory boost requires full read'
+                        : 'recently modified within quality guard window',
+                    estimatedTokens: estFull,
                 };
+            } else if (relevance < skipThreshold) {
+                // Irrelevant — skip entirely
+                if (taskReferenced && relevance >= this.qualityFloor * 0.15) {
+                    const { start, end } = this.estimateHotLines(file);
+                    plan = {
+                        file,
+                        action: estFull <= 5000 ? 'full' : 'partial',
+                        tier: 'L2',
+                        startLine: estFull <= 5000 ? undefined : start,
+                        endLine: estFull <= 5000 ? undefined : end,
+                        reason: `quality floor ${this.qualityFloor.toFixed(2)} prevents skip for task-referenced file`,
+                        estimatedTokens: estFull <= 5000 ? estFull : Math.ceil(((end - start) * 80) / 4),
+                    };
+                } else {
+                    plan = {
+                        file,
+                        action: 'skip',
+                        tier: 'L0',
+                        reason: `low relevance (${relevance.toFixed(2)}) to task`,
+                        estimatedTokens: 0
+                    };
+                }
             } else if (estFull < 300) {
                 // Small file — always read fully
                 plan = {
@@ -183,6 +218,16 @@ export class TokenSupremacyEngine {
                     tier: 'L2',
                     reason: `high relevance (${relevance.toFixed(2)})`,
                     estimatedTokens: estFull
+                };
+            }
+
+            if (plan.action === 'partial' && boost > 0.5) {
+                plan = {
+                    file,
+                    action: 'full',
+                    tier: 'L2',
+                    reason: `memory boost ${boost.toFixed(2)} promoted partial read to full`,
+                    estimatedTokens: estFull,
                 };
             }
 
@@ -234,7 +279,10 @@ export class TokenSupremacyEngine {
             added: [],
             changed: [],
             unchanged: [],
-            summary: prev.summary
+            summary: prev.summary,
+            memoryContextSummary: prev.keyDecisions?.length
+                ? `Memory context: ${prev.keyDecisions.slice(0, 5).join(' | ')}`
+                : undefined,
         };
 
         for (const file of curr) {
@@ -489,6 +537,15 @@ export class TokenSupremacyEngine {
     private fingerprintFile(file: FileRef): string {
         // Use mtime + size as cheap fingerprint (no hashing needed)
         return `${file.lastModified ?? 0}-${file.sizeBytes}`;
+    }
+
+    private isTaskReferenced(filePath: string, taskLower: string, keywords: string[]): boolean {
+        const normalized = filePath.toLowerCase().replace(/\\/g, '/');
+        const baseName = normalized.split('/').pop() ?? normalized;
+        const stem = baseName.replace(/\.[^.]+$/, '');
+        if (taskLower.includes(baseName) || taskLower.includes(stem)) return true;
+        const pathTokens = normalized.split(/[/_.-]+/).filter(Boolean);
+        return keywords.some((keyword) => pathTokens.includes(keyword));
     }
 
     /**
