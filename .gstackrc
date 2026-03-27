@@ -1,0 +1,45 @@
+# GStack Configuration for nexus-prime
+# Global gstack install: ~/gstack
+# For project setup: bun install gstack --save-dev (optional)
+
+[settings]
+# Use gstack skills for all workflows
+enable_skills = true
+enable_browser = true
+enable_deployment = true
+
+[skills]
+# Primary web browsing skill
+browse = true
+
+# Planning & review
+plan_ceo_review = true
+plan_eng_review = true
+plan_design_review = true
+
+# Development workflows
+review = true
+ship = true
+land_and_deploy = true
+qa = true
+
+# Performance & deployment
+benchmark = true
+canary = true
+
+# Investigation & debugging
+investigate = true
+retro = true
+
+# Documentation
+document_release = true
+
+[browser]
+# Always use /browse skill for web navigation
+use_gstack_browse = true
+disable_mcp_chrome = true
+
+[deployment]
+# GStack deployment tools
+use_ship = true
+use_canary = true

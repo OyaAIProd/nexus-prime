@@ -246,6 +246,28 @@ nexus-prime setup all
 nexus-prime setup status
 ```
 
+### GStack Workspace Coordination
+
+[GStack](https://github.com/garrytan/gstack) is a workspace coordination and deployment tool that complements Nexus Prime for web browsing, deployment workflows, planning, and team coordination. If you have GStack installed globally at `~/gstack`, Nexus Prime will auto-detect and enable it:
+
+```bash
+# Check GStack configuration for this project
+cat .gstackrc
+
+# Available GStack skills (when enabled)
+/browse              # Web browsing & navigation (preferred over MCP Chrome)
+/ship                # Prepare & execute deployments
+/land-and-deploy     # Landing page & feature deployment
+/canary              # Canary deployment testing
+/qa                  # Full QA & testing workflows
+/review              # Code review (integrates with Git)
+/plan-eng-review     # Engineering review planning
+/retro               # Sprint retrospectives
+/document-release    # Release notes & documentation
+```
+
+For full GStack integration docs, see [`GSTACK.md`](./GSTACK.md).
+
 ### Runtime contract
 
 ```txt
