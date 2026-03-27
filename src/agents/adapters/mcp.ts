@@ -28,6 +28,7 @@ import { SessionDNAManager } from '../../engines/session-dna.js';
 import { ContextAssembler } from '../../engines/context-assembler.js';
 import { GraphMemoryEngine } from '../../engines/graph-memory.js';
 import { GraphTraversalEngine } from '../../engines/graph-traversal.js';
+import { ASCII_ART } from '../../utils/ascii-art.js';
 import { HybridRetriever } from '../../engines/hybrid-retriever.js';
 import { nexusEventBus } from '../../engines/event-bus.js';
 import { AttentionScorer } from '../../engines/attention-stream.js';
@@ -54,7 +55,12 @@ const kvBridge = createKVBridge({ agents: 3 });
 const orchestrator = new OrchestratorEngine();
 const darwinLoop = new DarwinLoop(orchestrator.getMemoryEngine());
 const federation = new FederationEngine();
-const fallbackRuntime = createSubAgentRuntime({ repoRoot: process.cwd() });
+// Lazy-initialized fallback runtime to avoid leaking a phantom runtime at module load
+let _fallbackRuntime: ReturnType<typeof createSubAgentRuntime> | null = null;
+function getFallbackRuntime() {
+    if (!_fallbackRuntime) _fallbackRuntime = createSubAgentRuntime({ repoRoot: process.cwd() });
+    return _fallbackRuntime;
+}
 
 // Lazy-initialized Graph Engine (separate DB from core memory)
 let _graphEngine: GraphMemoryEngine | null = null;
@@ -482,7 +488,7 @@ export class MCPAdapter implements Adapter {
         }
 
         if (!this.runtime) {
-            this.runtime = fallbackRuntime;
+            this.runtime = getFallbackRuntime();
         }
 
         return this.runtime;
@@ -562,13 +568,26 @@ export class MCPAdapter implements Adapter {
 
         if (warnings.length === 0) return result;
 
-        return this.prependTextToResponse(
-            result,
-            [
-                'LIFECYCLE WARNING:',
-                ...warnings.map((warning) => `- ${warning}`),
-            ].join('\n'),
-        );
+        // Make warnings highly visible: prepend as plain text AND inject as structured first content block
+        const warningBlock = {
+            type: 'text' as const,
+            text: JSON.stringify({
+                WARNING: 'NEXUS LIFECYCLE VIOLATION',
+                issues: warnings,
+                requiredActions: warnings.map((w) =>
+                    w.includes('nexus_optimize_tokens') ? 'Call nexus_optimize_tokens(goal, files) NOW before reading more files'
+                    : w.includes('nexus_store_memory') ? 'Call nexus_store_memory(content, priority, tags) to persist findings'
+                    : w
+                ),
+            }, null, 2),
+        };
+
+        return {
+            content: [
+                warningBlock,
+                ...result.content,
+            ],
+        };
     }
 
     private describeClientInstructionStatus(profile: McpToolProfile): string {
@@ -1187,7 +1206,7 @@ export class MCPAdapter implements Adapter {
                 },
                 {
                     name: 'nexus_rag_ingest_collection',
-                    description: 'Expert surface: ingest local files, URLs, or raw text into a RAG collection.',
+                    description: 'Expert surface: ingest local files, folders, URLs, or raw text into a RAG collection. Use folderPath to ingest an entire directory recursively.',
                     inputSchema: {
                         type: 'object',
                         properties: {
@@ -1197,14 +1216,16 @@ export class MCPAdapter implements Adapter {
                                 items: {
                                     type: 'object',
                                     properties: {
-                                        filePath: { type: 'string' },
+                                        filePath: { type: 'string', description: 'Single file path' },
+                                        folderPath: { type: 'string', description: 'Directory path to recursively ingest all supported files' },
+                                        folderGlob: { type: 'string', description: 'Optional extension filter for folder ingestion (e.g. "*.ts")' },
                                         url: { type: 'string' },
                                         text: { type: 'string' },
                                         label: { type: 'string' },
                                         tags: { type: 'array', items: { type: 'string' } },
                                     },
                                 },
-                                description: 'Collection sources',
+                                description: 'Collection sources (supports file, folder, url, or text)',
                             },
                         },
                         required: ['collectionId', 'inputs'],
@@ -1482,6 +1503,28 @@ export class MCPAdapter implements Adapter {
             }
             const args = request.params?.arguments ?? {};
 
+            // Gate: block non-bootstrap tools BEFORE executing them to avoid wasted work and side effects
+            if (
+                !this.telemetry.bootstrapped &&
+                toolName !== 'nexus_session_bootstrap' &&
+                toolName !== 'nexus_memory_stats' &&
+                !toolName.startsWith('nexus_list_') &&
+                toolName !== 'nexus_federation_status' &&
+                toolName !== 'nexus_status'
+            ) {
+                return {
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({
+                            status: 'blocked',
+                            reason: 'nexus_session_bootstrap has not been called yet',
+                            action: 'Call nexus_session_bootstrap(goal="<your task>") first, then retry this tool',
+                            hint: 'Bootstrap recovers memory and context — skipping it means working blind'
+                        }, null, 2)
+                    }]
+                };
+            }
+
             const callId = `mcp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
             const startTimeMs = Date.now();
 
@@ -1495,7 +1538,7 @@ export class MCPAdapter implements Adapter {
             let result;
             try {
                 result = await this.handleToolCall(request);
-                
+
                 const resultPayload = JSON.stringify(result);
                 nexusEventBus.emit('mcp.call.complete', {
                     callId,
@@ -1519,27 +1562,6 @@ export class MCPAdapter implements Adapter {
 
             this.telemetry.observeSuccessfulToolCall(toolName, args);
 
-            if (
-                !this.telemetry.bootstrapped &&
-                toolName !== 'nexus_session_bootstrap' &&
-                toolName !== 'nexus_memory_stats' &&
-                !toolName.startsWith('nexus_list_') &&
-                toolName !== 'nexus_federation_status' &&
-                toolName !== 'nexus_status'
-            ) {
-                return {
-                    content: [{
-                        type: 'text',
-                        text: JSON.stringify({
-                            status: 'blocked',
-                            reason: 'nexus_session_bootstrap has not been called yet',
-                            action: 'Call nexus_session_bootstrap(goal="<your task>") first, then retry this tool',
-                            hint: 'Bootstrap recovers memory and context — skipping it means working blind'
-                        }, null, 2)
-                    }]
-                };
-            }
-
             return this.decorateLifecycleResponse(toolName, result);
         });
     }
@@ -1562,6 +1584,10 @@ export class MCPAdapter implements Adapter {
 
         // v1.5 Mandatory Induction Interceptor / Sci-Fi Telemetry
         if (goal && goal.length > 20 && !['nexus_execute_nxl', 'nexus_session_bootstrap', 'nexus_plan_execution', 'nexus_memory_stats'].includes(request.params.name)) {
+            // Show sci-fi loader animation
+            for (let i = 0; i < 4; i++) {
+                console.error(`\x1b[35m${ASCII_ART.sciFiLoader(i)}\x1b[0m`);
+            }
             this.sciFiMatrixLog('ROUTING PROTOCOL INITIATED', {
                 'Active Protocol': 'Multi-Agent Swarm',
                 'Tool Executing': toolName,
@@ -1571,8 +1597,8 @@ export class MCPAdapter implements Adapter {
                 'Status': 'Executing...'
             }, goal.substring(0, 50) + '...');
         } else if (toolName) {
-           // Standard trace
-           console.error(`\x1b[90m[NEXUS] Executing Tool: ${toolName}\x1b[0m`);
+           // Standard trace with brief sci-fi element
+           console.error(`\x1b[90m[NEXUS] ◈ ${toolName} ◈\x1b[0m`);
         }
 
         if (goal && goal.length > 50 && !['nexus_execute_nxl', 'nexus_session_bootstrap', 'nexus_plan_execution'].includes(request.params.name)) {
@@ -1598,6 +1624,16 @@ export class MCPAdapter implements Adapter {
                     ? (request.params.arguments.files as unknown[]).map(String)
                     : undefined;
                 const bootstrap = await this.getOrchestrator().bootstrapSession(bootstrapGoal, { files });
+
+                // Auto-generate a project-scoped memory on bootstrap so dashboard always has something to show
+                try {
+                    this.nexusRef.storeMemory(
+                        `Session bootstrap: ${bootstrapGoal || 'interactive session'}. Memory: prefrontal=${bootstrap.memoryStats?.prefrontal ?? 0}, hippocampus=${bootstrap.memoryStats?.hippocampus ?? 0}, cortex=${bootstrap.memoryStats?.cortex ?? 0}.`,
+                        0.5,
+                        ['#session-start', '#auto', '#project']
+                    );
+                } catch { /* best-effort */ }
+
                 const payload = {
                     client: bootstrap.client,
                     memoryRecall: bootstrap.memoryRecall,
@@ -1686,6 +1722,17 @@ export class MCPAdapter implements Adapter {
                         optimizationProfile,
                     });
                     const verifiedWorkers = execution.workerResults.filter((worker) => worker.verified).length;
+
+                    // Auto-store run summary memory so dashboard and future sessions can see what happened
+                    try {
+                        const modifiedFiles = execution.workerResults.flatMap((w) => w.modifiedFiles);
+                        this.nexusRef.storeMemory(
+                            `Run ${execution.runId} ${execution.state}: ${summarizeExecution(execution)}. Workers: ${verifiedWorkers}/${execution.workerResults.length} verified. Files modified: ${modifiedFiles.slice(0, 5).join(', ') || 'none'}.`,
+                            0.7,
+                            ['#run-summary', '#auto', '#project']
+                        );
+                    } catch { /* best-effort */ }
+
                     execution.activeSkills.forEach((skill) => this.sessionDNA.recordSkill(skill.name));
                     execution.workerResults.forEach((result) => {
                         result.modifiedFiles.forEach((file) => this.sessionDNA.recordFileModified(file));

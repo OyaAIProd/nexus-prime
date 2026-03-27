@@ -325,7 +325,8 @@
         }
 
         .rail.left .panel-body {
-            overflow: visible;
+            overflow: auto;
+            max-height: calc(100vh - 12rem);
         }
 
         .rail.right {
@@ -868,6 +869,7 @@
             flex-direction: column;
             gap: 0.85rem;
             overflow: auto;
+            max-height: calc(100vh - 10rem);
         }
 
         body[data-surface-mode="memory"] .graph-panel,
@@ -2128,6 +2130,7 @@
             synapseApprovals: [],
             architectsDispatch: { throttled: false, active: 0, queueDepth: 0, limit: -1 },
             architectsEscalations: [],
+            architectsWorklist: [],
             ragCollections: [],
             patterns: [],
             modelTiers: { policy: null, trace: [] },
@@ -2287,6 +2290,7 @@
             if (Array.isArray(value.synapseApprovals)) state.synapseApprovals = value.synapseApprovals;
             if (value.architectsDispatch) state.architectsDispatch = value.architectsDispatch;
             if (Array.isArray(value.architectsEscalations)) state.architectsEscalations = value.architectsEscalations;
+            if (Array.isArray(value.architectsWorklist)) state.architectsWorklist = value.architectsWorklist;
             if (value.nexusLayer) state.nexusLayer = value.nexusLayer;
             if (Array.isArray(value.alerts)) state.operatorAlerts = value.alerts;
             if (value.latestRun) state.summaryLatestRun = value.latestRun;
@@ -2499,6 +2503,13 @@
                 dynamic: true,
                 assign(value) {
                     state.architectsEscalations = Array.isArray(value) ? value : [];
+                },
+            },
+            architectsWorklist: {
+                url: '/api/architects/worklist',
+                dynamic: true,
+                assign(value) {
+                    state.architectsWorklist = Array.isArray(value) ? value : [];
                 },
             },
             ragCollections: {
@@ -2752,6 +2763,8 @@
             ],
             trust: [
                 { mode: 'trust', label: 'Trust' },
+                { mode: 'synapse', label: 'Synapse' },
+                { mode: 'architects', label: 'Architects' },
                 { mode: 'federation', label: 'Federation' },
             ],
         };
@@ -4468,6 +4481,8 @@
                 hooks: 'Hooks',
                 automations: 'Automations',
                 trust: 'Trust Console',
+                synapse: 'Synapse Operations',
+                architects: 'Architects Dispatch',
                 federation: 'Federation Mesh',
             };
             const subtitles = {
@@ -4486,6 +4501,8 @@
                 hooks: 'Inspect runtime checkpoints and the artifact selectors they inject into a run.',
                 automations: 'Review bounded follow-ups, trigger modes, and connector-facing delivery behavior.',
                 trust: 'Inspect quarantines, guardrails, and the reasons a memory or run path is blocked.',
+                synapse: 'Monitor strike teams, operative health, pending approvals, and mission progress.',
+                architects: 'Track worklist dispatch, ward escalations, and work item status across operatives.',
                 federation: 'See peer inventory, relay status, and what the selected runtime exchanged with the mesh.',
             };
             $('library-title').textContent = surface.libraryTitle || titles[state.libraryMode];
@@ -5472,6 +5489,124 @@
                                     </div>
                                 `).join('')
                                 : emptyState('No trust findings available yet.')}
+                    </div>
+                `;
+            } else if (state.libraryMode === 'synapse') {
+                const teams = Array.isArray(state.synapseTeams) ? state.synapseTeams : [];
+                const health = Array.isArray(state.synapseHealth) ? state.synapseHealth : [];
+                const approvals = Array.isArray(state.synapseApprovals) ? state.synapseApprovals : [];
+                const hasData = teams.length || health.length || approvals.length;
+                container.innerHTML = `
+                    <div class="metrics-grid">
+                        <div class="hero-metric">
+                            <label>Strike Teams</label>
+                            <strong>${formatNumber(teams.length)}</strong>
+                            <div class="meta">Active operative teams</div>
+                        </div>
+                        <div class="hero-metric">
+                            <label>Operatives</label>
+                            <strong>${formatNumber(health.length)}</strong>
+                            <div class="meta">Health-tracked operatives</div>
+                        </div>
+                        <div class="hero-metric">
+                            <label>Pending Approvals</label>
+                            <strong>${formatNumber(approvals.length)}</strong>
+                            <div class="meta">${approvals.length ? 'Awaiting operator review' : 'No pending gates'}</div>
+                        </div>
+                    </div>
+                    ${approvals.length ? `
+                        <div class="card">
+                            <div class="card-title">
+                                <strong>Pending Approvals</strong>
+                                <span class="state-chip warn">${formatNumber(approvals.length)} pending</span>
+                            </div>
+                            ${approvals.map((approval) => `
+                                <div class="card interactive small-list-item" data-kind="synapse-approval" data-id="${escapeHtml(approval.id || approval.operativeId || '')}">
+                                    <div class="card-title"><strong>${escapeHtml(approval.action || approval.description || 'Approval request')}</strong></div>
+                                    <div class="meta">${escapeHtml(approval.description || '')} · ${formatAgo(approval.timestamp || approval.requestedAt)}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                    <div class="stack" style="margin-top:0.8rem;">
+                        <div class="entity-header"><h3>Strike Teams</h3></div>
+                        ${teams.length
+                            ? teams.map((team) => `
+                                <div class="card interactive" data-kind="synapse-team" data-id="${escapeHtml(team.teamId || team.id || '')}">
+                                    <div class="card-title">
+                                        <strong>${escapeHtml(team.name || team.teamId || 'Team')}</strong>
+                                        <span class="state-chip ${stateClass(team.status || 'active')}">${escapeHtml(team.status || 'active')}</span>
+                                    </div>
+                                    <div class="meta">${escapeHtml(team.mission || team.description || 'No mission description')} · ${formatNumber(team.operatives?.length || team.memberCount || 0)} operatives</div>
+                                    <div class="list-inline">${(team.tags || team.capabilities || []).slice(0, 5).map((tag) => chip(tag)).join('')}</div>
+                                </div>
+                            `).join('')
+                            : emptyState(hasData ? 'No strike teams deployed.' : 'Synapse is not initialized. Set SYNAPSE_OPERATIVE_ID to activate.')}
+                    </div>
+                    ${health.length ? `
+                        <div class="stack" style="margin-top:0.8rem;">
+                            <div class="entity-header"><h3>Operative Health</h3></div>
+                            ${health.map((op) => `
+                                <div class="card interactive" data-kind="synapse-operative" data-id="${escapeHtml(op.operativeId || op.id || '')}">
+                                    <div class="card-title">
+                                        <strong>${escapeHtml(op.operativeId || op.name || 'Operative')}</strong>
+                                        <span class="state-chip ${stateClass(op.health || op.status || 'unknown')}">${escapeHtml(op.health || op.status || 'unknown')}</span>
+                                    </div>
+                                    <div class="meta">last seen ${formatAgo(op.lastHeartbeat || op.lastSeen)} · sorties ${formatNumber(op.sorties || op.sortieCount || 0)}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                `;
+            } else if (state.libraryMode === 'architects') {
+                const dispatch = state.architectsDispatch || {};
+                const escalations = Array.isArray(state.architectsEscalations) ? state.architectsEscalations : [];
+                const worklist = Array.isArray(state.architectsWorklist) ? state.architectsWorklist : [];
+                container.innerHTML = `
+                    <div class="metrics-grid">
+                        <div class="hero-metric">
+                            <label>Active Workers</label>
+                            <strong>${formatNumber(dispatch.active || 0)}</strong>
+                            <div class="meta">${dispatch.throttled ? 'Throttled' : 'Not throttled'} · limit ${dispatch.limit === -1 ? 'unlimited' : formatNumber(dispatch.limit || 0)}</div>
+                        </div>
+                        <div class="hero-metric">
+                            <label>Queue Depth</label>
+                            <strong>${formatNumber(dispatch.queueDepth || 0)}</strong>
+                            <div class="meta">Work items pending dispatch</div>
+                        </div>
+                        <div class="hero-metric">
+                            <label>Escalations</label>
+                            <strong>${formatNumber(escalations.length)}</strong>
+                            <div class="meta">${escalations.length ? 'Ward attention needed' : 'No escalations'}</div>
+                        </div>
+                    </div>
+                    ${escalations.length ? `
+                        <div class="card">
+                            <div class="card-title">
+                                <strong>Ward Escalations</strong>
+                                <span class="state-chip warn">${formatNumber(escalations.length)} active</span>
+                            </div>
+                            ${escalations.map((esc) => `
+                                <div class="card interactive small-list-item" data-kind="architects-escalation" data-id="${escapeHtml(esc.id || '')}">
+                                    <div class="card-title"><strong>${escapeHtml(esc.subject || esc.reason || 'Escalation')}</strong></div>
+                                    <div class="meta">${escapeHtml(esc.details || esc.description || '')} · ${formatAgo(esc.timestamp || esc.createdAt)}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                    <div class="stack" style="margin-top:0.8rem;">
+                        <div class="entity-header"><h3>Worklist</h3></div>
+                        ${worklist.length
+                            ? worklist.map((item) => `
+                                <div class="card interactive" data-kind="architects-workitem" data-id="${escapeHtml(item.workItemId || item.id || '')}">
+                                    <div class="card-title">
+                                        <strong>${escapeHtml(item.title || item.description || item.workItemId || 'Work Item')}</strong>
+                                        <span class="state-chip ${stateClass(item.status || 'pending')}">${escapeHtml(item.status || 'pending')}</span>
+                                    </div>
+                                    <div class="meta">${escapeHtml(item.branch || '')} · assigned ${escapeHtml(item.assignedTo || item.claimedBy || 'unassigned')} · ${formatAgo(item.updatedAt || item.createdAt)}</div>
+                                </div>
+                            `).join('')
+                            : emptyState(dispatch.active != null ? 'No worklist items loaded. Use the Architects protocol to create work items.' : 'Architects is not initialized. Set ARCHITECTS_OPERATIVE_ID to activate.')}
                     </div>
                 `;
             } else if (state.libraryMode === 'federation') {

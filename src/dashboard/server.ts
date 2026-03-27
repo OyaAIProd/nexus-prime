@@ -301,7 +301,14 @@ export class DashboardServer {
         }
 
         if (req.method === 'GET' && url.pathname === '/api/runtimes') {
+            this.runtimeRegistry.pruneStalePublic();
             this.respondJson(res, this.runtimeRegistry.list());
+            return;
+        }
+
+        if (req.method === 'POST' && url.pathname === '/api/runtime/prune') {
+            this.runtimeRegistry.pruneStalePublic();
+            this.respondJson(res, { pruned: true, remaining: this.runtimeRegistry.list().length });
             return;
         }
 
@@ -1340,8 +1347,12 @@ export class DashboardServer {
         return raw
             .filter((memory: any) => {
                 const tags: string[] = Array.isArray(memory.tags) ? memory.tags : [];
+                // Auto-generated memories are always visible on dashboard
+                if (tags.includes('#auto')) return true;
                 if (tags.includes('#quarantine') && options.lane !== 'inbox') return false;
                 if (!options.showPhantom && (tags.includes('#phantom-learning') || tags.includes('#swarm'))) return false;
+                // Allow #repo-profile in profile lane
+                if (tags.includes('#repo-profile') && options.lane === 'profile') return true;
                 if (!options.includeHidden && (tags.includes('#hidden') || tags.includes('#repo-profile') || tags.includes('#system-hidden'))) return false;
                 return true;
             })

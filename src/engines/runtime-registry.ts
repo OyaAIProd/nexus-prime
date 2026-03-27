@@ -347,7 +347,7 @@ export interface ListedRuntimeSnapshot extends RuntimeRegistrySnapshot {
 }
 
 const ACTIVE_RUNTIME_WINDOW_MS = 2 * 60 * 1000;
-const STALE_PRUNE_WINDOW_MS = 12 * 60 * 60 * 1000;
+const STALE_PRUNE_WINDOW_MS = 2 * 60 * 60 * 1000; // 2 hours (was 12h — too long, caused stale runtime accumulation)
 
 export function createEmptyUsageState(): Record<RuntimeUsageCategory, RuntimeUsageEntry> {
     return {
@@ -466,6 +466,10 @@ export class RuntimeRegistry {
         }
     }
 
+    pruneStalePublic(): void {
+        this.pruneStale();
+    }
+
     private pruneStale(): void {
         const now = Date.now();
         for (const entry of fs.readdirSync(this.registryDir)) {
@@ -473,8 +477,20 @@ export class RuntimeRegistry {
             const target = path.join(this.registryDir, entry);
             try {
                 const snapshot = JSON.parse(fs.readFileSync(target, 'utf8')) as RuntimeRegistrySnapshot;
-                if (now - Number(snapshot.lastHeartbeatAt || 0) > STALE_PRUNE_WINDOW_MS) {
+                const age = now - Number(snapshot.lastHeartbeatAt || 0);
+                // Prune if older than the stale window
+                if (age > STALE_PRUNE_WINDOW_MS) {
                     fs.unlinkSync(target);
+                    continue;
+                }
+                // Prune if the owning process is dead (stale beyond active window)
+                if (age > ACTIVE_RUNTIME_WINDOW_MS && (snapshot as any).pid) {
+                    try {
+                        process.kill((snapshot as any).pid, 0);
+                    } catch {
+                        // Process is dead — prune immediately
+                        fs.unlinkSync(target);
+                    }
                 }
             } catch {
                 fs.unlinkSync(target);

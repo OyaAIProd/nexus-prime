@@ -63,6 +63,8 @@ export interface RagCollectionInput {
 
 export interface RagIngestInput {
     filePath?: string;
+    folderPath?: string;
+    folderGlob?: string;
     url?: string;
     text?: string;
     label?: string;
@@ -85,6 +87,56 @@ export interface RagRetrievalHit {
 const MAX_CHUNK_CHARS = 1200;
 const DEFAULT_REMOTE_FETCH_TIMEOUT_MS = 15_000;
 const COLLECTION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+const RAG_SUPPORTED_EXTENSIONS = new Set([
+    '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+    '.py', '.rb', '.go', '.rs', '.java', '.kt', '.swift', '.c', '.cpp', '.h',
+    '.md', '.txt', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg',
+    '.html', '.css', '.scss', '.less', '.vue', '.svelte',
+    '.sh', '.bash', '.zsh', '.sql', '.graphql',
+]);
+const RAG_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', '__pycache__', '.cache', 'coverage', '.turbo']);
+const RAG_MAX_FOLDER_FILES = 200;
+
+function expandFolderInputs(input: RagIngestInput): RagIngestInput[] {
+    const folder = input.folderPath;
+    if (!folder) return [input];
+    const resolved = path.resolve(folder);
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) return [];
+
+    const globPattern = input.folderGlob?.trim() || '';
+    const files: string[] = [];
+
+    function walk(dir: string): void {
+        if (files.length >= RAG_MAX_FOLDER_FILES) return;
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (files.length >= RAG_MAX_FOLDER_FILES) return;
+            if (entry.name.startsWith('.')) continue;
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                if (RAG_SKIP_DIRS.has(entry.name)) continue;
+                walk(full);
+            } else if (entry.isFile()) {
+                const ext = path.extname(entry.name).toLowerCase();
+                if (globPattern) {
+                    // Simple glob: match extension pattern like "*.ts" or "*.{ts,js}"
+                    if (globPattern.includes(ext) || globPattern === '*') {
+                        files.push(full);
+                    }
+                } else if (RAG_SUPPORTED_EXTENSIONS.has(ext)) {
+                    files.push(full);
+                }
+            }
+        }
+    }
+
+    walk(resolved);
+    return files.map((filePath) => ({
+        filePath,
+        label: input.label ? `${input.label}/${path.relative(resolved, filePath)}` : path.relative(resolved, filePath),
+        tags: input.tags,
+    }));
+}
 
 export interface RagCollectionStoreOptions {
     requestTimeoutMs?: number;
@@ -160,7 +212,10 @@ export class RagCollectionStore {
         let sourcesAdded = 0;
         let chunksAdded = 0;
 
-        for (const input of inputs) {
+        // Expand folder inputs into individual file inputs
+        const expandedInputs = inputs.flatMap((input) => input.folderPath ? expandFolderInputs(input) : [input]);
+
+        for (const input of expandedInputs) {
             const content = await this.readInputContent(input);
             if (!content.trim()) continue;
             const sourceId = `src_${randomUUID().slice(0, 8)}`;

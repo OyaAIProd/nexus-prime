@@ -3,10 +3,21 @@ import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { ensureBootstrap } from './engines/client-bootstrap.js';
+import { printASCIILogo, printBootSuccessMessage } from './utils/ascii-art.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.join(__dirname, '..');
+
+// Get version from package.json
+let version = '4.4.0';
+try {
+  const pkgPath = path.join(packageRoot, 'package.json');
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  version = pkg.version || version;
+} catch {
+  // fallback to default version
+}
 
 function appendInstallLog(message: string): void {
   try {
@@ -29,12 +40,25 @@ async function runWithRetry(maxRetries = 3, delayMs = 1000) {
         appendInstallLog('Bootstrap disabled via NEXUS_BOOTSTRAP_DISABLE=1');
         process.exit(0);
       }
+
+      // Show ASCII art during installation (non-silent mode)
+      if (process.env.CI !== 'true' && !process.env.NEXUS_SILENT_INSTALL) {
+        console.log('');
+        printASCIILogo(version);
+      }
+
       ensureBootstrap({
         packageRoot,
         workspaceRoot: process.cwd(),
         phase: 'install',
         silent: true,
       });
+
+      // Show success message
+      if (process.env.CI !== 'true' && !process.env.NEXUS_SILENT_INSTALL) {
+        printBootSuccessMessage(version);
+      }
+
       appendInstallLog(`Bootstrap complete (workspace: ${process.cwd()})`);
       return;
     } catch (error) {

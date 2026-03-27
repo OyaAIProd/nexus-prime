@@ -2300,7 +2300,7 @@ export class SubAgentRuntime {
         const task: ExecutionTask = {
             goal: input.goal,
             files: input.files ?? [],
-            workers: Math.max(2, Math.min(input.workers ?? 2, 7)),
+            workers: Math.max(2, Math.min(input.workers ?? 3, 7)),
             roles: input.roles ?? ['planner', 'coder', 'verifier', 'skill-maker', 'research-shadow'],
             strategies: input.strategies ?? ['minimal', 'standard', 'thorough'],
             verifyCommands: input.verifyCommands ?? this.defaultVerifyCommands(),
