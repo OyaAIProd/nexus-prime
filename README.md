@@ -41,6 +41,8 @@
 
 ## The problem with coding agents today
 
+[![SafeSkill 30/100](https://img.shields.io/badge/SafeSkill-30%2F100_Blocked-red)](https://safeskill.dev/scan/sir-ad-nexus-prime)
+
 Every coding agent eventually hits the same ceiling. Not model quality — infrastructure.
 
 **The re-reading loop.** Agents have no persistent memory. Every action requires re-reading all relevant context from scratch. One developer tracked 100M tokens across a Claude Code session: 99.4% were input. For every 1 token written, 166 were read. The agent was not building understanding — it was paying full orientation cost on every single turn.
