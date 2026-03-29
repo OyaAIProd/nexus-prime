@@ -12,7 +12,7 @@ nexus_orchestrate(prompt="<user request>")
 ```
 
 ### Required Lifecycle Hooks
-- Before reading 3+ files: `nexus_optimize_tokens(goal="<what you're doing>", files=["src/foo.ts"])`
+- Token optimization auto-applies during bootstrap when files are known; otherwise call `nexus_optimize_tokens(goal="<what you're doing>", files=["src/foo.ts"])` before broad reading
 - Before any file modification or destructive work: `nexus_mindkit_check(action="<what you're about to do>", filesToModify=["path/to/file"])`
 - Before refactoring 3+ files: `nexus_ghost_pass(goal="<what you're changing>", files=["path/to/file"])`
 - After significant findings: `nexus_store_memory(content="<specific learning>", priority=0.8, tags=["#bug", "#architecture", "#decision"])`
@@ -52,8 +52,9 @@ Do not use any other co-author identity for automated commits.
 - REQUIRED session start: call `nexus_session_bootstrap(goal, files?)`, then `nexus_orchestrate(prompt=<raw user request>)`.
 - `nexus_orchestrate` does NOT replace during-work or session-close lifecycle steps.
 - Use `nexus_plan_execution` only when a plan-before-run is requested.
+- Prefer repo-local skills/workflows from `.agents/skills` + `.agents/workflows`; fall back to `.agent/skills` + `.agent/workflows` for older repos.
 - Discover catalogs only when needed: `nexus_list_skills`, `nexus_list_workflows`, `nexus_list_hooks`, `nexus_list_automations`, `nexus_list_specialists`, `nexus_list_crews`.
-- REQUIRED before reading 3+ files: call `nexus_optimize_tokens(goal, files)`.
+- REQUIRED before broad reading when bootstrap did not auto-apply: call `nexus_optimize_tokens(goal, files)`.
 - REQUIRED before file modification or destructive work: call `nexus_mindkit_check(action, filesToModify)`.
 - REQUIRED before refactoring 3+ files: call `nexus_ghost_pass(goal, files)`.
 - REQUIRED after significant findings and at session end: call `nexus_store_memory(content, priority, tags)`.
@@ -85,13 +86,6 @@ Only active when `ARCHITECTS_OPERATIVE_ID` is set.
 5. Never push directly to `main`
 6. Use `nexus_architects_relay_send(...)` for operative-to-operative messages
 7. Escalate 2+ sortie blockers to the ward via relay instead of waiting silently
-
-
-
-
-
-
-
 
 
 

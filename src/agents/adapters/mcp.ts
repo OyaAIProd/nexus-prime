@@ -47,6 +47,10 @@ import {
 } from '../../engines/index.js';
 import { FederationEngine, type TraceEntry } from '../../engines/federation.js';
 import { TokenAnalyticsEngine } from '../../engines/token-analytics.js';
+import { getSharedNgramIndex, type NgramIndex } from '../../engines/ngram-index.js';
+import { getSharedTelemetry } from '../../engines/telemetry-remote.js';
+import { getGstackBridge } from '../../engines/gstack-bridge.js';
+import { getSharedContextDiscovery } from '../../engines/context-discovery.js';
 import { synapseToolDefinitions, handleSynapseToolCall } from '../../synapse/index.js';
 import { architectsToolDefinitions, handleArchitectsToolCall } from '../../architects/index.js';
 
@@ -82,6 +86,13 @@ function getHybridRetriever(): HybridRetriever {
     return _hybridRetriever;
 }
 
+// Lazy-initialized N-gram index for fast search
+let _ngramIndex: NgramIndex | null = null;
+function getNgramIndexInstance(): NgramIndex {
+    if (!_ngramIndex) _ngramIndex = getSharedNgramIndex();
+    return _ngramIndex;
+}
+
 // Derive project root from this file's location (dist/agents/adapters/mcp.js → project root)
 const __filename = fileURLToPath(import.meta.url);
 const PROJECT_ROOT = path.resolve(path.dirname(__filename), '..', '..', '..');
@@ -101,6 +112,8 @@ const AUTONOMOUS_TOOL_ORDER = [
     'nexus_recall_memory',
     'nexus_memory_stats',
     'nexus_store_memory',
+    'nexus_search',
+    'nexus_describe_tool',
     'nexus_optimize_tokens',
     'nexus_mindkit_check',
     'nexus_ghost_pass',
@@ -286,7 +299,7 @@ class SessionTelemetry {
         if (currentToolName === 'nexus_optimize_tokens') return false;
         if (this.lifecyclePhase === 'pre-bootstrap') return false;
         if (this.tokenAutoApplied) return false;
-        return this.fileReadIntentCount >= 3 && !this.optimizeTokensCalled;
+        return this.fileReadIntentCount >= 1 && !this.optimizeTokensCalled;
     }
 
     markTokenAutoApplied(): void {
@@ -415,6 +428,7 @@ export class MCPAdapter implements Adapter {
     private lifecyclePolicy = new LifecyclePolicy();
     private memoryInjectionCache = new Map<string, { expiresAt: number; matches: Array<{ content: string; score: number }> }>();
     private lastMemoryInjectionAt = 0;
+    private currentTask = '';
 
     private sciFiMatrixLog(title: string, metrics: Record<string, any>, intent?: string): void {
         const width = 76;
@@ -761,9 +775,35 @@ export class MCPAdapter implements Adapter {
     }
 
     private finalizeToolDefinitions(tools: McpToolDefinition[], profile: McpToolProfile = this.getToolProfile()): McpToolDefinition[] {
+        const taskContext = this.currentTask || this.getRuntime().getUsageSnapshot()?.orchestration?.lastPrompt || '';
         const scoped = profile === 'full'
             ? tools.slice()
             : tools.filter((tool) => AUTONOMOUS_TOOL_SET.has(tool.name));
+        const order = profile === 'full'
+            ? [...AUTONOMOUS_TOOL_ORDER, ...scoped.map((tool) => tool.name).filter((name) => !AUTONOMOUS_TOOL_SET.has(name))]
+            : [...AUTONOMOUS_TOOL_ORDER];
+        const orderIndex = new Map(order.map((name, index) => [name, index]));
+
+        const decorated = scoped
+            .map((tool) => ({
+                ...tool,
+                description: this.decorateToolDescription(tool.name, tool.description, profile),
+            }))
+            .sort((left, right) => {
+                const leftIndex = orderIndex.get(left.name) ?? Number.MAX_SAFE_INTEGER;
+                const rightIndex = orderIndex.get(right.name) ?? Number.MAX_SAFE_INTEGER;
+                return leftIndex - rightIndex || left.name.localeCompare(right.name);
+            });
+
+        const discovery = getSharedContextDiscovery();
+        discovery.registerTools(decorated);
+        return discovery.applyToTools(taskContext, decorated);
+    }
+
+    private getDecoratedToolDefinitions(profile: McpToolProfile = this.getToolProfile()): McpToolDefinition[] {
+        const scoped = profile === 'full'
+            ? this.buildToolDefinitions().slice()
+            : this.buildToolDefinitions().filter((tool) => AUTONOMOUS_TOOL_SET.has(tool.name));
         const order = profile === 'full'
             ? [...AUTONOMOUS_TOOL_ORDER, ...scoped.map((tool) => tool.name).filter((name) => !AUTONOMOUS_TOOL_SET.has(name))]
             : [...AUTONOMOUS_TOOL_ORDER];
@@ -792,7 +832,7 @@ export class MCPAdapter implements Adapter {
             return 'Optional: Inspect the execution ledger before calling nexus_orchestrate. Skip unless you need pre-run visibility into what Nexus will choose.';
         }
         if (name === 'nexus_optimize_tokens') {
-            return 'MANDATORY before reading 3+ files. Returns a token-saving reading plan. Follow it exactly and do not bulk-read the repo.';
+            return 'Always-on token optimization. Automatically generates token-saving reading plans for any file reads. Follow the plan exactly and do not bulk-read the repo.';
         }
         if (name === 'nexus_mindkit_check') {
             return 'MANDATORY before any file modification or destructive operation. Returns PASS/FAIL. Do NOT proceed if it returns FAIL.';
@@ -958,7 +998,7 @@ export class MCPAdapter implements Adapter {
                 },
                 {
                     name: 'nexus_optimize_tokens',
-                    description: 'Generate a token-efficient file reading plan BEFORE reading files. MANDATORY when reading 3+ files. Returns which files to read fully, outline-only, or skip. Typically saves 50-90% tokens per session.',
+                    description: 'Generate a token-efficient file reading plan. Always-on: auto-applies during bootstrap for any files. Returns which files to read fully, outline-only, or skip. Typically saves 50-90% tokens per session.',
                     inputSchema: {
                         type: 'object',
                         properties: {
@@ -968,6 +1008,32 @@ export class MCPAdapter implements Adapter {
                             budget: { type: 'number', description: 'Token budget override' }
                         },
                         required: [],
+                    },
+                },
+                // ── Search ──────────────────────────────────────────────────────
+                {
+                    name: 'nexus_search',
+                    description: 'Fast codebase search using sparse n-gram index. Returns matching documents ranked by relevance. Much faster and cheaper than reading full files — reports token savings vs brute-force file reads.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            query: { type: 'string', description: 'Search query (text or pattern)' },
+                            limit: { type: 'number', description: 'Max results to return (default 20)' },
+                            sparse: { type: 'boolean', description: 'Use sparse n-gram search for higher selectivity (default false)' },
+                        },
+                        required: ['query'],
+                    },
+                },
+                // ── Context Discovery ────────────────────────────────────────────
+                {
+                    name: 'nexus_describe_tool',
+                    description: 'Get full description and schema for any Nexus tool on demand. Use when you need details about a specific capability without loading all tool descriptions upfront. Saves tokens via lazy loading.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            tool_name: { type: 'string', description: 'Name of the Nexus tool to describe' },
+                        },
+                        required: ['tool_name'],
                     },
                 },
                 // ── Mindkit ──────────────────────────────────────────────────────
@@ -1632,6 +1698,8 @@ export class MCPAdapter implements Adapter {
                 },
                 ...synapseToolDefinitions,
                 ...architectsToolDefinitions,
+                // ── Embedded capabilities (auto-detected from installed skills) ──
+                ...getGstackBridge().getToolDefinitions(),
             ];
     }
 
@@ -1775,10 +1843,26 @@ export class MCPAdapter implements Adapter {
             return architectsResponse as { content: Array<{ type: string; text: string }> };
         }
 
+        // Handle embedded gstack skill calls
+        const gstackBridge = getGstackBridge();
+        if (gstackBridge.detect() && gstackBridge.listSkills().some(s => s.toolName === toolName)) {
+            const result = await gstackBridge.execute(toolName, args as Record<string, unknown>);
+            getSharedTelemetry().trackFeatureUsage(toolName, { success: result.success });
+            return {
+                content: [{
+                    type: 'text',
+                    text: result.success
+                        ? result.output
+                        : `Execution failed (exit ${result.exitCode}): ${result.output.slice(0, 500)}`,
+                }],
+            };
+        }
+
         switch (request.params.name) {
 
             case 'nexus_session_bootstrap': {
                 const bootstrapGoal = String(request.params.arguments?.goal ?? request.params.arguments?.prompt ?? '');
+                this.currentTask = bootstrapGoal;
                 const files = Array.isArray(request.params.arguments?.files)
                     ? (request.params.arguments.files as unknown[]).map(String)
                     : undefined;
@@ -1797,6 +1881,16 @@ export class MCPAdapter implements Adapter {
                     tokenAutoApplied: autoTokenApplied,
                     toolProfile: this.getToolProfile(),
                 });
+
+                // Remote telemetry: track session start (privacy-safe, opt-in only)
+                try {
+                    const remoteTelemetry = getSharedTelemetry();
+                    remoteTelemetry.trackSessionStart();
+                    remoteTelemetry.trackFeatureUsage('session_bootstrap');
+                    if (autoTokenApplied && bootstrap.tokenOptimization?.planMetrics?.savings) {
+                        remoteTelemetry.trackTokenSavings(Number(bootstrap.tokenOptimization.planMetrics.savings));
+                    }
+                } catch { /* best-effort telemetry */ }
 
                 // Auto-generate a project-scoped memory on bootstrap so dashboard always has something to show
                 try {
@@ -1824,6 +1918,7 @@ export class MCPAdapter implements Adapter {
                     taskGraphPreview: bootstrap.taskGraphPreview,
                     workerPlanPreview: bootstrap.workerPlanPreview,
                     knowledgeFabric: bootstrap.knowledgeFabric,
+                    sessionSummaryBootstrap: bootstrap.sessionSummaryBootstrap,
                     mcpToolProfile: this.getToolProfile(),
                 };
                 return {
@@ -1837,13 +1932,16 @@ export class MCPAdapter implements Adapter {
                                 `Memory stats: prefrontal ${bootstrap.memoryStats?.prefrontal ?? 0} · hippocampus ${bootstrap.memoryStats?.hippocampus ?? 0} · cortex ${bootstrap.memoryStats?.cortex ?? 0}`,
                                 `Recommended next step: ${bootstrap.recommendedNextStep || 'nexus_orchestrate'}`,
                                 `Execution mode: ${bootstrap.recommendedExecutionMode || 'autonomous'}`,
-                                `Token optimization: ${bootstrap.tokenOptimization?.autoApplied ? 'auto-applied during bootstrap' : (bootstrap.tokenOptimization?.required ? 'required before broad reading' : 'not required yet')}`,
+                                `Token optimization: ${bootstrap.tokenOptimization?.autoApplied ? `auto-applied — saved ${Number(bootstrap.tokenOptimization?.planMetrics?.savings ?? 0).toLocaleString()} tokens (${bootstrap.tokenOptimization?.planMetrics?.pct ?? 0}% reduction)` : (bootstrap.tokenOptimization?.required ? 'required before broad reading' : 'not required yet')}`,
                                 `Catalog health: ${bootstrap.catalogHealth?.overall || 'unknown'} · selected ${bootstrap.artifactSelectionAudit?.selected?.length || 0}`,
                                 `Shortlist: ${bootstrap.shortlist?.skills?.slice(0, 3).join(', ') || 'none'} (skills), ${bootstrap.shortlist?.specialists?.slice(0, 3).join(', ') || 'none'} (specialists)`,
                                 `Knowledge fabric: ${bootstrap.sourceMixRecommendation?.dominantSource || bootstrap.knowledgeFabric?.dominantSource || 'awaiting source mix'}`,
                                 `RAG: ${bootstrap.ragCandidateStatus?.attachedCollections || 0} attached · ${bootstrap.ragCandidateStatus?.retrievedChunks || 0} retrieved`,
                                 `Task graph: ${bootstrap.taskGraphPreview?.phases?.length || 0} phases · ${bootstrap.taskGraphPreview?.independentBranches || 0} branches`,
                                 `Worker plan: ${bootstrap.workerPlanPreview?.totalWorkers || 0} lanes planned`,
+                                bootstrap.sessionSummaryBootstrap
+                                    ? `Session summary: reused ${Number(bootstrap.sessionSummaryBootstrap.savedTokens || 0).toLocaleString()} tokens from the previous visit`
+                                    : 'Session summary: none available yet',
                                 bootstrap.autoGhostPass?.applied
                                     ? `Auto ghost-pass: ${bootstrap.autoGhostPass.riskAreas.length} risk area(s) · ${bootstrap.autoGhostPass.workerApproaches} approach(es)`
                                     : `Auto ghost-pass: skipped`,
@@ -1861,6 +1959,7 @@ export class MCPAdapter implements Adapter {
 
             case 'nexus_orchestrate': {
                 const prompt = String(request.params.arguments?.prompt ?? request.params.arguments?.goal ?? '');
+                this.currentTask = prompt;
                 const files = Array.isArray(request.params.arguments?.files)
                     ? (request.params.arguments.files as unknown[]).map(String)
                     : undefined;
@@ -1904,12 +2003,14 @@ export class MCPAdapter implements Adapter {
                     const tokenPlan = (execution as any)?.knowledgeFabric?.repo?.readingPlan;
                     const canAutoApplyTokenPlan = Boolean(
                         tokenPlan
-                        && Number(tokenPlan.savings || 0) > 5000
+                        && Number(tokenPlan.savings || 0) > 0
                         && !this.getRuntime().getUsageSnapshot()?.tokenOptimizationApplied,
                     );
                     let autoTokenApplyNote = '';
                     if (canAutoApplyTokenPlan) {
                         const savings = Number(tokenPlan.savings || 0);
+                        const totalBeforeOpt = savings + Number(tokenPlan.totalEstimatedTokens || 0);
+                        const pctSaved = totalBeforeOpt > 0 ? Math.round(savings / totalBeforeOpt * 100) : 0;
                         this.telemetry.recordTokens(savings);
                         this.getRuntime().recordClientToolCall('nexus_orchestrate', {
                             orchestrateCalled: true,
@@ -1917,7 +2018,8 @@ export class MCPAdapter implements Adapter {
                             tokenOptimizationApplied: true,
                             toolProfile: this.getToolProfile(),
                         });
-                        autoTokenApplyNote = `Auto-applied token optimization (${savings.toLocaleString()} estimated token savings).`;
+                        autoTokenApplyNote = `Token savings: ${savings.toLocaleString()} tokens saved (${pctSaved}% reduction).`;
+                        nexusEventBus.emit('tokens.optimized', { savings, pct: pctSaved, source: 'orchestrate' });
                     }
 
                     // Auto-store run summary memory so dashboard and future sessions can see what happened
@@ -2314,6 +2416,66 @@ export class MCPAdapter implements Adapter {
                             ]),
                             formatJsonDetails('Structured details', detail),
                         ].join('\n\n'),
+                    }],
+                };
+            }
+
+            case 'nexus_describe_tool': {
+                const requestedTool = String(request.params.arguments?.tool_name ?? '');
+                if (!requestedTool) {
+                    return { content: [{ type: 'text', text: 'tool_name is required.' }] };
+                }
+                const allToolDefs = this.getDecoratedToolDefinitions(this.getToolProfile());
+                const found = allToolDefs.find(t => t.name === requestedTool);
+                if (!found) {
+                    const available = allToolDefs.map(t => t.name).join(', ');
+                    return { content: [{ type: 'text', text: `Tool "${requestedTool}" not found. Available: ${available}` }] };
+                }
+                return {
+                    content: [{
+                        type: 'text',
+                        text: `## ${found.name}\n\n${found.description}\n\n**Schema:**\n\`\`\`json\n${JSON.stringify(found.inputSchema, null, 2)}\n\`\`\``,
+                    }],
+                };
+            }
+
+            case 'nexus_search': {
+                const query = String(request.params.arguments?.query ?? '');
+                const limit = Number(request.params.arguments?.limit ?? 20);
+                const useSparse = Boolean(request.params.arguments?.sparse);
+
+                if (!query.trim()) {
+                    return { content: [{ type: 'text', text: 'Search query is required.' }] };
+                }
+
+                const ngramIndex = getNgramIndexInstance();
+                const { results, tokensSaved, totalCandidateTokens } = ngramIndex.searchWithStats(query, limit);
+
+                if (results.length === 0) {
+                    return { content: [{ type: 'text', text: `No results found for "${query}".` }] };
+                }
+
+                const sparseResults = useSparse ? ngramIndex.searchSparse(query, limit) : null;
+                const displayResults = sparseResults ?? results;
+
+                const lines = displayResults.map((r, i) =>
+                    `${i + 1}. ${r.docId} (score: ${r.score})`
+                );
+                const stats = ngramIndex.getSearchStats();
+                const savingsLine = `\n📊 Token savings: ~${tokensSaved.toLocaleString()} tokens saved vs reading all ${results.length} matched files.\n` +
+                    `   Lifetime search savings: ${stats.totalTokensSaved.toLocaleString()} tokens across ${stats.totalQueries} queries.`;
+
+                nexusEventBus.emit('tokens.searchSaved', {
+                    query: query.slice(0, 100),
+                    resultCount: displayResults.length,
+                    tokensSaved,
+                    source: 'nexus_search',
+                });
+
+                return {
+                    content: [{
+                        type: 'text',
+                        text: `Search results for "${query}" (${displayResults.length} matches):\n\n${lines.join('\n')}${savingsLine}`,
                     }],
                 };
             }
@@ -2742,6 +2904,14 @@ export class MCPAdapter implements Adapter {
                     });
                     const dna = this.sessionDNA.flush();
                     const formatted = SessionDNAManager.format(dna);
+
+                    // Trigger self-summarization at session end
+                    try {
+                        this.getOrchestrator().persistSessionSummary(
+                            telemetry.tokensOptimized || this.getRuntime().getUsageSnapshot().tokens?.grossInputTokens || 0,
+                        );
+                    } catch { /* non-fatal */ }
+
                     return {
                         content: [{
                             type: 'text',

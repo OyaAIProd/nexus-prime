@@ -654,6 +654,18 @@ Inventory Snapshot: 109 skills · 64 workflows · 9 hooks · 5 automations · 7 
 ## 📜 Release History
 
 <details open>
+<summary><b>v4.6.0</b> · 2026-03-29 · Context Ascension — always-on compression, native search, and operator telemetry</summary>
+
+- **Always-on token optimization**: Bootstrap now auto-applies token optimization whenever candidate files are available, and bootstrap/orchestrate responses surface token and USD savings directly instead of hiding the win in diagnostics.
+- **Project-scoped session summaries**: Session close and `nexus_session_dna` now persist reusable project summaries, and the next bootstrap surfaces whether prior context was recovered before any broad file reading begins.
+- **Dynamic context discovery**: MCP `ListTools` now keeps core lifecycle tools expanded while summarizing non-core tools by default, with `nexus_describe_tool` available for on-demand full contracts.
+- **Native search and skill bridge**: Added sparse n-gram backed `nexus_search` plus Nexus-native bridging for installed gstack skills so external workflows appear inside the normal tool surface.
+- **Opt-in telemetry and dashboard signals**: Remote telemetry remains disabled until consent, clears queued events when turned off, and the dashboard now shows savings, search activity, and telemetry status in the main operator banner.
+
+Full notes: [releases/v4.6.0.md](./releases/v4.6.0.md) · Full history: [CHANGELOG.md](./CHANGELOG.md)
+</details>
+
+<details>
 <summary><b>v4.5.0</b> · 2026-03-27 · Neural Ascension — Auto-optimization, memory injection, and sci-fi command center</summary>
 
 - **Auto token optimization**: Bootstrap auto-applies token planning when 5+ candidate files detected. Quality floor (0.7) ensures task-referenced and recently modified files never get skipped. Zero manual `nexus_optimize_tokens` calls needed.

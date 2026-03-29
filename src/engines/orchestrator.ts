@@ -18,6 +18,7 @@ import { createSkillRuntime, type SkillRuntime } from './skill-runtime.js';
 import { SkillLearnerEngine } from './skill-learner.js';
 import { nxl, type AgentArchetype } from './nxl-interpreter.js';
 import { TokenSupremacyEngine, type FileRef, formatReadingPlan, type ReadingPlan } from './token-supremacy.js';
+import { getSharedSummarizer } from './self-summarizer.js';
 import { resolveNexusStateDir } from './runtime-registry.js';
 import { LifecyclePolicy } from './lifecycle-policy.js';
 import type {
@@ -137,6 +138,7 @@ export interface SessionBootstrapResult {
       savings: number;
       compressedTokens: number;
       originalTokens: number;
+      pct?: number;
     };
     policy?: {
       feature: string;
@@ -144,6 +146,12 @@ export interface SessionBootstrapResult {
       reason: string;
       contextHash: string;
     };
+  };
+  sessionSummaryBootstrap?: {
+    summary: string;
+    summaryTokens: number;
+    originalTokens: number;
+    savedTokens: number;
   };
   reviewGates: string[];
   catalogHealth: RuntimeCatalogHealthSnapshot;
@@ -545,6 +553,17 @@ export class OrchestratorEngine {
     }
   }
 
+  private getSummaryActiveFiles(): string[] {
+    const runtimeSelectedFiles = this.lastRun?.knowledgeFabric?.repo.selectedFiles ?? [];
+    const lastRunFiles = this.lastRun?.workerManifests.flatMap((manifest) => manifest.files.map((file) => file.path)) ?? [];
+    const modifiedFiles = this.lastRun?.workerResults.flatMap((result) => result.modifiedFiles) ?? [];
+    return dedupeStrings([
+      ...modifiedFiles,
+      ...lastRunFiles,
+      ...runtimeSelectedFiles,
+    ]).slice(0, 30);
+  }
+
   public getMemoryEngine(): MemoryEngine {
     return this.memory;
   }
@@ -558,9 +577,30 @@ export class OrchestratorEngine {
     this.unsubscribePreCompaction = undefined;
     this.compactionSentinel?.stop();
     this.memoryBackgroundWorker?.stop();
+    this.persistSessionSummary();
     this.memory.preCompactionFlush('dispose');
     this.memory.flushVaultSync();
     nexusEventBus.emit('orchestrator.disposed', { ts: Date.now() });
+  }
+
+  public persistSessionSummary(currentTokenCount?: number) {
+    try {
+      const projectId = this.getRepoScopedId('project');
+      const summarizer = getSharedSummarizer({ projectId });
+      const priorSummary = summarizer.bootstrapFromSummary(projectId);
+      return summarizer.summarize({
+        conversationHistory: this.sessionState.objectiveHistory ?? [],
+        activeFiles: this.getSummaryActiveFiles(),
+        taskState: this.sessionState.lastPrompt ?? '',
+        priorSummaryCount: priorSummary?.priorSummaryCount ?? 0,
+        currentTokenCount: currentTokenCount
+          ?? this.runtime.getUsageSnapshot().tokens?.grossInputTokens
+          ?? this.sessionState.tokenSummary?.grossInputTokens
+          ?? 0,
+      });
+    } catch {
+      return null;
+    }
   }
 
   public async bootstrapSession(task: string, options: Partial<ExecutionTask> = {}): Promise<SessionBootstrapResult> {
@@ -596,7 +636,7 @@ export class OrchestratorEngine {
     });
     let autoTokenPlan: ReadingPlan | undefined;
     let autoTokenApplied = false;
-    if (autoTokenDecision.enabled && candidateFiles.length >= 5) {
+    if (autoTokenDecision.enabled && candidateFiles.length >= 1) {
       try {
         const refs = this.toFileRefs(candidateFiles);
         const fileBoosts = this.memory.getFileBoosts(candidateFiles);
@@ -606,6 +646,27 @@ export class OrchestratorEngine {
         console.warn('[Orchestrator] Bootstrap auto token optimization failed, falling back to manual path:', error?.message ?? error);
       }
     }
+    // Self-summarization: try to bootstrap from prior session summary to save tokens
+    let sessionSummaryBootstrap: SessionBootstrapResult['sessionSummaryBootstrap'];
+    const projectHash = this.getRepoScopedId('project');
+    try {
+      const summarizer = getSharedSummarizer({ projectId: projectHash });
+      const priorSummary = summarizer.bootstrapFromSummary(projectHash);
+      if (priorSummary) {
+        sessionSummaryBootstrap = {
+          summary: priorSummary.summary,
+          summaryTokens: priorSummary.summaryTokens,
+          originalTokens: priorSummary.originalTokens,
+          savedTokens: priorSummary.originalTokens - priorSummary.summaryTokens,
+        };
+        nexusEventBus.emit('session.summaryBootstrap', {
+          originalTokens: priorSummary.originalTokens,
+          summaryTokens: priorSummary.summaryTokens,
+          savedTokens: priorSummary.originalTokens - priorSummary.summaryTokens,
+        });
+      }
+    } catch { /* non-fatal */ }
+
     const tokenOptimizationRequired = !autoTokenApplied;
     const ragUsageSummary = this.toRagUsageSummary(knowledgeFabric, {
       usedInPlanner: knowledgeFabric.rag.hits.length > 0,
@@ -737,6 +798,9 @@ export class OrchestratorEngine {
           savings: autoTokenPlan.savings,
           compressedTokens: autoTokenPlan.totalEstimatedTokens,
           originalTokens: autoTokenPlan.totalEstimatedTokens + autoTokenPlan.savings,
+          pct: (autoTokenPlan.totalEstimatedTokens + autoTokenPlan.savings) > 0
+            ? Math.round(autoTokenPlan.savings / (autoTokenPlan.totalEstimatedTokens + autoTokenPlan.savings) * 100)
+            : 0,
         } : undefined,
         policy: {
           feature: autoTokenDecision.feature,
@@ -745,6 +809,7 @@ export class OrchestratorEngine {
           contextHash: autoTokenDecision.contextHash,
         },
       },
+      sessionSummaryBootstrap,
       reviewGates: planner.reviewGates.map((gate) => `${gate.gate}:${gate.status}`),
       catalogHealth,
       sourceMixRecommendation: {

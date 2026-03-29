@@ -16,6 +16,8 @@ import { RepoTreeGenerator } from '../engines/repo-tree.js';
 import type { SynapseRuntime } from '../synapse/index.js';
 import type { ArchitectsRuntime } from '../architects/index.js';
 import { NexusLayerAdapter } from '../engines/nexus-layer.js';
+import { getSharedNgramIndex } from '../engines/ngram-index.js';
+import { getSharedTelemetry } from '../engines/telemetry-remote.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -448,6 +450,41 @@ export class DashboardServer {
                 ? this.getRuntime()?.getTokenTelemetryForRun(runId)
                 : snapshot?.tokens?.timeline?.find((item) => item.runId === runId);
             this.respondJson(res, entry ?? { error: 'run-token-telemetry-not-found', runId }, entry ? 200 : 404);
+            return;
+        }
+
+        // ── Search stats ─────────────────────────────────────────────────
+        if (req.method === 'GET' && url.pathname === '/api/search/stats') {
+            try {
+                const ngramIndex = getSharedNgramIndex();
+                const searchStats = ngramIndex.getSearchStats();
+                const indexStats = ngramIndex.getStats();
+                this.respondJson(res, { ...searchStats, index: indexStats });
+            } catch (err: any) {
+                this.respondJson(res, { error: err?.message ?? 'search stats unavailable' }, 500);
+            }
+            return;
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/search/recent') {
+            try {
+                const ngramIndex = getSharedNgramIndex();
+                const stats = ngramIndex.getSearchStats();
+                this.respondJson(res, { recentQueries: stats.recentQueries.slice(-20) });
+            } catch (err: any) {
+                this.respondJson(res, { error: err?.message ?? 'recent queries unavailable' }, 500);
+            }
+            return;
+        }
+
+        // ── Telemetry status ────────────────────────────────────────────
+        if (req.method === 'GET' && url.pathname === '/api/telemetry/status') {
+            try {
+                const telemetry = getSharedTelemetry();
+                this.respondJson(res, telemetry.getStats());
+            } catch (err: any) {
+                this.respondJson(res, { installId: 'unknown', optedIn: false, queuedEvents: 0 }, 200);
+            }
             return;
         }
 

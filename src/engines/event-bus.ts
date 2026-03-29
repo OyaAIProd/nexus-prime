@@ -17,6 +17,8 @@ export type NexusEventType =
     | 'memory.sqlite.retry'
     | 'pod.signal'
     | 'tokens.optimized'
+    | 'tokens.searchSaved'
+    | 'session.summaryBootstrap'
     | 'phantom.worker.start'
     | 'phantom.worker.complete'
     | 'phantom.merge.complete'
@@ -130,7 +132,7 @@ export interface NexusEventPayloads {
     'tokens.optimized': {
         savings: number;
         pct: number;
-        files: number;
+        files?: number;
         inputTokens?: number;
         outputTokens?: number;
         compressionRatio?: number;
@@ -138,6 +140,18 @@ export interface NexusEventPayloads {
         sessionId?: string;
         phase?: string;
         subsystem?: string;
+        source?: string;
+    };
+    'tokens.searchSaved': {
+        query: string;
+        resultCount: number;
+        tokensSaved: number;
+        source?: string;
+    };
+    'session.summaryBootstrap': {
+        originalTokens: number;
+        summaryTokens: number;
+        savedTokens: number;
     };
     'phantom.worker.start': { workerId: string; approach: string; goal: string };
     'phantom.worker.complete': { workerId: string; confidence: number };

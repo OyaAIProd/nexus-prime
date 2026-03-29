@@ -427,8 +427,8 @@ async function test() {
     assert.strictEqual(fullTools[0], 'nexus_session_bootstrap', 'full MCP profile should still prioritize bootstrap first');
     assert.strictEqual(fullTools[1], 'nexus_orchestrate', 'full MCP profile should still prioritize orchestrate second');
     assert.ok(
-      autonomousDefinitions.find((tool: any) => tool.name === 'nexus_optimize_tokens')?.description.includes('MANDATORY before reading 3+ files'),
-      'optimize tool description should use mandatory lifecycle language'
+      autonomousDefinitions.find((tool: any) => tool.name === 'nexus_optimize_tokens')?.description.includes('Always-on token optimization'),
+      'optimize tool description should reflect always-on lifecycle language'
     );
     assert.ok(
       autonomousDefinitions.find((tool: any) => tool.name === 'nexus_mindkit_check')?.description.includes('MANDATORY before any file modification'),
@@ -462,7 +462,7 @@ async function test() {
     assert.ok(bootstrapText.includes('PROTOCOL CHECKLIST (follow every step):'), 'bootstrap tool should append the mandatory lifecycle checklist');
     const bootstrapPayload = extractJsonBlock(bootstrapText);
     assert.strictEqual(bootstrapPayload.recommendedNextStep, 'nexus_orchestrate', 'bootstrap tool should recommend orchestration as the next step');
-    assert.strictEqual(bootstrapPayload.tokenOptimization.required, true, 'bootstrap tool should report token optimization for 3+ files');
+    assert.strictEqual(bootstrapPayload.tokenOptimization.autoApplied, true, 'bootstrap should auto-apply token optimization for any files');
     assert.ok(Array.isArray(bootstrapPayload.shortlist.skills), 'bootstrap tool should return a skill shortlist');
     assert.ok(bootstrapPayload.knowledgeFabric?.summary, 'bootstrap tool should return a knowledge-fabric summary');
     assert.ok(Array.isArray(bootstrapPayload.knowledgeFabric?.selectedFiles), 'bootstrap tool should return knowledge-fabric selected files');

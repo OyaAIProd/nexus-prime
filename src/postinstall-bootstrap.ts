@@ -1,6 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { ensureBootstrap } from './engines/client-bootstrap.js';
 import { ASCII_ART, printASCIILogo, printBootSuccessMessage } from './utils/ascii-art.js';
@@ -103,6 +104,16 @@ async function runWithRetry(maxRetries = 3, delayMs = 1000) {
       if (shouldShowInstallBanner()) {
         printBootSuccessMessage(version);
       }
+
+      // Generate anonymous install UUID for telemetry (opt-in only, no data sent by default)
+      try {
+        const installIdPath = path.join(os.homedir(), '.nexus-prime', 'install-id');
+        if (!fs.existsSync(installIdPath)) {
+          const uuid = crypto.randomUUID();
+          fs.writeFileSync(installIdPath, uuid, 'utf8');
+          appendInstallLog(`Install UUID generated: ${uuid.slice(0, 8)}...`);
+        }
+      } catch { /* non-fatal */ }
 
       appendInstallLog(`Bootstrap complete (workspace: ${process.cwd()})`);
       return;

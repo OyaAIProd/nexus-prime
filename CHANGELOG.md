@@ -2,7 +2,56 @@
 
 All notable changes to Nexus Prime are documented here.
 
-Release Index: [v4.3.0](#v430--2026-03-24) · [v4.2.0](#v420--2026-03-24) · [v4.1.0](#v410--2026-03-23) · [v4.0.0](#v400--2026-03-22) · [v3.18.0](#v3180--2026-03-21) · [v3.17.0](#v3170--2026-03-20)
+Release Index: [v4.6.0](#v460--2026-03-29) · [v4.5.0](#v450--2026-03-27) · [v4.4.0](#v440--2026-03-27) · [v4.3.0](#v430--2026-03-24) · [v4.2.0](#v420--2026-03-24) · [v4.1.0](#v410--2026-03-23) · [v4.0.0](#v400--2026-03-22) · [v3.18.0](#v3180--2026-03-21) · [v3.17.0](#v3170--2026-03-20)
+
+<details open>
+<summary><b>v4.6.0</b> · 2026-03-29 · Context Ascension — always-on compression, native search, and operator telemetry</summary>
+
+### Added
+- **Project-scoped self-summaries**: Added reusable session summaries that persist at session close and `nexus_session_dna`, then bootstrap back into the next visit with project-level continuity instead of per-session drift.
+- **Dynamic context discovery surface**: Added lazy tool-contract loading with `nexus_describe_tool` so clients can expand full MCP descriptions on demand while keeping the default tool payload smaller.
+- **Sparse n-gram search tool**: Added `nexus_search` on the MCP surface and search-stat tracking in the n-gram engine so retrieval savings and usage can be surfaced to operators.
+- **Nexus-native gstack bridge**: Added optional gstack skill ingestion so supported external workflows can appear as first-class Nexus tools without exposing gstack branding in the tool list.
+- **Remote telemetry engine**: Added opt-in remote telemetry plumbing with anonymized install IDs, aggregate usage events, and dashboard-visible telemetry status.
+
+### Changed
+- **Always-on token optimization**: Bootstrap now auto-applies token optimization whenever candidate files are known, and the public contract, docs, and tests now reflect the always-on behavior instead of the older `3+` or `5+` file thresholds.
+- **Session bootstrap continuity**: Bootstrap payloads now report whether a prior session summary was reused and expose that recovery in the operator-facing bootstrap text.
+- **Dashboard operator banner**: The dashboard now promotes savings, search activity, and telemetry status into the main banner rather than leaving them buried behind secondary APIs.
+
+### Fixed
+- **Telemetry consent semantics**: Telemetry no longer queues pre-consent events for later upload, and disabling telemetry clears any queued payloads immediately.
+- **Lazy-tooling drift**: `ListTools` now actually routes through context discovery instead of shipping the full decorated contract every time.
+- **Release-surface truth**: README, docs, feature descriptions, and tests now align on the shipped optimization and summarization behavior.
+
+</details>
+
+<details open>
+<summary><b>v4.5.0</b> · 2026-03-27 · Neural Ascension — auto-optimization, memory injection, and sci-fi command center</summary>
+
+### Added
+- **Auto token optimization**: Bootstrap auto-applies token planning for large candidate sets, with quality-floor protection for task-referenced and recently modified files.
+- **Seamless memory injection**: MCP tool responses now auto-recall top relevant memories while skipping recursion-prone memory surfaces.
+- **Cross-project memory APIs**: Added shared browsing endpoints and dashboard project/fuzzy search controls for multi-project recall.
+
+### Changed
+- **Dashboard signal quality**: Added server-side throttling, noise suppression, and client-side dedup for high-frequency operator events.
+- **CLI/install presentation**: Expanded install feedback with braille spinners, compact logos, progress bars, and richer phase messaging.
+
+</details>
+
+<details>
+<summary><b>v4.4.0</b> · 2026-03-27 · Lifecycle policy automation, cross-project memory APIs, and signal-aware dashboard UX</summary>
+
+### Added
+- **Lifecycle policy substrate**: Added policy-gated auto behaviors with env overrides and decision metrics for bootstrap planning, memory injection, MCP visuals, and ghost-pass automation.
+- **Cross-project memory APIs**: Added shared-only memory browsing and project index routes with tag/content/fuzzy query support.
+
+### Changed
+- **Dashboard filtering and dedup**: Added explicit `mcp`/`system` taxonomy alignment, a `System` filter chip, and dual-key dedup for noisy event streams.
+- **CLI visual layer**: Expanded the ASCII/TTY render layer for install and help output.
+
+</details>
 
 <details open>
 <summary><b>v4.3.0</b> · 2026-03-24 · Sparse n-gram index engine and reactor core stabilization</summary>

@@ -118,8 +118,8 @@ export class TokenSupremacyEngine {
      * fileBoosts: Map<filePath, boostScore> — added to relevance score before thresholding.
      */
     plan(task: string, files: FileRef[], fileBoosts?: Map<string, number>): ReadingPlan {
-        // Apply hypertuning if we have many files
-        if (files.length > 10) {
+        // Apply hypertuning for 3+ files (always-on optimization)
+        if (files.length > 3) {
             this.hypertune(task);
         }
 

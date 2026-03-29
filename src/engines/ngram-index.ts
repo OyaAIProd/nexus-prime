@@ -156,6 +156,13 @@ function buildNextMask(nextChar: string): number {
 // NgramIndex — the main class
 // ─────────────────────────────────────────────────────────────────────────────
 
+export interface SearchStats {
+  totalQueries: number;
+  totalTokensSaved: number;
+  totalResultsReturned: number;
+  recentQueries: Array<{ query: string; resultCount: number; tokensSaved: number; timestamp: number }>;
+}
+
 export class NgramIndex {
   private db: InstanceType<typeof Database>;
   private dbPath: string;
@@ -168,6 +175,14 @@ export class NgramIndex {
   private deleteStmt!: Database.Statement;
   private lookupStmt!: Database.Statement;
   private docExistsStmt!: Database.Statement;
+
+  // Search analytics
+  private _searchStats: SearchStats = {
+    totalQueries: 0,
+    totalTokensSaved: 0,
+    totalResultsReturned: 0,
+    recentQueries: [],
+  };
 
   constructor(dbPath?: string) {
     const stateDir = resolveNexusStateDir();
@@ -375,6 +390,79 @@ export class NgramIndex {
     return results
       .filter((r) => r.score >= minMatches)
       .map((r) => r.docId);
+  }
+
+  // ── Search with analytics ──────────────────────────────────────────────
+
+  /**
+   * Search with token savings tracking. Returns results + estimated tokens saved.
+   * Use this method from MCP tools to get visible savings metrics.
+   */
+  searchWithStats(query: string, limit: number = 20): {
+    results: SearchResult[];
+    tokensSaved: number;
+    totalCandidateTokens: number;
+  } {
+    const results = this.search(query, limit);
+
+    // Estimate tokens saved: for each result, get doc text_length and compute tokens
+    let totalCandidateTokens = 0;
+    for (const result of results) {
+      const doc = this.db.prepare('SELECT text_length FROM ngram_docs WHERE doc_id = ?').get(result.docId) as { text_length: number } | undefined;
+      if (doc) {
+        totalCandidateTokens += Math.ceil(doc.text_length / 4); // ~4 chars/token
+      }
+    }
+
+    // Tokens saved = full file tokens - query tokens (query is much smaller)
+    const queryTokens = Math.ceil(query.length / 4);
+    const tokensSaved = Math.max(0, totalCandidateTokens - queryTokens);
+
+    // Record stats
+    this._searchStats.totalQueries++;
+    this._searchStats.totalTokensSaved += tokensSaved;
+    this._searchStats.totalResultsReturned += results.length;
+    this._searchStats.recentQueries.push({
+      query: query.slice(0, 100),
+      resultCount: results.length,
+      tokensSaved,
+      timestamp: Date.now(),
+    });
+    // Keep only last 50 recent queries
+    if (this._searchStats.recentQueries.length > 50) {
+      this._searchStats.recentQueries = this._searchStats.recentQueries.slice(-50);
+    }
+
+    return { results, tokensSaved, totalCandidateTokens };
+  }
+
+  /**
+   * Sparse n-gram search: uses variable-length segments weighted by CRC32
+   * character-pair rarity for higher selectivity on rare patterns.
+   */
+  searchSparse(query: string, limit: number = 20): SearchResult[] {
+    const sparseNgrams = extractSparseNgrams(query);
+    if (sparseNgrams.length === 0) return this.search(query, limit);
+
+    // Use first trigram of each sparse n-gram for index lookup
+    const docScores = new Map<string, number>();
+    for (const entry of sparseNgrams) {
+      if (!this.knownHashes.has(entry.hash)) continue;
+      const postings = this.lookupStmt.all(entry.hash) as Posting[];
+      for (const posting of postings) {
+        docScores.set(posting.docId, (docScores.get(posting.docId) ?? 0) + 1);
+      }
+    }
+
+    return [...docScores.entries()]
+      .map(([docId, score]) => ({ docId, score }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
+  /** Get accumulated search statistics */
+  getSearchStats(): SearchStats {
+    return { ...this._searchStats, recentQueries: [...this._searchStats.recentQueries] };
   }
 
   // ── Bulk Operations ─────────────────────────────────────────────────────
